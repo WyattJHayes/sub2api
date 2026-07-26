@@ -1,6 +1,7 @@
 package repository
 
 import (
+	"bytes"
 	"context"
 	"crypto/rand"
 	"crypto/sha256"
@@ -498,7 +499,9 @@ type evaluationMatrixEntry struct {
 
 func evaluationMatrixEntries(matrixJSON []byte) ([]evaluationMatrixEntry, error) {
 	var matrix []map[string]any
-	if err := json.Unmarshal(matrixJSON, &matrix); err != nil {
+	decoder := json.NewDecoder(bytes.NewReader(matrixJSON))
+	decoder.UseNumber()
+	if err := decoder.Decode(&matrix); err != nil {
 		return nil, fmt.Errorf("decode evaluation model matrix: %w", err)
 	}
 	entries := make([]evaluationMatrixEntry, 0, len(matrix))
