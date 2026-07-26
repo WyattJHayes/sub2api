@@ -140,7 +140,7 @@ func TestEvaluationRepository_EmptyCapabilitiesCannotClaim(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	lease, err := repo.ClaimAssignment(ctx, fixture.workerIDs[0], nil, time.Minute)
+	lease, err := repo.ClaimAssignment(ctx, fixture.workerIDs[0], []string{}, time.Minute)
 	require.NoError(t, err)
 	require.Nil(t, lease)
 
