@@ -127,6 +127,32 @@ func TestEvaluationRepository_ConcurrentLeaseAndLeaseFencing(t *testing.T) {
 	require.Equal(t, 1, attemptTwo)
 }
 
+func TestEvaluationRepository_EmptyCapabilitiesCannotClaim(t *testing.T) {
+	ctx := context.Background()
+	fixture := createEvaluationRepositoryFixture(t, 1, []string{"route-a"}, 1)
+	repo := NewEvaluationRepository(integrationDB)
+	run, err := repo.CreateRunWithMatrix(ctx, service.CreateRunInput{
+		PlanID:        fixture.planID,
+		TriggerSource: "manual",
+		BaselineRef:   map[string]any{"revision": "baseline-1"},
+		CandidateRef:  map[string]any{"revision": "candidate-1"},
+		CreatedBy:     fixture.userID,
+	})
+	require.NoError(t, err)
+
+	lease, err := repo.ClaimAssignment(ctx, fixture.workerIDs[0], nil, time.Minute)
+	require.NoError(t, err)
+	require.Nil(t, lease)
+
+	var leased int
+	require.NoError(t, integrationDB.QueryRowContext(ctx, `
+		SELECT COUNT(*)
+		FROM evaluation_assignments a
+		JOIN evaluation_samples s ON s.id = a.sample_id
+		WHERE s.run_id = $1 AND a.status = 'leased'`, run.ID).Scan(&leased))
+	require.Zero(t, leased)
+}
+
 type evaluationRepositoryFixture struct {
 	userID    int64
 	planID    uuid.UUID
