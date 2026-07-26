@@ -5,13 +5,16 @@ package repository
 import (
 	"context"
 	"crypto/sha256"
+	"database/sql"
 	"encoding/json"
 	"fmt"
+	"strings"
 	"sync"
 	"testing"
 	"time"
 
 	"github.com/Wei-Shaw/sub2api/internal/service"
+	"github.com/Wei-Shaw/sub2api/migrations"
 	"github.com/google/uuid"
 	"github.com/shopspring/decimal"
 	"github.com/stretchr/testify/require"
@@ -228,6 +231,140 @@ func TestEvaluationRepository_FreezesModelConfigurationInLease(t *testing.T) {
 	_, err = integrationDB.ExecContext(ctx, `
 		UPDATE evaluation_samples SET model_config = '{}'::jsonb WHERE run_id = $1`, run.ID)
 	require.Error(t, err)
+}
+
+func TestEvaluationRepository_FreezesLosslessNumericModelConfiguration(t *testing.T) {
+	ctx := context.Background()
+	fixture := createEvaluationRepositoryFixtureWithCases(t, []evaluationCaseFixtureSpec{
+		{capability: "coding", priority: "P0", sampleCount: 1, estimatedCost: decimal.RequireFromString("0.01")},
+	}, []map[string]any{{
+		"route":       "route-a",
+		"seed":        json.Number("9007199254740993"),
+		"temperature": json.Number("0.12345678901234567890123456789"),
+	}}, decimal.RequireFromString("100"))
+	repo := NewEvaluationRepository(integrationDB)
+	_, err := repo.CreateRunWithMatrix(ctx, service.CreateRunInput{
+		PlanID: fixture.planID, TriggerSource: "manual", CreatedBy: fixture.userID,
+	})
+	require.NoError(t, err)
+
+	lease, err := repo.ClaimAssignment(ctx, fixture.workerIDs[0], []string{"coding"}, time.Minute)
+	require.NoError(t, err)
+	require.NotNil(t, lease)
+	const expectedConfig = `{"route":"route-a","seed":9007199254740993,"temperature":0.12345678901234567890123456789}`
+	require.Equal(t, expectedConfig, string(lease.ModelConfig))
+	expectedHash := sha256.Sum256([]byte(expectedConfig))
+	require.Equal(t, fmt.Sprintf("%x", expectedHash), lease.ModelConfigSHA256)
+}
+
+func TestEvaluationSampleExecutionIdentityMigrationUpgradesOriginal191(t *testing.T) {
+	ctx := context.Background()
+	schema := "evaluation_upgrade_" + strings.ReplaceAll(uuid.NewString(), "-", "")
+	conn, err := integrationDB.Conn(ctx)
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		_, _ = integrationDB.ExecContext(context.Background(), "DROP SCHEMA IF EXISTS "+schema+" CASCADE")
+		_ = conn.Close()
+	})
+	require.NoError(t, setEvaluationMigrationTestSearchPath(ctx, conn, schema))
+	require.NoError(t, executeEvaluationMigrationSQL(ctx, conn, `CREATE TABLE users (id BIGINT PRIMARY KEY)`))
+
+	original191, err := migrations.FS.ReadFile("191_add_radar_control_plane.sql")
+	require.NoError(t, err)
+	require.NoError(t, executeEvaluationMigrationSQL(ctx, conn, string(original191)))
+
+	var modelConfigColumn bool
+	require.NoError(t, conn.QueryRowContext(ctx, `
+		SELECT EXISTS (
+			SELECT 1 FROM information_schema.columns
+			WHERE table_schema = current_schema()
+				AND table_name = 'evaluation_samples'
+				AND column_name = 'model_config'
+		)`).Scan(&modelConfigColumn))
+	require.False(t, modelConfigColumn)
+
+	fixture := insertOriginal191EvaluationSample(t, ctx, conn)
+	upgrade192, err := migrations.FS.ReadFile("192_add_evaluation_sample_execution_identity.sql")
+	require.NoError(t, err)
+	require.NoError(t, executeEvaluationMigrationSQL(ctx, conn, string(upgrade192)))
+
+	var modelConfig, modelConfigHash string
+	require.NoError(t, conn.QueryRowContext(ctx, `
+		SELECT model_config::text, model_config_sha256
+		FROM evaluation_samples WHERE id = $1`, fixture.sampleID).Scan(&modelConfig, &modelConfigHash))
+	require.Equal(t, "{}", modelConfig)
+	emptyConfigHash := sha256.Sum256([]byte("{}"))
+	require.Equal(t, fmt.Sprintf("%x", emptyConfigHash), modelConfigHash)
+
+	_, err = conn.ExecContext(ctx, `
+		UPDATE evaluation_samples SET status = 'leased' WHERE id = $1`, fixture.sampleID)
+	require.NoError(t, err)
+	_, err = conn.ExecContext(ctx, `
+		UPDATE evaluation_samples SET model_route = 'candidate:changed' WHERE id = $1`, fixture.sampleID)
+	require.Error(t, err)
+}
+
+type original191SampleFixture struct {
+	sampleID uuid.UUID
+}
+
+func setEvaluationMigrationTestSearchPath(ctx context.Context, conn *sql.Conn, schema string) error {
+	if _, err := conn.ExecContext(ctx, "CREATE SCHEMA "+schema); err != nil {
+		return err
+	}
+	_, err := conn.ExecContext(ctx, "SET search_path TO "+schema)
+	return err
+}
+
+func executeEvaluationMigrationSQL(ctx context.Context, conn *sql.Conn, statement string) error {
+	_, err := conn.ExecContext(ctx, statement)
+	return err
+}
+
+func insertOriginal191EvaluationSample(t *testing.T, ctx context.Context, conn *sql.Conn) original191SampleFixture {
+	t.Helper()
+	datasetID := uuid.New()
+	caseID := uuid.New()
+	planID := uuid.New()
+	runID := uuid.New()
+	sampleID := uuid.New()
+	userID := int64(1)
+	_, err := conn.ExecContext(ctx, `INSERT INTO users (id) VALUES ($1)`, userID)
+	require.NoError(t, err)
+	_, err = conn.ExecContext(ctx, `
+		INSERT INTO evaluation_dataset_versions (
+			id, dataset_key, version, manifest_sha256, source_type, status, created_by
+		) VALUES ($1, 'upgrade', 'v1', $2, 'synthetic', 'draft', $3)`,
+		datasetID, fmt.Sprintf("%064d", 1), userID)
+	require.NoError(t, err)
+	_, err = conn.ExecContext(ctx, `
+		INSERT INTO evaluation_cases (
+			id, dataset_version_id, case_key, capability_domain, priority, weight, sample_count,
+			prompt_spec, expected_spec, execution_spec, grader_id, grader_version,
+			content_sha256, confidentiality
+		) VALUES ($1, $2, 'case', 'coding', 'P0', 1, 1,
+			'{}'::jsonb, '{}'::jsonb, '{}'::jsonb, 'grader', 'v1', $3, 'synthetic')`,
+		caseID, datasetID, fmt.Sprintf("%064d", 2))
+	require.NoError(t, err)
+	_, err = conn.ExecContext(ctx, `
+		INSERT INTO evaluation_plans (
+			id, name, dataset_version_id, trigger_type, model_matrix,
+			max_run_cost, daily_cost_limit, max_concurrency, created_by
+		) VALUES ($1, 'plan', $2, 'manual', '[{"route":"route-a"}]'::jsonb,
+			100, 100, 1, $3)`, planID, datasetID, userID)
+	require.NoError(t, err)
+	_, err = conn.ExecContext(ctx, `
+		INSERT INTO evaluation_runs (
+			id, plan_id, trigger_source, baseline_ref, candidate_ref, status, budget_limit
+		) VALUES ($1, $2, 'manual', '{}'::jsonb, '{}'::jsonb, 'pending', 100)`, runID, planID)
+	require.NoError(t, err)
+	_, err = conn.ExecContext(ctx, `
+		INSERT INTO evaluation_samples (
+			id, run_id, case_id, model_route, sample_index, priority, status, estimated_cost
+		) VALUES ($1, $2, $3, 'baseline:route-a', 0, 'P0', 'pending', 1)`,
+		sampleID, runID, caseID)
+	require.NoError(t, err)
+	return original191SampleFixture{sampleID: sampleID}
 }
 
 func TestEvaluationRepository_RecordsBudgetWarningAtEightyPercent(t *testing.T) {
