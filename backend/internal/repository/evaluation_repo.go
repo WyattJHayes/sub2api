@@ -370,7 +370,7 @@ func reclaimExpiredAssignment(ctx context.Context, tx *sql.Tx, capabilities []st
 		JOIN evaluation_samples s ON s.id = a.sample_id
 		JOIN evaluation_cases c ON c.id = s.case_id
 		WHERE a.status IN ('leased', 'running') AND a.lease_expires_at <= NOW()
-			AND (cardinality($1::text[]) = 0 OR c.capability_domain = ANY($1::text[]))
+			AND c.capability_domain = ANY($1::text[])
 		ORDER BY a.lease_expires_at, a.id
 		FOR UPDATE OF a SKIP LOCKED
 		LIMIT 1`, pq.Array(capabilities)).Scan(
@@ -412,7 +412,7 @@ func selectPendingAssignment(ctx context.Context, tx *sql.Tx, capabilities []str
 		JOIN evaluation_samples s ON s.id = a.sample_id
 		JOIN evaluation_cases c ON c.id = s.case_id
 		WHERE a.status = 'pending'
-			AND (cardinality($1::text[]) = 0 OR c.capability_domain = ANY($1::text[]))
+			AND c.capability_domain = ANY($1::text[])
 		ORDER BY s.priority, a.created_at, a.id
 		FOR UPDATE OF a SKIP LOCKED
 		LIMIT 1`, pq.Array(capabilities)).Scan(
