@@ -54,8 +54,20 @@ type CompositeModelRoute func(*sql.Selector)
 // ErrorPassthroughRule is the predicate function for errorpassthroughrule builders.
 type ErrorPassthroughRule func(*sql.Selector)
 
+// EvaluationCase is the predicate function for evaluationcase builders.
+type EvaluationCase func(*sql.Selector)
+
+// EvaluationDatasetVersion is the predicate function for evaluationdatasetversion builders.
+type EvaluationDatasetVersion func(*sql.Selector)
+
+// EvaluationPlan is the predicate function for evaluationplan builders.
+type EvaluationPlan func(*sql.Selector)
+
 // EvaluationRouteEvidence is the predicate function for evaluationrouteevidence builders.
 type EvaluationRouteEvidence func(*sql.Selector)
+
+// EvaluationRun is the predicate function for evaluationrun builders.
+type EvaluationRun func(*sql.Selector)
 
 // Group is the predicate function for group builders.
 type Group func(*sql.Selector)

@@ -21,7 +21,11 @@ import (
 	"github.com/Wei-Shaw/sub2api/ent/channelmonitorrequesttemplate"
 	"github.com/Wei-Shaw/sub2api/ent/compositemodelroute"
 	"github.com/Wei-Shaw/sub2api/ent/errorpassthroughrule"
+	"github.com/Wei-Shaw/sub2api/ent/evaluationcase"
+	"github.com/Wei-Shaw/sub2api/ent/evaluationdatasetversion"
+	"github.com/Wei-Shaw/sub2api/ent/evaluationplan"
 	"github.com/Wei-Shaw/sub2api/ent/evaluationrouteevidence"
+	"github.com/Wei-Shaw/sub2api/ent/evaluationrun"
 	"github.com/Wei-Shaw/sub2api/ent/group"
 	"github.com/Wei-Shaw/sub2api/ent/idempotencyrecord"
 	"github.com/Wei-Shaw/sub2api/ent/identityadoptiondecision"
@@ -47,6 +51,7 @@ import (
 	"github.com/Wei-Shaw/sub2api/ent/userplatformquota"
 	"github.com/Wei-Shaw/sub2api/ent/usersubscription"
 	"github.com/Wei-Shaw/sub2api/internal/domain"
+	"github.com/google/uuid"
 )
 
 // The init function reads all schema descriptors with runtime code
@@ -999,6 +1004,118 @@ func init() {
 	errorpassthroughruleDescSkipMonitoring := errorpassthroughruleFields[11].Descriptor()
 	// errorpassthroughrule.DefaultSkipMonitoring holds the default value on creation for the skip_monitoring field.
 	errorpassthroughrule.DefaultSkipMonitoring = errorpassthroughruleDescSkipMonitoring.Default.(bool)
+	evaluationcaseFields := schema.EvaluationCase{}.Fields()
+	_ = evaluationcaseFields
+	// evaluationcaseDescCaseKey is the schema descriptor for case_key field.
+	evaluationcaseDescCaseKey := evaluationcaseFields[2].Descriptor()
+	// evaluationcase.CaseKeyValidator is a validator for the "case_key" field. It is called by the builders before save.
+	evaluationcase.CaseKeyValidator = evaluationcaseDescCaseKey.Validators[0].(func(string) error)
+	// evaluationcaseDescCapabilityDomain is the schema descriptor for capability_domain field.
+	evaluationcaseDescCapabilityDomain := evaluationcaseFields[3].Descriptor()
+	// evaluationcase.CapabilityDomainValidator is a validator for the "capability_domain" field. It is called by the builders before save.
+	evaluationcase.CapabilityDomainValidator = evaluationcaseDescCapabilityDomain.Validators[0].(func(string) error)
+	// evaluationcaseDescPriority is the schema descriptor for priority field.
+	evaluationcaseDescPriority := evaluationcaseFields[4].Descriptor()
+	// evaluationcase.PriorityValidator is a validator for the "priority" field. It is called by the builders before save.
+	evaluationcase.PriorityValidator = evaluationcaseDescPriority.Validators[0].(func(string) error)
+	// evaluationcaseDescGraderID is the schema descriptor for grader_id field.
+	evaluationcaseDescGraderID := evaluationcaseFields[11].Descriptor()
+	// evaluationcase.GraderIDValidator is a validator for the "grader_id" field. It is called by the builders before save.
+	evaluationcase.GraderIDValidator = evaluationcaseDescGraderID.Validators[0].(func(string) error)
+	// evaluationcaseDescGraderVersion is the schema descriptor for grader_version field.
+	evaluationcaseDescGraderVersion := evaluationcaseFields[12].Descriptor()
+	// evaluationcase.GraderVersionValidator is a validator for the "grader_version" field. It is called by the builders before save.
+	evaluationcase.GraderVersionValidator = evaluationcaseDescGraderVersion.Validators[0].(func(string) error)
+	// evaluationcaseDescContentSha256 is the schema descriptor for content_sha256 field.
+	evaluationcaseDescContentSha256 := evaluationcaseFields[13].Descriptor()
+	// evaluationcase.ContentSha256Validator is a validator for the "content_sha256" field. It is called by the builders before save.
+	evaluationcase.ContentSha256Validator = evaluationcaseDescContentSha256.Validators[0].(func(string) error)
+	// evaluationcaseDescConfidentiality is the schema descriptor for confidentiality field.
+	evaluationcaseDescConfidentiality := evaluationcaseFields[14].Descriptor()
+	// evaluationcase.ConfidentialityValidator is a validator for the "confidentiality" field. It is called by the builders before save.
+	evaluationcase.ConfidentialityValidator = evaluationcaseDescConfidentiality.Validators[0].(func(string) error)
+	// evaluationcaseDescEstimatedCost is the schema descriptor for estimated_cost field.
+	evaluationcaseDescEstimatedCost := evaluationcaseFields[15].Descriptor()
+	// evaluationcase.DefaultEstimatedCost holds the default value on creation for the estimated_cost field.
+	evaluationcase.DefaultEstimatedCost = evaluationcaseDescEstimatedCost.Default.(float64)
+	// evaluationcaseDescCreatedAt is the schema descriptor for created_at field.
+	evaluationcaseDescCreatedAt := evaluationcaseFields[16].Descriptor()
+	// evaluationcase.DefaultCreatedAt holds the default value on creation for the created_at field.
+	evaluationcase.DefaultCreatedAt = evaluationcaseDescCreatedAt.Default.(func() time.Time)
+	// evaluationcaseDescID is the schema descriptor for id field.
+	evaluationcaseDescID := evaluationcaseFields[0].Descriptor()
+	// evaluationcase.DefaultID holds the default value on creation for the id field.
+	evaluationcase.DefaultID = evaluationcaseDescID.Default.(func() uuid.UUID)
+	evaluationdatasetversionFields := schema.EvaluationDatasetVersion{}.Fields()
+	_ = evaluationdatasetversionFields
+	// evaluationdatasetversionDescDatasetKey is the schema descriptor for dataset_key field.
+	evaluationdatasetversionDescDatasetKey := evaluationdatasetversionFields[1].Descriptor()
+	// evaluationdatasetversion.DatasetKeyValidator is a validator for the "dataset_key" field. It is called by the builders before save.
+	evaluationdatasetversion.DatasetKeyValidator = evaluationdatasetversionDescDatasetKey.Validators[0].(func(string) error)
+	// evaluationdatasetversionDescVersion is the schema descriptor for version field.
+	evaluationdatasetversionDescVersion := evaluationdatasetversionFields[2].Descriptor()
+	// evaluationdatasetversion.VersionValidator is a validator for the "version" field. It is called by the builders before save.
+	evaluationdatasetversion.VersionValidator = evaluationdatasetversionDescVersion.Validators[0].(func(string) error)
+	// evaluationdatasetversionDescManifestSha256 is the schema descriptor for manifest_sha256 field.
+	evaluationdatasetversionDescManifestSha256 := evaluationdatasetversionFields[3].Descriptor()
+	// evaluationdatasetversion.ManifestSha256Validator is a validator for the "manifest_sha256" field. It is called by the builders before save.
+	evaluationdatasetversion.ManifestSha256Validator = evaluationdatasetversionDescManifestSha256.Validators[0].(func(string) error)
+	// evaluationdatasetversionDescSourceType is the schema descriptor for source_type field.
+	evaluationdatasetversionDescSourceType := evaluationdatasetversionFields[4].Descriptor()
+	// evaluationdatasetversion.SourceTypeValidator is a validator for the "source_type" field. It is called by the builders before save.
+	evaluationdatasetversion.SourceTypeValidator = evaluationdatasetversionDescSourceType.Validators[0].(func(string) error)
+	// evaluationdatasetversionDescStatus is the schema descriptor for status field.
+	evaluationdatasetversionDescStatus := evaluationdatasetversionFields[5].Descriptor()
+	// evaluationdatasetversion.DefaultStatus holds the default value on creation for the status field.
+	evaluationdatasetversion.DefaultStatus = evaluationdatasetversionDescStatus.Default.(string)
+	// evaluationdatasetversion.StatusValidator is a validator for the "status" field. It is called by the builders before save.
+	evaluationdatasetversion.StatusValidator = evaluationdatasetversionDescStatus.Validators[0].(func(string) error)
+	// evaluationdatasetversionDescCreatedAt is the schema descriptor for created_at field.
+	evaluationdatasetversionDescCreatedAt := evaluationdatasetversionFields[9].Descriptor()
+	// evaluationdatasetversion.DefaultCreatedAt holds the default value on creation for the created_at field.
+	evaluationdatasetversion.DefaultCreatedAt = evaluationdatasetversionDescCreatedAt.Default.(func() time.Time)
+	// evaluationdatasetversionDescUpdatedAt is the schema descriptor for updated_at field.
+	evaluationdatasetversionDescUpdatedAt := evaluationdatasetversionFields[10].Descriptor()
+	// evaluationdatasetversion.DefaultUpdatedAt holds the default value on creation for the updated_at field.
+	evaluationdatasetversion.DefaultUpdatedAt = evaluationdatasetversionDescUpdatedAt.Default.(func() time.Time)
+	// evaluationdatasetversion.UpdateDefaultUpdatedAt holds the default value on update for the updated_at field.
+	evaluationdatasetversion.UpdateDefaultUpdatedAt = evaluationdatasetversionDescUpdatedAt.UpdateDefault.(func() time.Time)
+	// evaluationdatasetversionDescID is the schema descriptor for id field.
+	evaluationdatasetversionDescID := evaluationdatasetversionFields[0].Descriptor()
+	// evaluationdatasetversion.DefaultID holds the default value on creation for the id field.
+	evaluationdatasetversion.DefaultID = evaluationdatasetversionDescID.Default.(func() uuid.UUID)
+	evaluationplanFields := schema.EvaluationPlan{}.Fields()
+	_ = evaluationplanFields
+	// evaluationplanDescName is the schema descriptor for name field.
+	evaluationplanDescName := evaluationplanFields[1].Descriptor()
+	// evaluationplan.NameValidator is a validator for the "name" field. It is called by the builders before save.
+	evaluationplan.NameValidator = evaluationplanDescName.Validators[0].(func(string) error)
+	// evaluationplanDescTriggerType is the schema descriptor for trigger_type field.
+	evaluationplanDescTriggerType := evaluationplanFields[3].Descriptor()
+	// evaluationplan.TriggerTypeValidator is a validator for the "trigger_type" field. It is called by the builders before save.
+	evaluationplan.TriggerTypeValidator = evaluationplanDescTriggerType.Validators[0].(func(string) error)
+	// evaluationplanDescCronExpression is the schema descriptor for cron_expression field.
+	evaluationplanDescCronExpression := evaluationplanFields[4].Descriptor()
+	// evaluationplan.CronExpressionValidator is a validator for the "cron_expression" field. It is called by the builders before save.
+	evaluationplan.CronExpressionValidator = evaluationplanDescCronExpression.Validators[0].(func(string) error)
+	// evaluationplanDescEnabled is the schema descriptor for enabled field.
+	evaluationplanDescEnabled := evaluationplanFields[9].Descriptor()
+	// evaluationplan.DefaultEnabled holds the default value on creation for the enabled field.
+	evaluationplan.DefaultEnabled = evaluationplanDescEnabled.Default.(bool)
+	// evaluationplanDescCreatedAt is the schema descriptor for created_at field.
+	evaluationplanDescCreatedAt := evaluationplanFields[11].Descriptor()
+	// evaluationplan.DefaultCreatedAt holds the default value on creation for the created_at field.
+	evaluationplan.DefaultCreatedAt = evaluationplanDescCreatedAt.Default.(func() time.Time)
+	// evaluationplanDescUpdatedAt is the schema descriptor for updated_at field.
+	evaluationplanDescUpdatedAt := evaluationplanFields[12].Descriptor()
+	// evaluationplan.DefaultUpdatedAt holds the default value on creation for the updated_at field.
+	evaluationplan.DefaultUpdatedAt = evaluationplanDescUpdatedAt.Default.(func() time.Time)
+	// evaluationplan.UpdateDefaultUpdatedAt holds the default value on update for the updated_at field.
+	evaluationplan.UpdateDefaultUpdatedAt = evaluationplanDescUpdatedAt.UpdateDefault.(func() time.Time)
+	// evaluationplanDescID is the schema descriptor for id field.
+	evaluationplanDescID := evaluationplanFields[0].Descriptor()
+	// evaluationplan.DefaultID holds the default value on creation for the id field.
+	evaluationplan.DefaultID = evaluationplanDescID.Default.(func() uuid.UUID)
 	evaluationrouteevidenceFields := schema.EvaluationRouteEvidence{}.Fields()
 	_ = evaluationrouteevidenceFields
 	// evaluationrouteevidenceDescRequestID is the schema descriptor for request_id field.
@@ -1083,6 +1200,44 @@ func init() {
 	evaluationrouteevidenceDescID := evaluationrouteevidenceFields[0].Descriptor()
 	// evaluationrouteevidence.IDValidator is a validator for the "id" field. It is called by the builders before save.
 	evaluationrouteevidence.IDValidator = evaluationrouteevidenceDescID.Validators[0].(func(string) error)
+	evaluationrunFields := schema.EvaluationRun{}.Fields()
+	_ = evaluationrunFields
+	// evaluationrunDescTriggerSource is the schema descriptor for trigger_source field.
+	evaluationrunDescTriggerSource := evaluationrunFields[2].Descriptor()
+	// evaluationrun.TriggerSourceValidator is a validator for the "trigger_source" field. It is called by the builders before save.
+	evaluationrun.TriggerSourceValidator = evaluationrunDescTriggerSource.Validators[0].(func(string) error)
+	// evaluationrunDescStatus is the schema descriptor for status field.
+	evaluationrunDescStatus := evaluationrunFields[5].Descriptor()
+	// evaluationrun.DefaultStatus holds the default value on creation for the status field.
+	evaluationrun.DefaultStatus = evaluationrunDescStatus.Default.(string)
+	// evaluationrun.StatusValidator is a validator for the "status" field. It is called by the builders before save.
+	evaluationrun.StatusValidator = evaluationrunDescStatus.Validators[0].(func(string) error)
+	// evaluationrunDescReservedCost is the schema descriptor for reserved_cost field.
+	evaluationrunDescReservedCost := evaluationrunFields[7].Descriptor()
+	// evaluationrun.DefaultReservedCost holds the default value on creation for the reserved_cost field.
+	evaluationrun.DefaultReservedCost = evaluationrunDescReservedCost.Default.(float64)
+	// evaluationrunDescActualCost is the schema descriptor for actual_cost field.
+	evaluationrunDescActualCost := evaluationrunFields[8].Descriptor()
+	// evaluationrun.DefaultActualCost holds the default value on creation for the actual_cost field.
+	evaluationrun.DefaultActualCost = evaluationrunDescActualCost.Default.(float64)
+	// evaluationrunDescCalibrationMode is the schema descriptor for calibration_mode field.
+	evaluationrunDescCalibrationMode := evaluationrunFields[9].Descriptor()
+	// evaluationrun.DefaultCalibrationMode holds the default value on creation for the calibration_mode field.
+	evaluationrun.DefaultCalibrationMode = evaluationrunDescCalibrationMode.Default.(bool)
+	// evaluationrunDescCreatedAt is the schema descriptor for created_at field.
+	evaluationrunDescCreatedAt := evaluationrunFields[13].Descriptor()
+	// evaluationrun.DefaultCreatedAt holds the default value on creation for the created_at field.
+	evaluationrun.DefaultCreatedAt = evaluationrunDescCreatedAt.Default.(func() time.Time)
+	// evaluationrunDescUpdatedAt is the schema descriptor for updated_at field.
+	evaluationrunDescUpdatedAt := evaluationrunFields[14].Descriptor()
+	// evaluationrun.DefaultUpdatedAt holds the default value on creation for the updated_at field.
+	evaluationrun.DefaultUpdatedAt = evaluationrunDescUpdatedAt.Default.(func() time.Time)
+	// evaluationrun.UpdateDefaultUpdatedAt holds the default value on update for the updated_at field.
+	evaluationrun.UpdateDefaultUpdatedAt = evaluationrunDescUpdatedAt.UpdateDefault.(func() time.Time)
+	// evaluationrunDescID is the schema descriptor for id field.
+	evaluationrunDescID := evaluationrunFields[0].Descriptor()
+	// evaluationrun.DefaultID holds the default value on creation for the id field.
+	evaluationrun.DefaultID = evaluationrunDescID.Default.(func() uuid.UUID)
 	groupMixin := schema.Group{}.Mixin()
 	groupMixinHooks1 := groupMixin[1].Hooks()
 	group.Hooks[0] = groupMixinHooks1[0]

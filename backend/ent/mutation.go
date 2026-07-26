@@ -28,7 +28,11 @@ import (
 	"github.com/Wei-Shaw/sub2api/ent/channelmonitorrequesttemplate"
 	"github.com/Wei-Shaw/sub2api/ent/compositemodelroute"
 	"github.com/Wei-Shaw/sub2api/ent/errorpassthroughrule"
+	"github.com/Wei-Shaw/sub2api/ent/evaluationcase"
+	"github.com/Wei-Shaw/sub2api/ent/evaluationdatasetversion"
+	"github.com/Wei-Shaw/sub2api/ent/evaluationplan"
 	"github.com/Wei-Shaw/sub2api/ent/evaluationrouteevidence"
+	"github.com/Wei-Shaw/sub2api/ent/evaluationrun"
 	"github.com/Wei-Shaw/sub2api/ent/group"
 	"github.com/Wei-Shaw/sub2api/ent/idempotencyrecord"
 	"github.com/Wei-Shaw/sub2api/ent/identityadoptiondecision"
@@ -54,6 +58,7 @@ import (
 	"github.com/Wei-Shaw/sub2api/ent/userplatformquota"
 	"github.com/Wei-Shaw/sub2api/ent/usersubscription"
 	"github.com/Wei-Shaw/sub2api/internal/domain"
+	"github.com/google/uuid"
 )
 
 const (
@@ -81,7 +86,11 @@ const (
 	TypeChannelMonitorRequestTemplate = "ChannelMonitorRequestTemplate"
 	TypeCompositeModelRoute           = "CompositeModelRoute"
 	TypeErrorPassthroughRule          = "ErrorPassthroughRule"
+	TypeEvaluationCase                = "EvaluationCase"
+	TypeEvaluationDatasetVersion      = "EvaluationDatasetVersion"
+	TypeEvaluationPlan                = "EvaluationPlan"
 	TypeEvaluationRouteEvidence       = "EvaluationRouteEvidence"
+	TypeEvaluationRun                 = "EvaluationRun"
 	TypeGroup                         = "Group"
 	TypeIdempotencyRecord             = "IdempotencyRecord"
 	TypeIdentityAdoptionDecision      = "IdentityAdoptionDecision"
@@ -21980,6 +21989,3673 @@ func (m *ErrorPassthroughRuleMutation) ResetEdge(name string) error {
 	return fmt.Errorf("unknown ErrorPassthroughRule edge %s", name)
 }
 
+// EvaluationCaseMutation represents an operation that mutates the EvaluationCase nodes in the graph.
+type EvaluationCaseMutation struct {
+	config
+	op                     Op
+	typ                    string
+	id                     *uuid.UUID
+	case_key               *string
+	capability_domain      *string
+	priority               *string
+	weight                 *float64
+	addweight              *float64
+	sample_count           *int
+	addsample_count        *int
+	prompt_spec            *map[string]interface{}
+	expected_spec          *map[string]interface{}
+	encrypted_spec         *string
+	execution_spec         *map[string]interface{}
+	grader_id              *string
+	grader_version         *string
+	content_sha256         *string
+	confidentiality        *string
+	estimated_cost         *float64
+	addestimated_cost      *float64
+	created_at             *time.Time
+	clearedFields          map[string]struct{}
+	dataset_version        *uuid.UUID
+	cleareddataset_version bool
+	done                   bool
+	oldValue               func(context.Context) (*EvaluationCase, error)
+	predicates             []predicate.EvaluationCase
+}
+
+var _ ent.Mutation = (*EvaluationCaseMutation)(nil)
+
+// evaluationcaseOption allows management of the mutation configuration using functional options.
+type evaluationcaseOption func(*EvaluationCaseMutation)
+
+// newEvaluationCaseMutation creates new mutation for the EvaluationCase entity.
+func newEvaluationCaseMutation(c config, op Op, opts ...evaluationcaseOption) *EvaluationCaseMutation {
+	m := &EvaluationCaseMutation{
+		config:        c,
+		op:            op,
+		typ:           TypeEvaluationCase,
+		clearedFields: make(map[string]struct{}),
+	}
+	for _, opt := range opts {
+		opt(m)
+	}
+	return m
+}
+
+// withEvaluationCaseID sets the ID field of the mutation.
+func withEvaluationCaseID(id uuid.UUID) evaluationcaseOption {
+	return func(m *EvaluationCaseMutation) {
+		var (
+			err   error
+			once  sync.Once
+			value *EvaluationCase
+		)
+		m.oldValue = func(ctx context.Context) (*EvaluationCase, error) {
+			once.Do(func() {
+				if m.done {
+					err = errors.New("querying old values post mutation is not allowed")
+				} else {
+					value, err = m.Client().EvaluationCase.Get(ctx, id)
+				}
+			})
+			return value, err
+		}
+		m.id = &id
+	}
+}
+
+// withEvaluationCase sets the old EvaluationCase of the mutation.
+func withEvaluationCase(node *EvaluationCase) evaluationcaseOption {
+	return func(m *EvaluationCaseMutation) {
+		m.oldValue = func(context.Context) (*EvaluationCase, error) {
+			return node, nil
+		}
+		m.id = &node.ID
+	}
+}
+
+// Client returns a new `ent.Client` from the mutation. If the mutation was
+// executed in a transaction (ent.Tx), a transactional client is returned.
+func (m EvaluationCaseMutation) Client() *Client {
+	client := &Client{config: m.config}
+	client.init()
+	return client
+}
+
+// Tx returns an `ent.Tx` for mutations that were executed in transactions;
+// it returns an error otherwise.
+func (m EvaluationCaseMutation) Tx() (*Tx, error) {
+	if _, ok := m.driver.(*txDriver); !ok {
+		return nil, errors.New("ent: mutation is not running in a transaction")
+	}
+	tx := &Tx{config: m.config}
+	tx.init()
+	return tx, nil
+}
+
+// SetID sets the value of the id field. Note that this
+// operation is only accepted on creation of EvaluationCase entities.
+func (m *EvaluationCaseMutation) SetID(id uuid.UUID) {
+	m.id = &id
+}
+
+// ID returns the ID value in the mutation. Note that the ID is only available
+// if it was provided to the builder or after it was returned from the database.
+func (m *EvaluationCaseMutation) ID() (id uuid.UUID, exists bool) {
+	if m.id == nil {
+		return
+	}
+	return *m.id, true
+}
+
+// IDs queries the database and returns the entity ids that match the mutation's predicate.
+// That means, if the mutation is applied within a transaction with an isolation level such
+// as sql.LevelSerializable, the returned ids match the ids of the rows that will be updated
+// or updated by the mutation.
+func (m *EvaluationCaseMutation) IDs(ctx context.Context) ([]uuid.UUID, error) {
+	switch {
+	case m.op.Is(OpUpdateOne | OpDeleteOne):
+		id, exists := m.ID()
+		if exists {
+			return []uuid.UUID{id}, nil
+		}
+		fallthrough
+	case m.op.Is(OpUpdate | OpDelete):
+		return m.Client().EvaluationCase.Query().Where(m.predicates...).IDs(ctx)
+	default:
+		return nil, fmt.Errorf("IDs is not allowed on %s operations", m.op)
+	}
+}
+
+// SetDatasetVersionID sets the "dataset_version_id" field.
+func (m *EvaluationCaseMutation) SetDatasetVersionID(u uuid.UUID) {
+	m.dataset_version = &u
+}
+
+// DatasetVersionID returns the value of the "dataset_version_id" field in the mutation.
+func (m *EvaluationCaseMutation) DatasetVersionID() (r uuid.UUID, exists bool) {
+	v := m.dataset_version
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldDatasetVersionID returns the old "dataset_version_id" field's value of the EvaluationCase entity.
+// If the EvaluationCase object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *EvaluationCaseMutation) OldDatasetVersionID(ctx context.Context) (v uuid.UUID, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldDatasetVersionID is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldDatasetVersionID requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldDatasetVersionID: %w", err)
+	}
+	return oldValue.DatasetVersionID, nil
+}
+
+// ResetDatasetVersionID resets all changes to the "dataset_version_id" field.
+func (m *EvaluationCaseMutation) ResetDatasetVersionID() {
+	m.dataset_version = nil
+}
+
+// SetCaseKey sets the "case_key" field.
+func (m *EvaluationCaseMutation) SetCaseKey(s string) {
+	m.case_key = &s
+}
+
+// CaseKey returns the value of the "case_key" field in the mutation.
+func (m *EvaluationCaseMutation) CaseKey() (r string, exists bool) {
+	v := m.case_key
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldCaseKey returns the old "case_key" field's value of the EvaluationCase entity.
+// If the EvaluationCase object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *EvaluationCaseMutation) OldCaseKey(ctx context.Context) (v string, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldCaseKey is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldCaseKey requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldCaseKey: %w", err)
+	}
+	return oldValue.CaseKey, nil
+}
+
+// ResetCaseKey resets all changes to the "case_key" field.
+func (m *EvaluationCaseMutation) ResetCaseKey() {
+	m.case_key = nil
+}
+
+// SetCapabilityDomain sets the "capability_domain" field.
+func (m *EvaluationCaseMutation) SetCapabilityDomain(s string) {
+	m.capability_domain = &s
+}
+
+// CapabilityDomain returns the value of the "capability_domain" field in the mutation.
+func (m *EvaluationCaseMutation) CapabilityDomain() (r string, exists bool) {
+	v := m.capability_domain
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldCapabilityDomain returns the old "capability_domain" field's value of the EvaluationCase entity.
+// If the EvaluationCase object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *EvaluationCaseMutation) OldCapabilityDomain(ctx context.Context) (v string, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldCapabilityDomain is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldCapabilityDomain requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldCapabilityDomain: %w", err)
+	}
+	return oldValue.CapabilityDomain, nil
+}
+
+// ResetCapabilityDomain resets all changes to the "capability_domain" field.
+func (m *EvaluationCaseMutation) ResetCapabilityDomain() {
+	m.capability_domain = nil
+}
+
+// SetPriority sets the "priority" field.
+func (m *EvaluationCaseMutation) SetPriority(s string) {
+	m.priority = &s
+}
+
+// Priority returns the value of the "priority" field in the mutation.
+func (m *EvaluationCaseMutation) Priority() (r string, exists bool) {
+	v := m.priority
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldPriority returns the old "priority" field's value of the EvaluationCase entity.
+// If the EvaluationCase object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *EvaluationCaseMutation) OldPriority(ctx context.Context) (v string, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldPriority is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldPriority requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldPriority: %w", err)
+	}
+	return oldValue.Priority, nil
+}
+
+// ResetPriority resets all changes to the "priority" field.
+func (m *EvaluationCaseMutation) ResetPriority() {
+	m.priority = nil
+}
+
+// SetWeight sets the "weight" field.
+func (m *EvaluationCaseMutation) SetWeight(f float64) {
+	m.weight = &f
+	m.addweight = nil
+}
+
+// Weight returns the value of the "weight" field in the mutation.
+func (m *EvaluationCaseMutation) Weight() (r float64, exists bool) {
+	v := m.weight
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldWeight returns the old "weight" field's value of the EvaluationCase entity.
+// If the EvaluationCase object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *EvaluationCaseMutation) OldWeight(ctx context.Context) (v float64, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldWeight is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldWeight requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldWeight: %w", err)
+	}
+	return oldValue.Weight, nil
+}
+
+// AddWeight adds f to the "weight" field.
+func (m *EvaluationCaseMutation) AddWeight(f float64) {
+	if m.addweight != nil {
+		*m.addweight += f
+	} else {
+		m.addweight = &f
+	}
+}
+
+// AddedWeight returns the value that was added to the "weight" field in this mutation.
+func (m *EvaluationCaseMutation) AddedWeight() (r float64, exists bool) {
+	v := m.addweight
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// ResetWeight resets all changes to the "weight" field.
+func (m *EvaluationCaseMutation) ResetWeight() {
+	m.weight = nil
+	m.addweight = nil
+}
+
+// SetSampleCount sets the "sample_count" field.
+func (m *EvaluationCaseMutation) SetSampleCount(i int) {
+	m.sample_count = &i
+	m.addsample_count = nil
+}
+
+// SampleCount returns the value of the "sample_count" field in the mutation.
+func (m *EvaluationCaseMutation) SampleCount() (r int, exists bool) {
+	v := m.sample_count
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldSampleCount returns the old "sample_count" field's value of the EvaluationCase entity.
+// If the EvaluationCase object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *EvaluationCaseMutation) OldSampleCount(ctx context.Context) (v int, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldSampleCount is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldSampleCount requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldSampleCount: %w", err)
+	}
+	return oldValue.SampleCount, nil
+}
+
+// AddSampleCount adds i to the "sample_count" field.
+func (m *EvaluationCaseMutation) AddSampleCount(i int) {
+	if m.addsample_count != nil {
+		*m.addsample_count += i
+	} else {
+		m.addsample_count = &i
+	}
+}
+
+// AddedSampleCount returns the value that was added to the "sample_count" field in this mutation.
+func (m *EvaluationCaseMutation) AddedSampleCount() (r int, exists bool) {
+	v := m.addsample_count
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// ResetSampleCount resets all changes to the "sample_count" field.
+func (m *EvaluationCaseMutation) ResetSampleCount() {
+	m.sample_count = nil
+	m.addsample_count = nil
+}
+
+// SetPromptSpec sets the "prompt_spec" field.
+func (m *EvaluationCaseMutation) SetPromptSpec(value map[string]interface{}) {
+	m.prompt_spec = &value
+}
+
+// PromptSpec returns the value of the "prompt_spec" field in the mutation.
+func (m *EvaluationCaseMutation) PromptSpec() (r map[string]interface{}, exists bool) {
+	v := m.prompt_spec
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldPromptSpec returns the old "prompt_spec" field's value of the EvaluationCase entity.
+// If the EvaluationCase object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *EvaluationCaseMutation) OldPromptSpec(ctx context.Context) (v map[string]interface{}, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldPromptSpec is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldPromptSpec requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldPromptSpec: %w", err)
+	}
+	return oldValue.PromptSpec, nil
+}
+
+// ClearPromptSpec clears the value of the "prompt_spec" field.
+func (m *EvaluationCaseMutation) ClearPromptSpec() {
+	m.prompt_spec = nil
+	m.clearedFields[evaluationcase.FieldPromptSpec] = struct{}{}
+}
+
+// PromptSpecCleared returns if the "prompt_spec" field was cleared in this mutation.
+func (m *EvaluationCaseMutation) PromptSpecCleared() bool {
+	_, ok := m.clearedFields[evaluationcase.FieldPromptSpec]
+	return ok
+}
+
+// ResetPromptSpec resets all changes to the "prompt_spec" field.
+func (m *EvaluationCaseMutation) ResetPromptSpec() {
+	m.prompt_spec = nil
+	delete(m.clearedFields, evaluationcase.FieldPromptSpec)
+}
+
+// SetExpectedSpec sets the "expected_spec" field.
+func (m *EvaluationCaseMutation) SetExpectedSpec(value map[string]interface{}) {
+	m.expected_spec = &value
+}
+
+// ExpectedSpec returns the value of the "expected_spec" field in the mutation.
+func (m *EvaluationCaseMutation) ExpectedSpec() (r map[string]interface{}, exists bool) {
+	v := m.expected_spec
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldExpectedSpec returns the old "expected_spec" field's value of the EvaluationCase entity.
+// If the EvaluationCase object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *EvaluationCaseMutation) OldExpectedSpec(ctx context.Context) (v map[string]interface{}, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldExpectedSpec is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldExpectedSpec requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldExpectedSpec: %w", err)
+	}
+	return oldValue.ExpectedSpec, nil
+}
+
+// ClearExpectedSpec clears the value of the "expected_spec" field.
+func (m *EvaluationCaseMutation) ClearExpectedSpec() {
+	m.expected_spec = nil
+	m.clearedFields[evaluationcase.FieldExpectedSpec] = struct{}{}
+}
+
+// ExpectedSpecCleared returns if the "expected_spec" field was cleared in this mutation.
+func (m *EvaluationCaseMutation) ExpectedSpecCleared() bool {
+	_, ok := m.clearedFields[evaluationcase.FieldExpectedSpec]
+	return ok
+}
+
+// ResetExpectedSpec resets all changes to the "expected_spec" field.
+func (m *EvaluationCaseMutation) ResetExpectedSpec() {
+	m.expected_spec = nil
+	delete(m.clearedFields, evaluationcase.FieldExpectedSpec)
+}
+
+// SetEncryptedSpec sets the "encrypted_spec" field.
+func (m *EvaluationCaseMutation) SetEncryptedSpec(s string) {
+	m.encrypted_spec = &s
+}
+
+// EncryptedSpec returns the value of the "encrypted_spec" field in the mutation.
+func (m *EvaluationCaseMutation) EncryptedSpec() (r string, exists bool) {
+	v := m.encrypted_spec
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldEncryptedSpec returns the old "encrypted_spec" field's value of the EvaluationCase entity.
+// If the EvaluationCase object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *EvaluationCaseMutation) OldEncryptedSpec(ctx context.Context) (v *string, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldEncryptedSpec is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldEncryptedSpec requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldEncryptedSpec: %w", err)
+	}
+	return oldValue.EncryptedSpec, nil
+}
+
+// ClearEncryptedSpec clears the value of the "encrypted_spec" field.
+func (m *EvaluationCaseMutation) ClearEncryptedSpec() {
+	m.encrypted_spec = nil
+	m.clearedFields[evaluationcase.FieldEncryptedSpec] = struct{}{}
+}
+
+// EncryptedSpecCleared returns if the "encrypted_spec" field was cleared in this mutation.
+func (m *EvaluationCaseMutation) EncryptedSpecCleared() bool {
+	_, ok := m.clearedFields[evaluationcase.FieldEncryptedSpec]
+	return ok
+}
+
+// ResetEncryptedSpec resets all changes to the "encrypted_spec" field.
+func (m *EvaluationCaseMutation) ResetEncryptedSpec() {
+	m.encrypted_spec = nil
+	delete(m.clearedFields, evaluationcase.FieldEncryptedSpec)
+}
+
+// SetExecutionSpec sets the "execution_spec" field.
+func (m *EvaluationCaseMutation) SetExecutionSpec(value map[string]interface{}) {
+	m.execution_spec = &value
+}
+
+// ExecutionSpec returns the value of the "execution_spec" field in the mutation.
+func (m *EvaluationCaseMutation) ExecutionSpec() (r map[string]interface{}, exists bool) {
+	v := m.execution_spec
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldExecutionSpec returns the old "execution_spec" field's value of the EvaluationCase entity.
+// If the EvaluationCase object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *EvaluationCaseMutation) OldExecutionSpec(ctx context.Context) (v map[string]interface{}, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldExecutionSpec is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldExecutionSpec requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldExecutionSpec: %w", err)
+	}
+	return oldValue.ExecutionSpec, nil
+}
+
+// ResetExecutionSpec resets all changes to the "execution_spec" field.
+func (m *EvaluationCaseMutation) ResetExecutionSpec() {
+	m.execution_spec = nil
+}
+
+// SetGraderID sets the "grader_id" field.
+func (m *EvaluationCaseMutation) SetGraderID(s string) {
+	m.grader_id = &s
+}
+
+// GraderID returns the value of the "grader_id" field in the mutation.
+func (m *EvaluationCaseMutation) GraderID() (r string, exists bool) {
+	v := m.grader_id
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldGraderID returns the old "grader_id" field's value of the EvaluationCase entity.
+// If the EvaluationCase object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *EvaluationCaseMutation) OldGraderID(ctx context.Context) (v string, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldGraderID is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldGraderID requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldGraderID: %w", err)
+	}
+	return oldValue.GraderID, nil
+}
+
+// ResetGraderID resets all changes to the "grader_id" field.
+func (m *EvaluationCaseMutation) ResetGraderID() {
+	m.grader_id = nil
+}
+
+// SetGraderVersion sets the "grader_version" field.
+func (m *EvaluationCaseMutation) SetGraderVersion(s string) {
+	m.grader_version = &s
+}
+
+// GraderVersion returns the value of the "grader_version" field in the mutation.
+func (m *EvaluationCaseMutation) GraderVersion() (r string, exists bool) {
+	v := m.grader_version
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldGraderVersion returns the old "grader_version" field's value of the EvaluationCase entity.
+// If the EvaluationCase object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *EvaluationCaseMutation) OldGraderVersion(ctx context.Context) (v string, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldGraderVersion is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldGraderVersion requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldGraderVersion: %w", err)
+	}
+	return oldValue.GraderVersion, nil
+}
+
+// ResetGraderVersion resets all changes to the "grader_version" field.
+func (m *EvaluationCaseMutation) ResetGraderVersion() {
+	m.grader_version = nil
+}
+
+// SetContentSha256 sets the "content_sha256" field.
+func (m *EvaluationCaseMutation) SetContentSha256(s string) {
+	m.content_sha256 = &s
+}
+
+// ContentSha256 returns the value of the "content_sha256" field in the mutation.
+func (m *EvaluationCaseMutation) ContentSha256() (r string, exists bool) {
+	v := m.content_sha256
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldContentSha256 returns the old "content_sha256" field's value of the EvaluationCase entity.
+// If the EvaluationCase object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *EvaluationCaseMutation) OldContentSha256(ctx context.Context) (v string, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldContentSha256 is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldContentSha256 requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldContentSha256: %w", err)
+	}
+	return oldValue.ContentSha256, nil
+}
+
+// ResetContentSha256 resets all changes to the "content_sha256" field.
+func (m *EvaluationCaseMutation) ResetContentSha256() {
+	m.content_sha256 = nil
+}
+
+// SetConfidentiality sets the "confidentiality" field.
+func (m *EvaluationCaseMutation) SetConfidentiality(s string) {
+	m.confidentiality = &s
+}
+
+// Confidentiality returns the value of the "confidentiality" field in the mutation.
+func (m *EvaluationCaseMutation) Confidentiality() (r string, exists bool) {
+	v := m.confidentiality
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldConfidentiality returns the old "confidentiality" field's value of the EvaluationCase entity.
+// If the EvaluationCase object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *EvaluationCaseMutation) OldConfidentiality(ctx context.Context) (v string, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldConfidentiality is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldConfidentiality requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldConfidentiality: %w", err)
+	}
+	return oldValue.Confidentiality, nil
+}
+
+// ResetConfidentiality resets all changes to the "confidentiality" field.
+func (m *EvaluationCaseMutation) ResetConfidentiality() {
+	m.confidentiality = nil
+}
+
+// SetEstimatedCost sets the "estimated_cost" field.
+func (m *EvaluationCaseMutation) SetEstimatedCost(f float64) {
+	m.estimated_cost = &f
+	m.addestimated_cost = nil
+}
+
+// EstimatedCost returns the value of the "estimated_cost" field in the mutation.
+func (m *EvaluationCaseMutation) EstimatedCost() (r float64, exists bool) {
+	v := m.estimated_cost
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldEstimatedCost returns the old "estimated_cost" field's value of the EvaluationCase entity.
+// If the EvaluationCase object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *EvaluationCaseMutation) OldEstimatedCost(ctx context.Context) (v float64, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldEstimatedCost is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldEstimatedCost requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldEstimatedCost: %w", err)
+	}
+	return oldValue.EstimatedCost, nil
+}
+
+// AddEstimatedCost adds f to the "estimated_cost" field.
+func (m *EvaluationCaseMutation) AddEstimatedCost(f float64) {
+	if m.addestimated_cost != nil {
+		*m.addestimated_cost += f
+	} else {
+		m.addestimated_cost = &f
+	}
+}
+
+// AddedEstimatedCost returns the value that was added to the "estimated_cost" field in this mutation.
+func (m *EvaluationCaseMutation) AddedEstimatedCost() (r float64, exists bool) {
+	v := m.addestimated_cost
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// ResetEstimatedCost resets all changes to the "estimated_cost" field.
+func (m *EvaluationCaseMutation) ResetEstimatedCost() {
+	m.estimated_cost = nil
+	m.addestimated_cost = nil
+}
+
+// SetCreatedAt sets the "created_at" field.
+func (m *EvaluationCaseMutation) SetCreatedAt(t time.Time) {
+	m.created_at = &t
+}
+
+// CreatedAt returns the value of the "created_at" field in the mutation.
+func (m *EvaluationCaseMutation) CreatedAt() (r time.Time, exists bool) {
+	v := m.created_at
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldCreatedAt returns the old "created_at" field's value of the EvaluationCase entity.
+// If the EvaluationCase object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *EvaluationCaseMutation) OldCreatedAt(ctx context.Context) (v time.Time, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldCreatedAt is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldCreatedAt requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldCreatedAt: %w", err)
+	}
+	return oldValue.CreatedAt, nil
+}
+
+// ResetCreatedAt resets all changes to the "created_at" field.
+func (m *EvaluationCaseMutation) ResetCreatedAt() {
+	m.created_at = nil
+}
+
+// ClearDatasetVersion clears the "dataset_version" edge to the EvaluationDatasetVersion entity.
+func (m *EvaluationCaseMutation) ClearDatasetVersion() {
+	m.cleareddataset_version = true
+	m.clearedFields[evaluationcase.FieldDatasetVersionID] = struct{}{}
+}
+
+// DatasetVersionCleared reports if the "dataset_version" edge to the EvaluationDatasetVersion entity was cleared.
+func (m *EvaluationCaseMutation) DatasetVersionCleared() bool {
+	return m.cleareddataset_version
+}
+
+// DatasetVersionIDs returns the "dataset_version" edge IDs in the mutation.
+// Note that IDs always returns len(IDs) <= 1 for unique edges, and you should use
+// DatasetVersionID instead. It exists only for internal usage by the builders.
+func (m *EvaluationCaseMutation) DatasetVersionIDs() (ids []uuid.UUID) {
+	if id := m.dataset_version; id != nil {
+		ids = append(ids, *id)
+	}
+	return
+}
+
+// ResetDatasetVersion resets all changes to the "dataset_version" edge.
+func (m *EvaluationCaseMutation) ResetDatasetVersion() {
+	m.dataset_version = nil
+	m.cleareddataset_version = false
+}
+
+// Where appends a list predicates to the EvaluationCaseMutation builder.
+func (m *EvaluationCaseMutation) Where(ps ...predicate.EvaluationCase) {
+	m.predicates = append(m.predicates, ps...)
+}
+
+// WhereP appends storage-level predicates to the EvaluationCaseMutation builder. Using this method,
+// users can use type-assertion to append predicates that do not depend on any generated package.
+func (m *EvaluationCaseMutation) WhereP(ps ...func(*sql.Selector)) {
+	p := make([]predicate.EvaluationCase, len(ps))
+	for i := range ps {
+		p[i] = ps[i]
+	}
+	m.Where(p...)
+}
+
+// Op returns the operation name.
+func (m *EvaluationCaseMutation) Op() Op {
+	return m.op
+}
+
+// SetOp allows setting the mutation operation.
+func (m *EvaluationCaseMutation) SetOp(op Op) {
+	m.op = op
+}
+
+// Type returns the node type of this mutation (EvaluationCase).
+func (m *EvaluationCaseMutation) Type() string {
+	return m.typ
+}
+
+// Fields returns all fields that were changed during this mutation. Note that in
+// order to get all numeric fields that were incremented/decremented, call
+// AddedFields().
+func (m *EvaluationCaseMutation) Fields() []string {
+	fields := make([]string, 0, 16)
+	if m.dataset_version != nil {
+		fields = append(fields, evaluationcase.FieldDatasetVersionID)
+	}
+	if m.case_key != nil {
+		fields = append(fields, evaluationcase.FieldCaseKey)
+	}
+	if m.capability_domain != nil {
+		fields = append(fields, evaluationcase.FieldCapabilityDomain)
+	}
+	if m.priority != nil {
+		fields = append(fields, evaluationcase.FieldPriority)
+	}
+	if m.weight != nil {
+		fields = append(fields, evaluationcase.FieldWeight)
+	}
+	if m.sample_count != nil {
+		fields = append(fields, evaluationcase.FieldSampleCount)
+	}
+	if m.prompt_spec != nil {
+		fields = append(fields, evaluationcase.FieldPromptSpec)
+	}
+	if m.expected_spec != nil {
+		fields = append(fields, evaluationcase.FieldExpectedSpec)
+	}
+	if m.encrypted_spec != nil {
+		fields = append(fields, evaluationcase.FieldEncryptedSpec)
+	}
+	if m.execution_spec != nil {
+		fields = append(fields, evaluationcase.FieldExecutionSpec)
+	}
+	if m.grader_id != nil {
+		fields = append(fields, evaluationcase.FieldGraderID)
+	}
+	if m.grader_version != nil {
+		fields = append(fields, evaluationcase.FieldGraderVersion)
+	}
+	if m.content_sha256 != nil {
+		fields = append(fields, evaluationcase.FieldContentSha256)
+	}
+	if m.confidentiality != nil {
+		fields = append(fields, evaluationcase.FieldConfidentiality)
+	}
+	if m.estimated_cost != nil {
+		fields = append(fields, evaluationcase.FieldEstimatedCost)
+	}
+	if m.created_at != nil {
+		fields = append(fields, evaluationcase.FieldCreatedAt)
+	}
+	return fields
+}
+
+// Field returns the value of a field with the given name. The second boolean
+// return value indicates that this field was not set, or was not defined in the
+// schema.
+func (m *EvaluationCaseMutation) Field(name string) (ent.Value, bool) {
+	switch name {
+	case evaluationcase.FieldDatasetVersionID:
+		return m.DatasetVersionID()
+	case evaluationcase.FieldCaseKey:
+		return m.CaseKey()
+	case evaluationcase.FieldCapabilityDomain:
+		return m.CapabilityDomain()
+	case evaluationcase.FieldPriority:
+		return m.Priority()
+	case evaluationcase.FieldWeight:
+		return m.Weight()
+	case evaluationcase.FieldSampleCount:
+		return m.SampleCount()
+	case evaluationcase.FieldPromptSpec:
+		return m.PromptSpec()
+	case evaluationcase.FieldExpectedSpec:
+		return m.ExpectedSpec()
+	case evaluationcase.FieldEncryptedSpec:
+		return m.EncryptedSpec()
+	case evaluationcase.FieldExecutionSpec:
+		return m.ExecutionSpec()
+	case evaluationcase.FieldGraderID:
+		return m.GraderID()
+	case evaluationcase.FieldGraderVersion:
+		return m.GraderVersion()
+	case evaluationcase.FieldContentSha256:
+		return m.ContentSha256()
+	case evaluationcase.FieldConfidentiality:
+		return m.Confidentiality()
+	case evaluationcase.FieldEstimatedCost:
+		return m.EstimatedCost()
+	case evaluationcase.FieldCreatedAt:
+		return m.CreatedAt()
+	}
+	return nil, false
+}
+
+// OldField returns the old value of the field from the database. An error is
+// returned if the mutation operation is not UpdateOne, or the query to the
+// database failed.
+func (m *EvaluationCaseMutation) OldField(ctx context.Context, name string) (ent.Value, error) {
+	switch name {
+	case evaluationcase.FieldDatasetVersionID:
+		return m.OldDatasetVersionID(ctx)
+	case evaluationcase.FieldCaseKey:
+		return m.OldCaseKey(ctx)
+	case evaluationcase.FieldCapabilityDomain:
+		return m.OldCapabilityDomain(ctx)
+	case evaluationcase.FieldPriority:
+		return m.OldPriority(ctx)
+	case evaluationcase.FieldWeight:
+		return m.OldWeight(ctx)
+	case evaluationcase.FieldSampleCount:
+		return m.OldSampleCount(ctx)
+	case evaluationcase.FieldPromptSpec:
+		return m.OldPromptSpec(ctx)
+	case evaluationcase.FieldExpectedSpec:
+		return m.OldExpectedSpec(ctx)
+	case evaluationcase.FieldEncryptedSpec:
+		return m.OldEncryptedSpec(ctx)
+	case evaluationcase.FieldExecutionSpec:
+		return m.OldExecutionSpec(ctx)
+	case evaluationcase.FieldGraderID:
+		return m.OldGraderID(ctx)
+	case evaluationcase.FieldGraderVersion:
+		return m.OldGraderVersion(ctx)
+	case evaluationcase.FieldContentSha256:
+		return m.OldContentSha256(ctx)
+	case evaluationcase.FieldConfidentiality:
+		return m.OldConfidentiality(ctx)
+	case evaluationcase.FieldEstimatedCost:
+		return m.OldEstimatedCost(ctx)
+	case evaluationcase.FieldCreatedAt:
+		return m.OldCreatedAt(ctx)
+	}
+	return nil, fmt.Errorf("unknown EvaluationCase field %s", name)
+}
+
+// SetField sets the value of a field with the given name. It returns an error if
+// the field is not defined in the schema, or if the type mismatched the field
+// type.
+func (m *EvaluationCaseMutation) SetField(name string, value ent.Value) error {
+	switch name {
+	case evaluationcase.FieldDatasetVersionID:
+		v, ok := value.(uuid.UUID)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetDatasetVersionID(v)
+		return nil
+	case evaluationcase.FieldCaseKey:
+		v, ok := value.(string)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetCaseKey(v)
+		return nil
+	case evaluationcase.FieldCapabilityDomain:
+		v, ok := value.(string)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetCapabilityDomain(v)
+		return nil
+	case evaluationcase.FieldPriority:
+		v, ok := value.(string)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetPriority(v)
+		return nil
+	case evaluationcase.FieldWeight:
+		v, ok := value.(float64)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetWeight(v)
+		return nil
+	case evaluationcase.FieldSampleCount:
+		v, ok := value.(int)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetSampleCount(v)
+		return nil
+	case evaluationcase.FieldPromptSpec:
+		v, ok := value.(map[string]interface{})
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetPromptSpec(v)
+		return nil
+	case evaluationcase.FieldExpectedSpec:
+		v, ok := value.(map[string]interface{})
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetExpectedSpec(v)
+		return nil
+	case evaluationcase.FieldEncryptedSpec:
+		v, ok := value.(string)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetEncryptedSpec(v)
+		return nil
+	case evaluationcase.FieldExecutionSpec:
+		v, ok := value.(map[string]interface{})
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetExecutionSpec(v)
+		return nil
+	case evaluationcase.FieldGraderID:
+		v, ok := value.(string)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetGraderID(v)
+		return nil
+	case evaluationcase.FieldGraderVersion:
+		v, ok := value.(string)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetGraderVersion(v)
+		return nil
+	case evaluationcase.FieldContentSha256:
+		v, ok := value.(string)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetContentSha256(v)
+		return nil
+	case evaluationcase.FieldConfidentiality:
+		v, ok := value.(string)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetConfidentiality(v)
+		return nil
+	case evaluationcase.FieldEstimatedCost:
+		v, ok := value.(float64)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetEstimatedCost(v)
+		return nil
+	case evaluationcase.FieldCreatedAt:
+		v, ok := value.(time.Time)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetCreatedAt(v)
+		return nil
+	}
+	return fmt.Errorf("unknown EvaluationCase field %s", name)
+}
+
+// AddedFields returns all numeric fields that were incremented/decremented during
+// this mutation.
+func (m *EvaluationCaseMutation) AddedFields() []string {
+	var fields []string
+	if m.addweight != nil {
+		fields = append(fields, evaluationcase.FieldWeight)
+	}
+	if m.addsample_count != nil {
+		fields = append(fields, evaluationcase.FieldSampleCount)
+	}
+	if m.addestimated_cost != nil {
+		fields = append(fields, evaluationcase.FieldEstimatedCost)
+	}
+	return fields
+}
+
+// AddedField returns the numeric value that was incremented/decremented on a field
+// with the given name. The second boolean return value indicates that this field
+// was not set, or was not defined in the schema.
+func (m *EvaluationCaseMutation) AddedField(name string) (ent.Value, bool) {
+	switch name {
+	case evaluationcase.FieldWeight:
+		return m.AddedWeight()
+	case evaluationcase.FieldSampleCount:
+		return m.AddedSampleCount()
+	case evaluationcase.FieldEstimatedCost:
+		return m.AddedEstimatedCost()
+	}
+	return nil, false
+}
+
+// AddField adds the value to the field with the given name. It returns an error if
+// the field is not defined in the schema, or if the type mismatched the field
+// type.
+func (m *EvaluationCaseMutation) AddField(name string, value ent.Value) error {
+	switch name {
+	case evaluationcase.FieldWeight:
+		v, ok := value.(float64)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.AddWeight(v)
+		return nil
+	case evaluationcase.FieldSampleCount:
+		v, ok := value.(int)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.AddSampleCount(v)
+		return nil
+	case evaluationcase.FieldEstimatedCost:
+		v, ok := value.(float64)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.AddEstimatedCost(v)
+		return nil
+	}
+	return fmt.Errorf("unknown EvaluationCase numeric field %s", name)
+}
+
+// ClearedFields returns all nullable fields that were cleared during this
+// mutation.
+func (m *EvaluationCaseMutation) ClearedFields() []string {
+	var fields []string
+	if m.FieldCleared(evaluationcase.FieldPromptSpec) {
+		fields = append(fields, evaluationcase.FieldPromptSpec)
+	}
+	if m.FieldCleared(evaluationcase.FieldExpectedSpec) {
+		fields = append(fields, evaluationcase.FieldExpectedSpec)
+	}
+	if m.FieldCleared(evaluationcase.FieldEncryptedSpec) {
+		fields = append(fields, evaluationcase.FieldEncryptedSpec)
+	}
+	return fields
+}
+
+// FieldCleared returns a boolean indicating if a field with the given name was
+// cleared in this mutation.
+func (m *EvaluationCaseMutation) FieldCleared(name string) bool {
+	_, ok := m.clearedFields[name]
+	return ok
+}
+
+// ClearField clears the value of the field with the given name. It returns an
+// error if the field is not defined in the schema.
+func (m *EvaluationCaseMutation) ClearField(name string) error {
+	switch name {
+	case evaluationcase.FieldPromptSpec:
+		m.ClearPromptSpec()
+		return nil
+	case evaluationcase.FieldExpectedSpec:
+		m.ClearExpectedSpec()
+		return nil
+	case evaluationcase.FieldEncryptedSpec:
+		m.ClearEncryptedSpec()
+		return nil
+	}
+	return fmt.Errorf("unknown EvaluationCase nullable field %s", name)
+}
+
+// ResetField resets all changes in the mutation for the field with the given name.
+// It returns an error if the field is not defined in the schema.
+func (m *EvaluationCaseMutation) ResetField(name string) error {
+	switch name {
+	case evaluationcase.FieldDatasetVersionID:
+		m.ResetDatasetVersionID()
+		return nil
+	case evaluationcase.FieldCaseKey:
+		m.ResetCaseKey()
+		return nil
+	case evaluationcase.FieldCapabilityDomain:
+		m.ResetCapabilityDomain()
+		return nil
+	case evaluationcase.FieldPriority:
+		m.ResetPriority()
+		return nil
+	case evaluationcase.FieldWeight:
+		m.ResetWeight()
+		return nil
+	case evaluationcase.FieldSampleCount:
+		m.ResetSampleCount()
+		return nil
+	case evaluationcase.FieldPromptSpec:
+		m.ResetPromptSpec()
+		return nil
+	case evaluationcase.FieldExpectedSpec:
+		m.ResetExpectedSpec()
+		return nil
+	case evaluationcase.FieldEncryptedSpec:
+		m.ResetEncryptedSpec()
+		return nil
+	case evaluationcase.FieldExecutionSpec:
+		m.ResetExecutionSpec()
+		return nil
+	case evaluationcase.FieldGraderID:
+		m.ResetGraderID()
+		return nil
+	case evaluationcase.FieldGraderVersion:
+		m.ResetGraderVersion()
+		return nil
+	case evaluationcase.FieldContentSha256:
+		m.ResetContentSha256()
+		return nil
+	case evaluationcase.FieldConfidentiality:
+		m.ResetConfidentiality()
+		return nil
+	case evaluationcase.FieldEstimatedCost:
+		m.ResetEstimatedCost()
+		return nil
+	case evaluationcase.FieldCreatedAt:
+		m.ResetCreatedAt()
+		return nil
+	}
+	return fmt.Errorf("unknown EvaluationCase field %s", name)
+}
+
+// AddedEdges returns all edge names that were set/added in this mutation.
+func (m *EvaluationCaseMutation) AddedEdges() []string {
+	edges := make([]string, 0, 1)
+	if m.dataset_version != nil {
+		edges = append(edges, evaluationcase.EdgeDatasetVersion)
+	}
+	return edges
+}
+
+// AddedIDs returns all IDs (to other nodes) that were added for the given edge
+// name in this mutation.
+func (m *EvaluationCaseMutation) AddedIDs(name string) []ent.Value {
+	switch name {
+	case evaluationcase.EdgeDatasetVersion:
+		if id := m.dataset_version; id != nil {
+			return []ent.Value{*id}
+		}
+	}
+	return nil
+}
+
+// RemovedEdges returns all edge names that were removed in this mutation.
+func (m *EvaluationCaseMutation) RemovedEdges() []string {
+	edges := make([]string, 0, 1)
+	return edges
+}
+
+// RemovedIDs returns all IDs (to other nodes) that were removed for the edge with
+// the given name in this mutation.
+func (m *EvaluationCaseMutation) RemovedIDs(name string) []ent.Value {
+	return nil
+}
+
+// ClearedEdges returns all edge names that were cleared in this mutation.
+func (m *EvaluationCaseMutation) ClearedEdges() []string {
+	edges := make([]string, 0, 1)
+	if m.cleareddataset_version {
+		edges = append(edges, evaluationcase.EdgeDatasetVersion)
+	}
+	return edges
+}
+
+// EdgeCleared returns a boolean which indicates if the edge with the given name
+// was cleared in this mutation.
+func (m *EvaluationCaseMutation) EdgeCleared(name string) bool {
+	switch name {
+	case evaluationcase.EdgeDatasetVersion:
+		return m.cleareddataset_version
+	}
+	return false
+}
+
+// ClearEdge clears the value of the edge with the given name. It returns an error
+// if that edge is not defined in the schema.
+func (m *EvaluationCaseMutation) ClearEdge(name string) error {
+	switch name {
+	case evaluationcase.EdgeDatasetVersion:
+		m.ClearDatasetVersion()
+		return nil
+	}
+	return fmt.Errorf("unknown EvaluationCase unique edge %s", name)
+}
+
+// ResetEdge resets all changes to the edge with the given name in this mutation.
+// It returns an error if the edge is not defined in the schema.
+func (m *EvaluationCaseMutation) ResetEdge(name string) error {
+	switch name {
+	case evaluationcase.EdgeDatasetVersion:
+		m.ResetDatasetVersion()
+		return nil
+	}
+	return fmt.Errorf("unknown EvaluationCase edge %s", name)
+}
+
+// EvaluationDatasetVersionMutation represents an operation that mutates the EvaluationDatasetVersion nodes in the graph.
+type EvaluationDatasetVersionMutation struct {
+	config
+	op              Op
+	typ             string
+	id              *uuid.UUID
+	dataset_key     *string
+	version         *string
+	manifest_sha256 *string
+	source_type     *string
+	status          *string
+	created_by      *int64
+	addcreated_by   *int64
+	published_at    *time.Time
+	retired_at      *time.Time
+	created_at      *time.Time
+	updated_at      *time.Time
+	clearedFields   map[string]struct{}
+	cases           map[uuid.UUID]struct{}
+	removedcases    map[uuid.UUID]struct{}
+	clearedcases    bool
+	plans           map[uuid.UUID]struct{}
+	removedplans    map[uuid.UUID]struct{}
+	clearedplans    bool
+	done            bool
+	oldValue        func(context.Context) (*EvaluationDatasetVersion, error)
+	predicates      []predicate.EvaluationDatasetVersion
+}
+
+var _ ent.Mutation = (*EvaluationDatasetVersionMutation)(nil)
+
+// evaluationdatasetversionOption allows management of the mutation configuration using functional options.
+type evaluationdatasetversionOption func(*EvaluationDatasetVersionMutation)
+
+// newEvaluationDatasetVersionMutation creates new mutation for the EvaluationDatasetVersion entity.
+func newEvaluationDatasetVersionMutation(c config, op Op, opts ...evaluationdatasetversionOption) *EvaluationDatasetVersionMutation {
+	m := &EvaluationDatasetVersionMutation{
+		config:        c,
+		op:            op,
+		typ:           TypeEvaluationDatasetVersion,
+		clearedFields: make(map[string]struct{}),
+	}
+	for _, opt := range opts {
+		opt(m)
+	}
+	return m
+}
+
+// withEvaluationDatasetVersionID sets the ID field of the mutation.
+func withEvaluationDatasetVersionID(id uuid.UUID) evaluationdatasetversionOption {
+	return func(m *EvaluationDatasetVersionMutation) {
+		var (
+			err   error
+			once  sync.Once
+			value *EvaluationDatasetVersion
+		)
+		m.oldValue = func(ctx context.Context) (*EvaluationDatasetVersion, error) {
+			once.Do(func() {
+				if m.done {
+					err = errors.New("querying old values post mutation is not allowed")
+				} else {
+					value, err = m.Client().EvaluationDatasetVersion.Get(ctx, id)
+				}
+			})
+			return value, err
+		}
+		m.id = &id
+	}
+}
+
+// withEvaluationDatasetVersion sets the old EvaluationDatasetVersion of the mutation.
+func withEvaluationDatasetVersion(node *EvaluationDatasetVersion) evaluationdatasetversionOption {
+	return func(m *EvaluationDatasetVersionMutation) {
+		m.oldValue = func(context.Context) (*EvaluationDatasetVersion, error) {
+			return node, nil
+		}
+		m.id = &node.ID
+	}
+}
+
+// Client returns a new `ent.Client` from the mutation. If the mutation was
+// executed in a transaction (ent.Tx), a transactional client is returned.
+func (m EvaluationDatasetVersionMutation) Client() *Client {
+	client := &Client{config: m.config}
+	client.init()
+	return client
+}
+
+// Tx returns an `ent.Tx` for mutations that were executed in transactions;
+// it returns an error otherwise.
+func (m EvaluationDatasetVersionMutation) Tx() (*Tx, error) {
+	if _, ok := m.driver.(*txDriver); !ok {
+		return nil, errors.New("ent: mutation is not running in a transaction")
+	}
+	tx := &Tx{config: m.config}
+	tx.init()
+	return tx, nil
+}
+
+// SetID sets the value of the id field. Note that this
+// operation is only accepted on creation of EvaluationDatasetVersion entities.
+func (m *EvaluationDatasetVersionMutation) SetID(id uuid.UUID) {
+	m.id = &id
+}
+
+// ID returns the ID value in the mutation. Note that the ID is only available
+// if it was provided to the builder or after it was returned from the database.
+func (m *EvaluationDatasetVersionMutation) ID() (id uuid.UUID, exists bool) {
+	if m.id == nil {
+		return
+	}
+	return *m.id, true
+}
+
+// IDs queries the database and returns the entity ids that match the mutation's predicate.
+// That means, if the mutation is applied within a transaction with an isolation level such
+// as sql.LevelSerializable, the returned ids match the ids of the rows that will be updated
+// or updated by the mutation.
+func (m *EvaluationDatasetVersionMutation) IDs(ctx context.Context) ([]uuid.UUID, error) {
+	switch {
+	case m.op.Is(OpUpdateOne | OpDeleteOne):
+		id, exists := m.ID()
+		if exists {
+			return []uuid.UUID{id}, nil
+		}
+		fallthrough
+	case m.op.Is(OpUpdate | OpDelete):
+		return m.Client().EvaluationDatasetVersion.Query().Where(m.predicates...).IDs(ctx)
+	default:
+		return nil, fmt.Errorf("IDs is not allowed on %s operations", m.op)
+	}
+}
+
+// SetDatasetKey sets the "dataset_key" field.
+func (m *EvaluationDatasetVersionMutation) SetDatasetKey(s string) {
+	m.dataset_key = &s
+}
+
+// DatasetKey returns the value of the "dataset_key" field in the mutation.
+func (m *EvaluationDatasetVersionMutation) DatasetKey() (r string, exists bool) {
+	v := m.dataset_key
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldDatasetKey returns the old "dataset_key" field's value of the EvaluationDatasetVersion entity.
+// If the EvaluationDatasetVersion object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *EvaluationDatasetVersionMutation) OldDatasetKey(ctx context.Context) (v string, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldDatasetKey is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldDatasetKey requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldDatasetKey: %w", err)
+	}
+	return oldValue.DatasetKey, nil
+}
+
+// ResetDatasetKey resets all changes to the "dataset_key" field.
+func (m *EvaluationDatasetVersionMutation) ResetDatasetKey() {
+	m.dataset_key = nil
+}
+
+// SetVersion sets the "version" field.
+func (m *EvaluationDatasetVersionMutation) SetVersion(s string) {
+	m.version = &s
+}
+
+// Version returns the value of the "version" field in the mutation.
+func (m *EvaluationDatasetVersionMutation) Version() (r string, exists bool) {
+	v := m.version
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldVersion returns the old "version" field's value of the EvaluationDatasetVersion entity.
+// If the EvaluationDatasetVersion object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *EvaluationDatasetVersionMutation) OldVersion(ctx context.Context) (v string, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldVersion is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldVersion requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldVersion: %w", err)
+	}
+	return oldValue.Version, nil
+}
+
+// ResetVersion resets all changes to the "version" field.
+func (m *EvaluationDatasetVersionMutation) ResetVersion() {
+	m.version = nil
+}
+
+// SetManifestSha256 sets the "manifest_sha256" field.
+func (m *EvaluationDatasetVersionMutation) SetManifestSha256(s string) {
+	m.manifest_sha256 = &s
+}
+
+// ManifestSha256 returns the value of the "manifest_sha256" field in the mutation.
+func (m *EvaluationDatasetVersionMutation) ManifestSha256() (r string, exists bool) {
+	v := m.manifest_sha256
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldManifestSha256 returns the old "manifest_sha256" field's value of the EvaluationDatasetVersion entity.
+// If the EvaluationDatasetVersion object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *EvaluationDatasetVersionMutation) OldManifestSha256(ctx context.Context) (v string, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldManifestSha256 is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldManifestSha256 requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldManifestSha256: %w", err)
+	}
+	return oldValue.ManifestSha256, nil
+}
+
+// ResetManifestSha256 resets all changes to the "manifest_sha256" field.
+func (m *EvaluationDatasetVersionMutation) ResetManifestSha256() {
+	m.manifest_sha256 = nil
+}
+
+// SetSourceType sets the "source_type" field.
+func (m *EvaluationDatasetVersionMutation) SetSourceType(s string) {
+	m.source_type = &s
+}
+
+// SourceType returns the value of the "source_type" field in the mutation.
+func (m *EvaluationDatasetVersionMutation) SourceType() (r string, exists bool) {
+	v := m.source_type
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldSourceType returns the old "source_type" field's value of the EvaluationDatasetVersion entity.
+// If the EvaluationDatasetVersion object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *EvaluationDatasetVersionMutation) OldSourceType(ctx context.Context) (v string, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldSourceType is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldSourceType requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldSourceType: %w", err)
+	}
+	return oldValue.SourceType, nil
+}
+
+// ResetSourceType resets all changes to the "source_type" field.
+func (m *EvaluationDatasetVersionMutation) ResetSourceType() {
+	m.source_type = nil
+}
+
+// SetStatus sets the "status" field.
+func (m *EvaluationDatasetVersionMutation) SetStatus(s string) {
+	m.status = &s
+}
+
+// Status returns the value of the "status" field in the mutation.
+func (m *EvaluationDatasetVersionMutation) Status() (r string, exists bool) {
+	v := m.status
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldStatus returns the old "status" field's value of the EvaluationDatasetVersion entity.
+// If the EvaluationDatasetVersion object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *EvaluationDatasetVersionMutation) OldStatus(ctx context.Context) (v string, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldStatus is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldStatus requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldStatus: %w", err)
+	}
+	return oldValue.Status, nil
+}
+
+// ResetStatus resets all changes to the "status" field.
+func (m *EvaluationDatasetVersionMutation) ResetStatus() {
+	m.status = nil
+}
+
+// SetCreatedBy sets the "created_by" field.
+func (m *EvaluationDatasetVersionMutation) SetCreatedBy(i int64) {
+	m.created_by = &i
+	m.addcreated_by = nil
+}
+
+// CreatedBy returns the value of the "created_by" field in the mutation.
+func (m *EvaluationDatasetVersionMutation) CreatedBy() (r int64, exists bool) {
+	v := m.created_by
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldCreatedBy returns the old "created_by" field's value of the EvaluationDatasetVersion entity.
+// If the EvaluationDatasetVersion object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *EvaluationDatasetVersionMutation) OldCreatedBy(ctx context.Context) (v int64, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldCreatedBy is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldCreatedBy requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldCreatedBy: %w", err)
+	}
+	return oldValue.CreatedBy, nil
+}
+
+// AddCreatedBy adds i to the "created_by" field.
+func (m *EvaluationDatasetVersionMutation) AddCreatedBy(i int64) {
+	if m.addcreated_by != nil {
+		*m.addcreated_by += i
+	} else {
+		m.addcreated_by = &i
+	}
+}
+
+// AddedCreatedBy returns the value that was added to the "created_by" field in this mutation.
+func (m *EvaluationDatasetVersionMutation) AddedCreatedBy() (r int64, exists bool) {
+	v := m.addcreated_by
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// ResetCreatedBy resets all changes to the "created_by" field.
+func (m *EvaluationDatasetVersionMutation) ResetCreatedBy() {
+	m.created_by = nil
+	m.addcreated_by = nil
+}
+
+// SetPublishedAt sets the "published_at" field.
+func (m *EvaluationDatasetVersionMutation) SetPublishedAt(t time.Time) {
+	m.published_at = &t
+}
+
+// PublishedAt returns the value of the "published_at" field in the mutation.
+func (m *EvaluationDatasetVersionMutation) PublishedAt() (r time.Time, exists bool) {
+	v := m.published_at
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldPublishedAt returns the old "published_at" field's value of the EvaluationDatasetVersion entity.
+// If the EvaluationDatasetVersion object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *EvaluationDatasetVersionMutation) OldPublishedAt(ctx context.Context) (v *time.Time, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldPublishedAt is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldPublishedAt requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldPublishedAt: %w", err)
+	}
+	return oldValue.PublishedAt, nil
+}
+
+// ClearPublishedAt clears the value of the "published_at" field.
+func (m *EvaluationDatasetVersionMutation) ClearPublishedAt() {
+	m.published_at = nil
+	m.clearedFields[evaluationdatasetversion.FieldPublishedAt] = struct{}{}
+}
+
+// PublishedAtCleared returns if the "published_at" field was cleared in this mutation.
+func (m *EvaluationDatasetVersionMutation) PublishedAtCleared() bool {
+	_, ok := m.clearedFields[evaluationdatasetversion.FieldPublishedAt]
+	return ok
+}
+
+// ResetPublishedAt resets all changes to the "published_at" field.
+func (m *EvaluationDatasetVersionMutation) ResetPublishedAt() {
+	m.published_at = nil
+	delete(m.clearedFields, evaluationdatasetversion.FieldPublishedAt)
+}
+
+// SetRetiredAt sets the "retired_at" field.
+func (m *EvaluationDatasetVersionMutation) SetRetiredAt(t time.Time) {
+	m.retired_at = &t
+}
+
+// RetiredAt returns the value of the "retired_at" field in the mutation.
+func (m *EvaluationDatasetVersionMutation) RetiredAt() (r time.Time, exists bool) {
+	v := m.retired_at
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldRetiredAt returns the old "retired_at" field's value of the EvaluationDatasetVersion entity.
+// If the EvaluationDatasetVersion object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *EvaluationDatasetVersionMutation) OldRetiredAt(ctx context.Context) (v *time.Time, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldRetiredAt is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldRetiredAt requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldRetiredAt: %w", err)
+	}
+	return oldValue.RetiredAt, nil
+}
+
+// ClearRetiredAt clears the value of the "retired_at" field.
+func (m *EvaluationDatasetVersionMutation) ClearRetiredAt() {
+	m.retired_at = nil
+	m.clearedFields[evaluationdatasetversion.FieldRetiredAt] = struct{}{}
+}
+
+// RetiredAtCleared returns if the "retired_at" field was cleared in this mutation.
+func (m *EvaluationDatasetVersionMutation) RetiredAtCleared() bool {
+	_, ok := m.clearedFields[evaluationdatasetversion.FieldRetiredAt]
+	return ok
+}
+
+// ResetRetiredAt resets all changes to the "retired_at" field.
+func (m *EvaluationDatasetVersionMutation) ResetRetiredAt() {
+	m.retired_at = nil
+	delete(m.clearedFields, evaluationdatasetversion.FieldRetiredAt)
+}
+
+// SetCreatedAt sets the "created_at" field.
+func (m *EvaluationDatasetVersionMutation) SetCreatedAt(t time.Time) {
+	m.created_at = &t
+}
+
+// CreatedAt returns the value of the "created_at" field in the mutation.
+func (m *EvaluationDatasetVersionMutation) CreatedAt() (r time.Time, exists bool) {
+	v := m.created_at
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldCreatedAt returns the old "created_at" field's value of the EvaluationDatasetVersion entity.
+// If the EvaluationDatasetVersion object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *EvaluationDatasetVersionMutation) OldCreatedAt(ctx context.Context) (v time.Time, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldCreatedAt is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldCreatedAt requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldCreatedAt: %w", err)
+	}
+	return oldValue.CreatedAt, nil
+}
+
+// ResetCreatedAt resets all changes to the "created_at" field.
+func (m *EvaluationDatasetVersionMutation) ResetCreatedAt() {
+	m.created_at = nil
+}
+
+// SetUpdatedAt sets the "updated_at" field.
+func (m *EvaluationDatasetVersionMutation) SetUpdatedAt(t time.Time) {
+	m.updated_at = &t
+}
+
+// UpdatedAt returns the value of the "updated_at" field in the mutation.
+func (m *EvaluationDatasetVersionMutation) UpdatedAt() (r time.Time, exists bool) {
+	v := m.updated_at
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldUpdatedAt returns the old "updated_at" field's value of the EvaluationDatasetVersion entity.
+// If the EvaluationDatasetVersion object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *EvaluationDatasetVersionMutation) OldUpdatedAt(ctx context.Context) (v time.Time, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldUpdatedAt is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldUpdatedAt requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldUpdatedAt: %w", err)
+	}
+	return oldValue.UpdatedAt, nil
+}
+
+// ResetUpdatedAt resets all changes to the "updated_at" field.
+func (m *EvaluationDatasetVersionMutation) ResetUpdatedAt() {
+	m.updated_at = nil
+}
+
+// AddCaseIDs adds the "cases" edge to the EvaluationCase entity by ids.
+func (m *EvaluationDatasetVersionMutation) AddCaseIDs(ids ...uuid.UUID) {
+	if m.cases == nil {
+		m.cases = make(map[uuid.UUID]struct{})
+	}
+	for i := range ids {
+		m.cases[ids[i]] = struct{}{}
+	}
+}
+
+// ClearCases clears the "cases" edge to the EvaluationCase entity.
+func (m *EvaluationDatasetVersionMutation) ClearCases() {
+	m.clearedcases = true
+}
+
+// CasesCleared reports if the "cases" edge to the EvaluationCase entity was cleared.
+func (m *EvaluationDatasetVersionMutation) CasesCleared() bool {
+	return m.clearedcases
+}
+
+// RemoveCaseIDs removes the "cases" edge to the EvaluationCase entity by IDs.
+func (m *EvaluationDatasetVersionMutation) RemoveCaseIDs(ids ...uuid.UUID) {
+	if m.removedcases == nil {
+		m.removedcases = make(map[uuid.UUID]struct{})
+	}
+	for i := range ids {
+		delete(m.cases, ids[i])
+		m.removedcases[ids[i]] = struct{}{}
+	}
+}
+
+// RemovedCases returns the removed IDs of the "cases" edge to the EvaluationCase entity.
+func (m *EvaluationDatasetVersionMutation) RemovedCasesIDs() (ids []uuid.UUID) {
+	for id := range m.removedcases {
+		ids = append(ids, id)
+	}
+	return
+}
+
+// CasesIDs returns the "cases" edge IDs in the mutation.
+func (m *EvaluationDatasetVersionMutation) CasesIDs() (ids []uuid.UUID) {
+	for id := range m.cases {
+		ids = append(ids, id)
+	}
+	return
+}
+
+// ResetCases resets all changes to the "cases" edge.
+func (m *EvaluationDatasetVersionMutation) ResetCases() {
+	m.cases = nil
+	m.clearedcases = false
+	m.removedcases = nil
+}
+
+// AddPlanIDs adds the "plans" edge to the EvaluationPlan entity by ids.
+func (m *EvaluationDatasetVersionMutation) AddPlanIDs(ids ...uuid.UUID) {
+	if m.plans == nil {
+		m.plans = make(map[uuid.UUID]struct{})
+	}
+	for i := range ids {
+		m.plans[ids[i]] = struct{}{}
+	}
+}
+
+// ClearPlans clears the "plans" edge to the EvaluationPlan entity.
+func (m *EvaluationDatasetVersionMutation) ClearPlans() {
+	m.clearedplans = true
+}
+
+// PlansCleared reports if the "plans" edge to the EvaluationPlan entity was cleared.
+func (m *EvaluationDatasetVersionMutation) PlansCleared() bool {
+	return m.clearedplans
+}
+
+// RemovePlanIDs removes the "plans" edge to the EvaluationPlan entity by IDs.
+func (m *EvaluationDatasetVersionMutation) RemovePlanIDs(ids ...uuid.UUID) {
+	if m.removedplans == nil {
+		m.removedplans = make(map[uuid.UUID]struct{})
+	}
+	for i := range ids {
+		delete(m.plans, ids[i])
+		m.removedplans[ids[i]] = struct{}{}
+	}
+}
+
+// RemovedPlans returns the removed IDs of the "plans" edge to the EvaluationPlan entity.
+func (m *EvaluationDatasetVersionMutation) RemovedPlansIDs() (ids []uuid.UUID) {
+	for id := range m.removedplans {
+		ids = append(ids, id)
+	}
+	return
+}
+
+// PlansIDs returns the "plans" edge IDs in the mutation.
+func (m *EvaluationDatasetVersionMutation) PlansIDs() (ids []uuid.UUID) {
+	for id := range m.plans {
+		ids = append(ids, id)
+	}
+	return
+}
+
+// ResetPlans resets all changes to the "plans" edge.
+func (m *EvaluationDatasetVersionMutation) ResetPlans() {
+	m.plans = nil
+	m.clearedplans = false
+	m.removedplans = nil
+}
+
+// Where appends a list predicates to the EvaluationDatasetVersionMutation builder.
+func (m *EvaluationDatasetVersionMutation) Where(ps ...predicate.EvaluationDatasetVersion) {
+	m.predicates = append(m.predicates, ps...)
+}
+
+// WhereP appends storage-level predicates to the EvaluationDatasetVersionMutation builder. Using this method,
+// users can use type-assertion to append predicates that do not depend on any generated package.
+func (m *EvaluationDatasetVersionMutation) WhereP(ps ...func(*sql.Selector)) {
+	p := make([]predicate.EvaluationDatasetVersion, len(ps))
+	for i := range ps {
+		p[i] = ps[i]
+	}
+	m.Where(p...)
+}
+
+// Op returns the operation name.
+func (m *EvaluationDatasetVersionMutation) Op() Op {
+	return m.op
+}
+
+// SetOp allows setting the mutation operation.
+func (m *EvaluationDatasetVersionMutation) SetOp(op Op) {
+	m.op = op
+}
+
+// Type returns the node type of this mutation (EvaluationDatasetVersion).
+func (m *EvaluationDatasetVersionMutation) Type() string {
+	return m.typ
+}
+
+// Fields returns all fields that were changed during this mutation. Note that in
+// order to get all numeric fields that were incremented/decremented, call
+// AddedFields().
+func (m *EvaluationDatasetVersionMutation) Fields() []string {
+	fields := make([]string, 0, 10)
+	if m.dataset_key != nil {
+		fields = append(fields, evaluationdatasetversion.FieldDatasetKey)
+	}
+	if m.version != nil {
+		fields = append(fields, evaluationdatasetversion.FieldVersion)
+	}
+	if m.manifest_sha256 != nil {
+		fields = append(fields, evaluationdatasetversion.FieldManifestSha256)
+	}
+	if m.source_type != nil {
+		fields = append(fields, evaluationdatasetversion.FieldSourceType)
+	}
+	if m.status != nil {
+		fields = append(fields, evaluationdatasetversion.FieldStatus)
+	}
+	if m.created_by != nil {
+		fields = append(fields, evaluationdatasetversion.FieldCreatedBy)
+	}
+	if m.published_at != nil {
+		fields = append(fields, evaluationdatasetversion.FieldPublishedAt)
+	}
+	if m.retired_at != nil {
+		fields = append(fields, evaluationdatasetversion.FieldRetiredAt)
+	}
+	if m.created_at != nil {
+		fields = append(fields, evaluationdatasetversion.FieldCreatedAt)
+	}
+	if m.updated_at != nil {
+		fields = append(fields, evaluationdatasetversion.FieldUpdatedAt)
+	}
+	return fields
+}
+
+// Field returns the value of a field with the given name. The second boolean
+// return value indicates that this field was not set, or was not defined in the
+// schema.
+func (m *EvaluationDatasetVersionMutation) Field(name string) (ent.Value, bool) {
+	switch name {
+	case evaluationdatasetversion.FieldDatasetKey:
+		return m.DatasetKey()
+	case evaluationdatasetversion.FieldVersion:
+		return m.Version()
+	case evaluationdatasetversion.FieldManifestSha256:
+		return m.ManifestSha256()
+	case evaluationdatasetversion.FieldSourceType:
+		return m.SourceType()
+	case evaluationdatasetversion.FieldStatus:
+		return m.Status()
+	case evaluationdatasetversion.FieldCreatedBy:
+		return m.CreatedBy()
+	case evaluationdatasetversion.FieldPublishedAt:
+		return m.PublishedAt()
+	case evaluationdatasetversion.FieldRetiredAt:
+		return m.RetiredAt()
+	case evaluationdatasetversion.FieldCreatedAt:
+		return m.CreatedAt()
+	case evaluationdatasetversion.FieldUpdatedAt:
+		return m.UpdatedAt()
+	}
+	return nil, false
+}
+
+// OldField returns the old value of the field from the database. An error is
+// returned if the mutation operation is not UpdateOne, or the query to the
+// database failed.
+func (m *EvaluationDatasetVersionMutation) OldField(ctx context.Context, name string) (ent.Value, error) {
+	switch name {
+	case evaluationdatasetversion.FieldDatasetKey:
+		return m.OldDatasetKey(ctx)
+	case evaluationdatasetversion.FieldVersion:
+		return m.OldVersion(ctx)
+	case evaluationdatasetversion.FieldManifestSha256:
+		return m.OldManifestSha256(ctx)
+	case evaluationdatasetversion.FieldSourceType:
+		return m.OldSourceType(ctx)
+	case evaluationdatasetversion.FieldStatus:
+		return m.OldStatus(ctx)
+	case evaluationdatasetversion.FieldCreatedBy:
+		return m.OldCreatedBy(ctx)
+	case evaluationdatasetversion.FieldPublishedAt:
+		return m.OldPublishedAt(ctx)
+	case evaluationdatasetversion.FieldRetiredAt:
+		return m.OldRetiredAt(ctx)
+	case evaluationdatasetversion.FieldCreatedAt:
+		return m.OldCreatedAt(ctx)
+	case evaluationdatasetversion.FieldUpdatedAt:
+		return m.OldUpdatedAt(ctx)
+	}
+	return nil, fmt.Errorf("unknown EvaluationDatasetVersion field %s", name)
+}
+
+// SetField sets the value of a field with the given name. It returns an error if
+// the field is not defined in the schema, or if the type mismatched the field
+// type.
+func (m *EvaluationDatasetVersionMutation) SetField(name string, value ent.Value) error {
+	switch name {
+	case evaluationdatasetversion.FieldDatasetKey:
+		v, ok := value.(string)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetDatasetKey(v)
+		return nil
+	case evaluationdatasetversion.FieldVersion:
+		v, ok := value.(string)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetVersion(v)
+		return nil
+	case evaluationdatasetversion.FieldManifestSha256:
+		v, ok := value.(string)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetManifestSha256(v)
+		return nil
+	case evaluationdatasetversion.FieldSourceType:
+		v, ok := value.(string)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetSourceType(v)
+		return nil
+	case evaluationdatasetversion.FieldStatus:
+		v, ok := value.(string)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetStatus(v)
+		return nil
+	case evaluationdatasetversion.FieldCreatedBy:
+		v, ok := value.(int64)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetCreatedBy(v)
+		return nil
+	case evaluationdatasetversion.FieldPublishedAt:
+		v, ok := value.(time.Time)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetPublishedAt(v)
+		return nil
+	case evaluationdatasetversion.FieldRetiredAt:
+		v, ok := value.(time.Time)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetRetiredAt(v)
+		return nil
+	case evaluationdatasetversion.FieldCreatedAt:
+		v, ok := value.(time.Time)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetCreatedAt(v)
+		return nil
+	case evaluationdatasetversion.FieldUpdatedAt:
+		v, ok := value.(time.Time)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetUpdatedAt(v)
+		return nil
+	}
+	return fmt.Errorf("unknown EvaluationDatasetVersion field %s", name)
+}
+
+// AddedFields returns all numeric fields that were incremented/decremented during
+// this mutation.
+func (m *EvaluationDatasetVersionMutation) AddedFields() []string {
+	var fields []string
+	if m.addcreated_by != nil {
+		fields = append(fields, evaluationdatasetversion.FieldCreatedBy)
+	}
+	return fields
+}
+
+// AddedField returns the numeric value that was incremented/decremented on a field
+// with the given name. The second boolean return value indicates that this field
+// was not set, or was not defined in the schema.
+func (m *EvaluationDatasetVersionMutation) AddedField(name string) (ent.Value, bool) {
+	switch name {
+	case evaluationdatasetversion.FieldCreatedBy:
+		return m.AddedCreatedBy()
+	}
+	return nil, false
+}
+
+// AddField adds the value to the field with the given name. It returns an error if
+// the field is not defined in the schema, or if the type mismatched the field
+// type.
+func (m *EvaluationDatasetVersionMutation) AddField(name string, value ent.Value) error {
+	switch name {
+	case evaluationdatasetversion.FieldCreatedBy:
+		v, ok := value.(int64)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.AddCreatedBy(v)
+		return nil
+	}
+	return fmt.Errorf("unknown EvaluationDatasetVersion numeric field %s", name)
+}
+
+// ClearedFields returns all nullable fields that were cleared during this
+// mutation.
+func (m *EvaluationDatasetVersionMutation) ClearedFields() []string {
+	var fields []string
+	if m.FieldCleared(evaluationdatasetversion.FieldPublishedAt) {
+		fields = append(fields, evaluationdatasetversion.FieldPublishedAt)
+	}
+	if m.FieldCleared(evaluationdatasetversion.FieldRetiredAt) {
+		fields = append(fields, evaluationdatasetversion.FieldRetiredAt)
+	}
+	return fields
+}
+
+// FieldCleared returns a boolean indicating if a field with the given name was
+// cleared in this mutation.
+func (m *EvaluationDatasetVersionMutation) FieldCleared(name string) bool {
+	_, ok := m.clearedFields[name]
+	return ok
+}
+
+// ClearField clears the value of the field with the given name. It returns an
+// error if the field is not defined in the schema.
+func (m *EvaluationDatasetVersionMutation) ClearField(name string) error {
+	switch name {
+	case evaluationdatasetversion.FieldPublishedAt:
+		m.ClearPublishedAt()
+		return nil
+	case evaluationdatasetversion.FieldRetiredAt:
+		m.ClearRetiredAt()
+		return nil
+	}
+	return fmt.Errorf("unknown EvaluationDatasetVersion nullable field %s", name)
+}
+
+// ResetField resets all changes in the mutation for the field with the given name.
+// It returns an error if the field is not defined in the schema.
+func (m *EvaluationDatasetVersionMutation) ResetField(name string) error {
+	switch name {
+	case evaluationdatasetversion.FieldDatasetKey:
+		m.ResetDatasetKey()
+		return nil
+	case evaluationdatasetversion.FieldVersion:
+		m.ResetVersion()
+		return nil
+	case evaluationdatasetversion.FieldManifestSha256:
+		m.ResetManifestSha256()
+		return nil
+	case evaluationdatasetversion.FieldSourceType:
+		m.ResetSourceType()
+		return nil
+	case evaluationdatasetversion.FieldStatus:
+		m.ResetStatus()
+		return nil
+	case evaluationdatasetversion.FieldCreatedBy:
+		m.ResetCreatedBy()
+		return nil
+	case evaluationdatasetversion.FieldPublishedAt:
+		m.ResetPublishedAt()
+		return nil
+	case evaluationdatasetversion.FieldRetiredAt:
+		m.ResetRetiredAt()
+		return nil
+	case evaluationdatasetversion.FieldCreatedAt:
+		m.ResetCreatedAt()
+		return nil
+	case evaluationdatasetversion.FieldUpdatedAt:
+		m.ResetUpdatedAt()
+		return nil
+	}
+	return fmt.Errorf("unknown EvaluationDatasetVersion field %s", name)
+}
+
+// AddedEdges returns all edge names that were set/added in this mutation.
+func (m *EvaluationDatasetVersionMutation) AddedEdges() []string {
+	edges := make([]string, 0, 2)
+	if m.cases != nil {
+		edges = append(edges, evaluationdatasetversion.EdgeCases)
+	}
+	if m.plans != nil {
+		edges = append(edges, evaluationdatasetversion.EdgePlans)
+	}
+	return edges
+}
+
+// AddedIDs returns all IDs (to other nodes) that were added for the given edge
+// name in this mutation.
+func (m *EvaluationDatasetVersionMutation) AddedIDs(name string) []ent.Value {
+	switch name {
+	case evaluationdatasetversion.EdgeCases:
+		ids := make([]ent.Value, 0, len(m.cases))
+		for id := range m.cases {
+			ids = append(ids, id)
+		}
+		return ids
+	case evaluationdatasetversion.EdgePlans:
+		ids := make([]ent.Value, 0, len(m.plans))
+		for id := range m.plans {
+			ids = append(ids, id)
+		}
+		return ids
+	}
+	return nil
+}
+
+// RemovedEdges returns all edge names that were removed in this mutation.
+func (m *EvaluationDatasetVersionMutation) RemovedEdges() []string {
+	edges := make([]string, 0, 2)
+	if m.removedcases != nil {
+		edges = append(edges, evaluationdatasetversion.EdgeCases)
+	}
+	if m.removedplans != nil {
+		edges = append(edges, evaluationdatasetversion.EdgePlans)
+	}
+	return edges
+}
+
+// RemovedIDs returns all IDs (to other nodes) that were removed for the edge with
+// the given name in this mutation.
+func (m *EvaluationDatasetVersionMutation) RemovedIDs(name string) []ent.Value {
+	switch name {
+	case evaluationdatasetversion.EdgeCases:
+		ids := make([]ent.Value, 0, len(m.removedcases))
+		for id := range m.removedcases {
+			ids = append(ids, id)
+		}
+		return ids
+	case evaluationdatasetversion.EdgePlans:
+		ids := make([]ent.Value, 0, len(m.removedplans))
+		for id := range m.removedplans {
+			ids = append(ids, id)
+		}
+		return ids
+	}
+	return nil
+}
+
+// ClearedEdges returns all edge names that were cleared in this mutation.
+func (m *EvaluationDatasetVersionMutation) ClearedEdges() []string {
+	edges := make([]string, 0, 2)
+	if m.clearedcases {
+		edges = append(edges, evaluationdatasetversion.EdgeCases)
+	}
+	if m.clearedplans {
+		edges = append(edges, evaluationdatasetversion.EdgePlans)
+	}
+	return edges
+}
+
+// EdgeCleared returns a boolean which indicates if the edge with the given name
+// was cleared in this mutation.
+func (m *EvaluationDatasetVersionMutation) EdgeCleared(name string) bool {
+	switch name {
+	case evaluationdatasetversion.EdgeCases:
+		return m.clearedcases
+	case evaluationdatasetversion.EdgePlans:
+		return m.clearedplans
+	}
+	return false
+}
+
+// ClearEdge clears the value of the edge with the given name. It returns an error
+// if that edge is not defined in the schema.
+func (m *EvaluationDatasetVersionMutation) ClearEdge(name string) error {
+	switch name {
+	}
+	return fmt.Errorf("unknown EvaluationDatasetVersion unique edge %s", name)
+}
+
+// ResetEdge resets all changes to the edge with the given name in this mutation.
+// It returns an error if the edge is not defined in the schema.
+func (m *EvaluationDatasetVersionMutation) ResetEdge(name string) error {
+	switch name {
+	case evaluationdatasetversion.EdgeCases:
+		m.ResetCases()
+		return nil
+	case evaluationdatasetversion.EdgePlans:
+		m.ResetPlans()
+		return nil
+	}
+	return fmt.Errorf("unknown EvaluationDatasetVersion edge %s", name)
+}
+
+// EvaluationPlanMutation represents an operation that mutates the EvaluationPlan nodes in the graph.
+type EvaluationPlanMutation struct {
+	config
+	op                     Op
+	typ                    string
+	id                     *uuid.UUID
+	name                   *string
+	trigger_type           *string
+	cron_expression        *string
+	model_matrix           *[]map[string]interface{}
+	appendmodel_matrix     []map[string]interface{}
+	max_run_cost           *float64
+	addmax_run_cost        *float64
+	daily_cost_limit       *float64
+	adddaily_cost_limit    *float64
+	max_concurrency        *int
+	addmax_concurrency     *int
+	enabled                *bool
+	created_by             *int64
+	addcreated_by          *int64
+	created_at             *time.Time
+	updated_at             *time.Time
+	clearedFields          map[string]struct{}
+	dataset_version        *uuid.UUID
+	cleareddataset_version bool
+	runs                   map[uuid.UUID]struct{}
+	removedruns            map[uuid.UUID]struct{}
+	clearedruns            bool
+	done                   bool
+	oldValue               func(context.Context) (*EvaluationPlan, error)
+	predicates             []predicate.EvaluationPlan
+}
+
+var _ ent.Mutation = (*EvaluationPlanMutation)(nil)
+
+// evaluationplanOption allows management of the mutation configuration using functional options.
+type evaluationplanOption func(*EvaluationPlanMutation)
+
+// newEvaluationPlanMutation creates new mutation for the EvaluationPlan entity.
+func newEvaluationPlanMutation(c config, op Op, opts ...evaluationplanOption) *EvaluationPlanMutation {
+	m := &EvaluationPlanMutation{
+		config:        c,
+		op:            op,
+		typ:           TypeEvaluationPlan,
+		clearedFields: make(map[string]struct{}),
+	}
+	for _, opt := range opts {
+		opt(m)
+	}
+	return m
+}
+
+// withEvaluationPlanID sets the ID field of the mutation.
+func withEvaluationPlanID(id uuid.UUID) evaluationplanOption {
+	return func(m *EvaluationPlanMutation) {
+		var (
+			err   error
+			once  sync.Once
+			value *EvaluationPlan
+		)
+		m.oldValue = func(ctx context.Context) (*EvaluationPlan, error) {
+			once.Do(func() {
+				if m.done {
+					err = errors.New("querying old values post mutation is not allowed")
+				} else {
+					value, err = m.Client().EvaluationPlan.Get(ctx, id)
+				}
+			})
+			return value, err
+		}
+		m.id = &id
+	}
+}
+
+// withEvaluationPlan sets the old EvaluationPlan of the mutation.
+func withEvaluationPlan(node *EvaluationPlan) evaluationplanOption {
+	return func(m *EvaluationPlanMutation) {
+		m.oldValue = func(context.Context) (*EvaluationPlan, error) {
+			return node, nil
+		}
+		m.id = &node.ID
+	}
+}
+
+// Client returns a new `ent.Client` from the mutation. If the mutation was
+// executed in a transaction (ent.Tx), a transactional client is returned.
+func (m EvaluationPlanMutation) Client() *Client {
+	client := &Client{config: m.config}
+	client.init()
+	return client
+}
+
+// Tx returns an `ent.Tx` for mutations that were executed in transactions;
+// it returns an error otherwise.
+func (m EvaluationPlanMutation) Tx() (*Tx, error) {
+	if _, ok := m.driver.(*txDriver); !ok {
+		return nil, errors.New("ent: mutation is not running in a transaction")
+	}
+	tx := &Tx{config: m.config}
+	tx.init()
+	return tx, nil
+}
+
+// SetID sets the value of the id field. Note that this
+// operation is only accepted on creation of EvaluationPlan entities.
+func (m *EvaluationPlanMutation) SetID(id uuid.UUID) {
+	m.id = &id
+}
+
+// ID returns the ID value in the mutation. Note that the ID is only available
+// if it was provided to the builder or after it was returned from the database.
+func (m *EvaluationPlanMutation) ID() (id uuid.UUID, exists bool) {
+	if m.id == nil {
+		return
+	}
+	return *m.id, true
+}
+
+// IDs queries the database and returns the entity ids that match the mutation's predicate.
+// That means, if the mutation is applied within a transaction with an isolation level such
+// as sql.LevelSerializable, the returned ids match the ids of the rows that will be updated
+// or updated by the mutation.
+func (m *EvaluationPlanMutation) IDs(ctx context.Context) ([]uuid.UUID, error) {
+	switch {
+	case m.op.Is(OpUpdateOne | OpDeleteOne):
+		id, exists := m.ID()
+		if exists {
+			return []uuid.UUID{id}, nil
+		}
+		fallthrough
+	case m.op.Is(OpUpdate | OpDelete):
+		return m.Client().EvaluationPlan.Query().Where(m.predicates...).IDs(ctx)
+	default:
+		return nil, fmt.Errorf("IDs is not allowed on %s operations", m.op)
+	}
+}
+
+// SetName sets the "name" field.
+func (m *EvaluationPlanMutation) SetName(s string) {
+	m.name = &s
+}
+
+// Name returns the value of the "name" field in the mutation.
+func (m *EvaluationPlanMutation) Name() (r string, exists bool) {
+	v := m.name
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldName returns the old "name" field's value of the EvaluationPlan entity.
+// If the EvaluationPlan object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *EvaluationPlanMutation) OldName(ctx context.Context) (v string, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldName is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldName requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldName: %w", err)
+	}
+	return oldValue.Name, nil
+}
+
+// ResetName resets all changes to the "name" field.
+func (m *EvaluationPlanMutation) ResetName() {
+	m.name = nil
+}
+
+// SetDatasetVersionID sets the "dataset_version_id" field.
+func (m *EvaluationPlanMutation) SetDatasetVersionID(u uuid.UUID) {
+	m.dataset_version = &u
+}
+
+// DatasetVersionID returns the value of the "dataset_version_id" field in the mutation.
+func (m *EvaluationPlanMutation) DatasetVersionID() (r uuid.UUID, exists bool) {
+	v := m.dataset_version
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldDatasetVersionID returns the old "dataset_version_id" field's value of the EvaluationPlan entity.
+// If the EvaluationPlan object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *EvaluationPlanMutation) OldDatasetVersionID(ctx context.Context) (v uuid.UUID, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldDatasetVersionID is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldDatasetVersionID requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldDatasetVersionID: %w", err)
+	}
+	return oldValue.DatasetVersionID, nil
+}
+
+// ResetDatasetVersionID resets all changes to the "dataset_version_id" field.
+func (m *EvaluationPlanMutation) ResetDatasetVersionID() {
+	m.dataset_version = nil
+}
+
+// SetTriggerType sets the "trigger_type" field.
+func (m *EvaluationPlanMutation) SetTriggerType(s string) {
+	m.trigger_type = &s
+}
+
+// TriggerType returns the value of the "trigger_type" field in the mutation.
+func (m *EvaluationPlanMutation) TriggerType() (r string, exists bool) {
+	v := m.trigger_type
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldTriggerType returns the old "trigger_type" field's value of the EvaluationPlan entity.
+// If the EvaluationPlan object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *EvaluationPlanMutation) OldTriggerType(ctx context.Context) (v string, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldTriggerType is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldTriggerType requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldTriggerType: %w", err)
+	}
+	return oldValue.TriggerType, nil
+}
+
+// ResetTriggerType resets all changes to the "trigger_type" field.
+func (m *EvaluationPlanMutation) ResetTriggerType() {
+	m.trigger_type = nil
+}
+
+// SetCronExpression sets the "cron_expression" field.
+func (m *EvaluationPlanMutation) SetCronExpression(s string) {
+	m.cron_expression = &s
+}
+
+// CronExpression returns the value of the "cron_expression" field in the mutation.
+func (m *EvaluationPlanMutation) CronExpression() (r string, exists bool) {
+	v := m.cron_expression
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldCronExpression returns the old "cron_expression" field's value of the EvaluationPlan entity.
+// If the EvaluationPlan object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *EvaluationPlanMutation) OldCronExpression(ctx context.Context) (v *string, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldCronExpression is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldCronExpression requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldCronExpression: %w", err)
+	}
+	return oldValue.CronExpression, nil
+}
+
+// ClearCronExpression clears the value of the "cron_expression" field.
+func (m *EvaluationPlanMutation) ClearCronExpression() {
+	m.cron_expression = nil
+	m.clearedFields[evaluationplan.FieldCronExpression] = struct{}{}
+}
+
+// CronExpressionCleared returns if the "cron_expression" field was cleared in this mutation.
+func (m *EvaluationPlanMutation) CronExpressionCleared() bool {
+	_, ok := m.clearedFields[evaluationplan.FieldCronExpression]
+	return ok
+}
+
+// ResetCronExpression resets all changes to the "cron_expression" field.
+func (m *EvaluationPlanMutation) ResetCronExpression() {
+	m.cron_expression = nil
+	delete(m.clearedFields, evaluationplan.FieldCronExpression)
+}
+
+// SetModelMatrix sets the "model_matrix" field.
+func (m *EvaluationPlanMutation) SetModelMatrix(value []map[string]interface{}) {
+	m.model_matrix = &value
+	m.appendmodel_matrix = nil
+}
+
+// ModelMatrix returns the value of the "model_matrix" field in the mutation.
+func (m *EvaluationPlanMutation) ModelMatrix() (r []map[string]interface{}, exists bool) {
+	v := m.model_matrix
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldModelMatrix returns the old "model_matrix" field's value of the EvaluationPlan entity.
+// If the EvaluationPlan object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *EvaluationPlanMutation) OldModelMatrix(ctx context.Context) (v []map[string]interface{}, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldModelMatrix is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldModelMatrix requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldModelMatrix: %w", err)
+	}
+	return oldValue.ModelMatrix, nil
+}
+
+// AppendModelMatrix adds value to the "model_matrix" field.
+func (m *EvaluationPlanMutation) AppendModelMatrix(value []map[string]interface{}) {
+	m.appendmodel_matrix = append(m.appendmodel_matrix, value...)
+}
+
+// AppendedModelMatrix returns the list of values that were appended to the "model_matrix" field in this mutation.
+func (m *EvaluationPlanMutation) AppendedModelMatrix() ([]map[string]interface{}, bool) {
+	if len(m.appendmodel_matrix) == 0 {
+		return nil, false
+	}
+	return m.appendmodel_matrix, true
+}
+
+// ResetModelMatrix resets all changes to the "model_matrix" field.
+func (m *EvaluationPlanMutation) ResetModelMatrix() {
+	m.model_matrix = nil
+	m.appendmodel_matrix = nil
+}
+
+// SetMaxRunCost sets the "max_run_cost" field.
+func (m *EvaluationPlanMutation) SetMaxRunCost(f float64) {
+	m.max_run_cost = &f
+	m.addmax_run_cost = nil
+}
+
+// MaxRunCost returns the value of the "max_run_cost" field in the mutation.
+func (m *EvaluationPlanMutation) MaxRunCost() (r float64, exists bool) {
+	v := m.max_run_cost
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldMaxRunCost returns the old "max_run_cost" field's value of the EvaluationPlan entity.
+// If the EvaluationPlan object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *EvaluationPlanMutation) OldMaxRunCost(ctx context.Context) (v float64, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldMaxRunCost is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldMaxRunCost requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldMaxRunCost: %w", err)
+	}
+	return oldValue.MaxRunCost, nil
+}
+
+// AddMaxRunCost adds f to the "max_run_cost" field.
+func (m *EvaluationPlanMutation) AddMaxRunCost(f float64) {
+	if m.addmax_run_cost != nil {
+		*m.addmax_run_cost += f
+	} else {
+		m.addmax_run_cost = &f
+	}
+}
+
+// AddedMaxRunCost returns the value that was added to the "max_run_cost" field in this mutation.
+func (m *EvaluationPlanMutation) AddedMaxRunCost() (r float64, exists bool) {
+	v := m.addmax_run_cost
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// ResetMaxRunCost resets all changes to the "max_run_cost" field.
+func (m *EvaluationPlanMutation) ResetMaxRunCost() {
+	m.max_run_cost = nil
+	m.addmax_run_cost = nil
+}
+
+// SetDailyCostLimit sets the "daily_cost_limit" field.
+func (m *EvaluationPlanMutation) SetDailyCostLimit(f float64) {
+	m.daily_cost_limit = &f
+	m.adddaily_cost_limit = nil
+}
+
+// DailyCostLimit returns the value of the "daily_cost_limit" field in the mutation.
+func (m *EvaluationPlanMutation) DailyCostLimit() (r float64, exists bool) {
+	v := m.daily_cost_limit
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldDailyCostLimit returns the old "daily_cost_limit" field's value of the EvaluationPlan entity.
+// If the EvaluationPlan object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *EvaluationPlanMutation) OldDailyCostLimit(ctx context.Context) (v float64, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldDailyCostLimit is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldDailyCostLimit requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldDailyCostLimit: %w", err)
+	}
+	return oldValue.DailyCostLimit, nil
+}
+
+// AddDailyCostLimit adds f to the "daily_cost_limit" field.
+func (m *EvaluationPlanMutation) AddDailyCostLimit(f float64) {
+	if m.adddaily_cost_limit != nil {
+		*m.adddaily_cost_limit += f
+	} else {
+		m.adddaily_cost_limit = &f
+	}
+}
+
+// AddedDailyCostLimit returns the value that was added to the "daily_cost_limit" field in this mutation.
+func (m *EvaluationPlanMutation) AddedDailyCostLimit() (r float64, exists bool) {
+	v := m.adddaily_cost_limit
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// ResetDailyCostLimit resets all changes to the "daily_cost_limit" field.
+func (m *EvaluationPlanMutation) ResetDailyCostLimit() {
+	m.daily_cost_limit = nil
+	m.adddaily_cost_limit = nil
+}
+
+// SetMaxConcurrency sets the "max_concurrency" field.
+func (m *EvaluationPlanMutation) SetMaxConcurrency(i int) {
+	m.max_concurrency = &i
+	m.addmax_concurrency = nil
+}
+
+// MaxConcurrency returns the value of the "max_concurrency" field in the mutation.
+func (m *EvaluationPlanMutation) MaxConcurrency() (r int, exists bool) {
+	v := m.max_concurrency
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldMaxConcurrency returns the old "max_concurrency" field's value of the EvaluationPlan entity.
+// If the EvaluationPlan object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *EvaluationPlanMutation) OldMaxConcurrency(ctx context.Context) (v int, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldMaxConcurrency is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldMaxConcurrency requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldMaxConcurrency: %w", err)
+	}
+	return oldValue.MaxConcurrency, nil
+}
+
+// AddMaxConcurrency adds i to the "max_concurrency" field.
+func (m *EvaluationPlanMutation) AddMaxConcurrency(i int) {
+	if m.addmax_concurrency != nil {
+		*m.addmax_concurrency += i
+	} else {
+		m.addmax_concurrency = &i
+	}
+}
+
+// AddedMaxConcurrency returns the value that was added to the "max_concurrency" field in this mutation.
+func (m *EvaluationPlanMutation) AddedMaxConcurrency() (r int, exists bool) {
+	v := m.addmax_concurrency
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// ResetMaxConcurrency resets all changes to the "max_concurrency" field.
+func (m *EvaluationPlanMutation) ResetMaxConcurrency() {
+	m.max_concurrency = nil
+	m.addmax_concurrency = nil
+}
+
+// SetEnabled sets the "enabled" field.
+func (m *EvaluationPlanMutation) SetEnabled(b bool) {
+	m.enabled = &b
+}
+
+// Enabled returns the value of the "enabled" field in the mutation.
+func (m *EvaluationPlanMutation) Enabled() (r bool, exists bool) {
+	v := m.enabled
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldEnabled returns the old "enabled" field's value of the EvaluationPlan entity.
+// If the EvaluationPlan object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *EvaluationPlanMutation) OldEnabled(ctx context.Context) (v bool, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldEnabled is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldEnabled requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldEnabled: %w", err)
+	}
+	return oldValue.Enabled, nil
+}
+
+// ResetEnabled resets all changes to the "enabled" field.
+func (m *EvaluationPlanMutation) ResetEnabled() {
+	m.enabled = nil
+}
+
+// SetCreatedBy sets the "created_by" field.
+func (m *EvaluationPlanMutation) SetCreatedBy(i int64) {
+	m.created_by = &i
+	m.addcreated_by = nil
+}
+
+// CreatedBy returns the value of the "created_by" field in the mutation.
+func (m *EvaluationPlanMutation) CreatedBy() (r int64, exists bool) {
+	v := m.created_by
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldCreatedBy returns the old "created_by" field's value of the EvaluationPlan entity.
+// If the EvaluationPlan object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *EvaluationPlanMutation) OldCreatedBy(ctx context.Context) (v int64, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldCreatedBy is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldCreatedBy requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldCreatedBy: %w", err)
+	}
+	return oldValue.CreatedBy, nil
+}
+
+// AddCreatedBy adds i to the "created_by" field.
+func (m *EvaluationPlanMutation) AddCreatedBy(i int64) {
+	if m.addcreated_by != nil {
+		*m.addcreated_by += i
+	} else {
+		m.addcreated_by = &i
+	}
+}
+
+// AddedCreatedBy returns the value that was added to the "created_by" field in this mutation.
+func (m *EvaluationPlanMutation) AddedCreatedBy() (r int64, exists bool) {
+	v := m.addcreated_by
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// ResetCreatedBy resets all changes to the "created_by" field.
+func (m *EvaluationPlanMutation) ResetCreatedBy() {
+	m.created_by = nil
+	m.addcreated_by = nil
+}
+
+// SetCreatedAt sets the "created_at" field.
+func (m *EvaluationPlanMutation) SetCreatedAt(t time.Time) {
+	m.created_at = &t
+}
+
+// CreatedAt returns the value of the "created_at" field in the mutation.
+func (m *EvaluationPlanMutation) CreatedAt() (r time.Time, exists bool) {
+	v := m.created_at
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldCreatedAt returns the old "created_at" field's value of the EvaluationPlan entity.
+// If the EvaluationPlan object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *EvaluationPlanMutation) OldCreatedAt(ctx context.Context) (v time.Time, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldCreatedAt is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldCreatedAt requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldCreatedAt: %w", err)
+	}
+	return oldValue.CreatedAt, nil
+}
+
+// ResetCreatedAt resets all changes to the "created_at" field.
+func (m *EvaluationPlanMutation) ResetCreatedAt() {
+	m.created_at = nil
+}
+
+// SetUpdatedAt sets the "updated_at" field.
+func (m *EvaluationPlanMutation) SetUpdatedAt(t time.Time) {
+	m.updated_at = &t
+}
+
+// UpdatedAt returns the value of the "updated_at" field in the mutation.
+func (m *EvaluationPlanMutation) UpdatedAt() (r time.Time, exists bool) {
+	v := m.updated_at
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldUpdatedAt returns the old "updated_at" field's value of the EvaluationPlan entity.
+// If the EvaluationPlan object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *EvaluationPlanMutation) OldUpdatedAt(ctx context.Context) (v time.Time, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldUpdatedAt is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldUpdatedAt requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldUpdatedAt: %w", err)
+	}
+	return oldValue.UpdatedAt, nil
+}
+
+// ResetUpdatedAt resets all changes to the "updated_at" field.
+func (m *EvaluationPlanMutation) ResetUpdatedAt() {
+	m.updated_at = nil
+}
+
+// ClearDatasetVersion clears the "dataset_version" edge to the EvaluationDatasetVersion entity.
+func (m *EvaluationPlanMutation) ClearDatasetVersion() {
+	m.cleareddataset_version = true
+	m.clearedFields[evaluationplan.FieldDatasetVersionID] = struct{}{}
+}
+
+// DatasetVersionCleared reports if the "dataset_version" edge to the EvaluationDatasetVersion entity was cleared.
+func (m *EvaluationPlanMutation) DatasetVersionCleared() bool {
+	return m.cleareddataset_version
+}
+
+// DatasetVersionIDs returns the "dataset_version" edge IDs in the mutation.
+// Note that IDs always returns len(IDs) <= 1 for unique edges, and you should use
+// DatasetVersionID instead. It exists only for internal usage by the builders.
+func (m *EvaluationPlanMutation) DatasetVersionIDs() (ids []uuid.UUID) {
+	if id := m.dataset_version; id != nil {
+		ids = append(ids, *id)
+	}
+	return
+}
+
+// ResetDatasetVersion resets all changes to the "dataset_version" edge.
+func (m *EvaluationPlanMutation) ResetDatasetVersion() {
+	m.dataset_version = nil
+	m.cleareddataset_version = false
+}
+
+// AddRunIDs adds the "runs" edge to the EvaluationRun entity by ids.
+func (m *EvaluationPlanMutation) AddRunIDs(ids ...uuid.UUID) {
+	if m.runs == nil {
+		m.runs = make(map[uuid.UUID]struct{})
+	}
+	for i := range ids {
+		m.runs[ids[i]] = struct{}{}
+	}
+}
+
+// ClearRuns clears the "runs" edge to the EvaluationRun entity.
+func (m *EvaluationPlanMutation) ClearRuns() {
+	m.clearedruns = true
+}
+
+// RunsCleared reports if the "runs" edge to the EvaluationRun entity was cleared.
+func (m *EvaluationPlanMutation) RunsCleared() bool {
+	return m.clearedruns
+}
+
+// RemoveRunIDs removes the "runs" edge to the EvaluationRun entity by IDs.
+func (m *EvaluationPlanMutation) RemoveRunIDs(ids ...uuid.UUID) {
+	if m.removedruns == nil {
+		m.removedruns = make(map[uuid.UUID]struct{})
+	}
+	for i := range ids {
+		delete(m.runs, ids[i])
+		m.removedruns[ids[i]] = struct{}{}
+	}
+}
+
+// RemovedRuns returns the removed IDs of the "runs" edge to the EvaluationRun entity.
+func (m *EvaluationPlanMutation) RemovedRunsIDs() (ids []uuid.UUID) {
+	for id := range m.removedruns {
+		ids = append(ids, id)
+	}
+	return
+}
+
+// RunsIDs returns the "runs" edge IDs in the mutation.
+func (m *EvaluationPlanMutation) RunsIDs() (ids []uuid.UUID) {
+	for id := range m.runs {
+		ids = append(ids, id)
+	}
+	return
+}
+
+// ResetRuns resets all changes to the "runs" edge.
+func (m *EvaluationPlanMutation) ResetRuns() {
+	m.runs = nil
+	m.clearedruns = false
+	m.removedruns = nil
+}
+
+// Where appends a list predicates to the EvaluationPlanMutation builder.
+func (m *EvaluationPlanMutation) Where(ps ...predicate.EvaluationPlan) {
+	m.predicates = append(m.predicates, ps...)
+}
+
+// WhereP appends storage-level predicates to the EvaluationPlanMutation builder. Using this method,
+// users can use type-assertion to append predicates that do not depend on any generated package.
+func (m *EvaluationPlanMutation) WhereP(ps ...func(*sql.Selector)) {
+	p := make([]predicate.EvaluationPlan, len(ps))
+	for i := range ps {
+		p[i] = ps[i]
+	}
+	m.Where(p...)
+}
+
+// Op returns the operation name.
+func (m *EvaluationPlanMutation) Op() Op {
+	return m.op
+}
+
+// SetOp allows setting the mutation operation.
+func (m *EvaluationPlanMutation) SetOp(op Op) {
+	m.op = op
+}
+
+// Type returns the node type of this mutation (EvaluationPlan).
+func (m *EvaluationPlanMutation) Type() string {
+	return m.typ
+}
+
+// Fields returns all fields that were changed during this mutation. Note that in
+// order to get all numeric fields that were incremented/decremented, call
+// AddedFields().
+func (m *EvaluationPlanMutation) Fields() []string {
+	fields := make([]string, 0, 12)
+	if m.name != nil {
+		fields = append(fields, evaluationplan.FieldName)
+	}
+	if m.dataset_version != nil {
+		fields = append(fields, evaluationplan.FieldDatasetVersionID)
+	}
+	if m.trigger_type != nil {
+		fields = append(fields, evaluationplan.FieldTriggerType)
+	}
+	if m.cron_expression != nil {
+		fields = append(fields, evaluationplan.FieldCronExpression)
+	}
+	if m.model_matrix != nil {
+		fields = append(fields, evaluationplan.FieldModelMatrix)
+	}
+	if m.max_run_cost != nil {
+		fields = append(fields, evaluationplan.FieldMaxRunCost)
+	}
+	if m.daily_cost_limit != nil {
+		fields = append(fields, evaluationplan.FieldDailyCostLimit)
+	}
+	if m.max_concurrency != nil {
+		fields = append(fields, evaluationplan.FieldMaxConcurrency)
+	}
+	if m.enabled != nil {
+		fields = append(fields, evaluationplan.FieldEnabled)
+	}
+	if m.created_by != nil {
+		fields = append(fields, evaluationplan.FieldCreatedBy)
+	}
+	if m.created_at != nil {
+		fields = append(fields, evaluationplan.FieldCreatedAt)
+	}
+	if m.updated_at != nil {
+		fields = append(fields, evaluationplan.FieldUpdatedAt)
+	}
+	return fields
+}
+
+// Field returns the value of a field with the given name. The second boolean
+// return value indicates that this field was not set, or was not defined in the
+// schema.
+func (m *EvaluationPlanMutation) Field(name string) (ent.Value, bool) {
+	switch name {
+	case evaluationplan.FieldName:
+		return m.Name()
+	case evaluationplan.FieldDatasetVersionID:
+		return m.DatasetVersionID()
+	case evaluationplan.FieldTriggerType:
+		return m.TriggerType()
+	case evaluationplan.FieldCronExpression:
+		return m.CronExpression()
+	case evaluationplan.FieldModelMatrix:
+		return m.ModelMatrix()
+	case evaluationplan.FieldMaxRunCost:
+		return m.MaxRunCost()
+	case evaluationplan.FieldDailyCostLimit:
+		return m.DailyCostLimit()
+	case evaluationplan.FieldMaxConcurrency:
+		return m.MaxConcurrency()
+	case evaluationplan.FieldEnabled:
+		return m.Enabled()
+	case evaluationplan.FieldCreatedBy:
+		return m.CreatedBy()
+	case evaluationplan.FieldCreatedAt:
+		return m.CreatedAt()
+	case evaluationplan.FieldUpdatedAt:
+		return m.UpdatedAt()
+	}
+	return nil, false
+}
+
+// OldField returns the old value of the field from the database. An error is
+// returned if the mutation operation is not UpdateOne, or the query to the
+// database failed.
+func (m *EvaluationPlanMutation) OldField(ctx context.Context, name string) (ent.Value, error) {
+	switch name {
+	case evaluationplan.FieldName:
+		return m.OldName(ctx)
+	case evaluationplan.FieldDatasetVersionID:
+		return m.OldDatasetVersionID(ctx)
+	case evaluationplan.FieldTriggerType:
+		return m.OldTriggerType(ctx)
+	case evaluationplan.FieldCronExpression:
+		return m.OldCronExpression(ctx)
+	case evaluationplan.FieldModelMatrix:
+		return m.OldModelMatrix(ctx)
+	case evaluationplan.FieldMaxRunCost:
+		return m.OldMaxRunCost(ctx)
+	case evaluationplan.FieldDailyCostLimit:
+		return m.OldDailyCostLimit(ctx)
+	case evaluationplan.FieldMaxConcurrency:
+		return m.OldMaxConcurrency(ctx)
+	case evaluationplan.FieldEnabled:
+		return m.OldEnabled(ctx)
+	case evaluationplan.FieldCreatedBy:
+		return m.OldCreatedBy(ctx)
+	case evaluationplan.FieldCreatedAt:
+		return m.OldCreatedAt(ctx)
+	case evaluationplan.FieldUpdatedAt:
+		return m.OldUpdatedAt(ctx)
+	}
+	return nil, fmt.Errorf("unknown EvaluationPlan field %s", name)
+}
+
+// SetField sets the value of a field with the given name. It returns an error if
+// the field is not defined in the schema, or if the type mismatched the field
+// type.
+func (m *EvaluationPlanMutation) SetField(name string, value ent.Value) error {
+	switch name {
+	case evaluationplan.FieldName:
+		v, ok := value.(string)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetName(v)
+		return nil
+	case evaluationplan.FieldDatasetVersionID:
+		v, ok := value.(uuid.UUID)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetDatasetVersionID(v)
+		return nil
+	case evaluationplan.FieldTriggerType:
+		v, ok := value.(string)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetTriggerType(v)
+		return nil
+	case evaluationplan.FieldCronExpression:
+		v, ok := value.(string)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetCronExpression(v)
+		return nil
+	case evaluationplan.FieldModelMatrix:
+		v, ok := value.([]map[string]interface{})
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetModelMatrix(v)
+		return nil
+	case evaluationplan.FieldMaxRunCost:
+		v, ok := value.(float64)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetMaxRunCost(v)
+		return nil
+	case evaluationplan.FieldDailyCostLimit:
+		v, ok := value.(float64)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetDailyCostLimit(v)
+		return nil
+	case evaluationplan.FieldMaxConcurrency:
+		v, ok := value.(int)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetMaxConcurrency(v)
+		return nil
+	case evaluationplan.FieldEnabled:
+		v, ok := value.(bool)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetEnabled(v)
+		return nil
+	case evaluationplan.FieldCreatedBy:
+		v, ok := value.(int64)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetCreatedBy(v)
+		return nil
+	case evaluationplan.FieldCreatedAt:
+		v, ok := value.(time.Time)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetCreatedAt(v)
+		return nil
+	case evaluationplan.FieldUpdatedAt:
+		v, ok := value.(time.Time)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetUpdatedAt(v)
+		return nil
+	}
+	return fmt.Errorf("unknown EvaluationPlan field %s", name)
+}
+
+// AddedFields returns all numeric fields that were incremented/decremented during
+// this mutation.
+func (m *EvaluationPlanMutation) AddedFields() []string {
+	var fields []string
+	if m.addmax_run_cost != nil {
+		fields = append(fields, evaluationplan.FieldMaxRunCost)
+	}
+	if m.adddaily_cost_limit != nil {
+		fields = append(fields, evaluationplan.FieldDailyCostLimit)
+	}
+	if m.addmax_concurrency != nil {
+		fields = append(fields, evaluationplan.FieldMaxConcurrency)
+	}
+	if m.addcreated_by != nil {
+		fields = append(fields, evaluationplan.FieldCreatedBy)
+	}
+	return fields
+}
+
+// AddedField returns the numeric value that was incremented/decremented on a field
+// with the given name. The second boolean return value indicates that this field
+// was not set, or was not defined in the schema.
+func (m *EvaluationPlanMutation) AddedField(name string) (ent.Value, bool) {
+	switch name {
+	case evaluationplan.FieldMaxRunCost:
+		return m.AddedMaxRunCost()
+	case evaluationplan.FieldDailyCostLimit:
+		return m.AddedDailyCostLimit()
+	case evaluationplan.FieldMaxConcurrency:
+		return m.AddedMaxConcurrency()
+	case evaluationplan.FieldCreatedBy:
+		return m.AddedCreatedBy()
+	}
+	return nil, false
+}
+
+// AddField adds the value to the field with the given name. It returns an error if
+// the field is not defined in the schema, or if the type mismatched the field
+// type.
+func (m *EvaluationPlanMutation) AddField(name string, value ent.Value) error {
+	switch name {
+	case evaluationplan.FieldMaxRunCost:
+		v, ok := value.(float64)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.AddMaxRunCost(v)
+		return nil
+	case evaluationplan.FieldDailyCostLimit:
+		v, ok := value.(float64)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.AddDailyCostLimit(v)
+		return nil
+	case evaluationplan.FieldMaxConcurrency:
+		v, ok := value.(int)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.AddMaxConcurrency(v)
+		return nil
+	case evaluationplan.FieldCreatedBy:
+		v, ok := value.(int64)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.AddCreatedBy(v)
+		return nil
+	}
+	return fmt.Errorf("unknown EvaluationPlan numeric field %s", name)
+}
+
+// ClearedFields returns all nullable fields that were cleared during this
+// mutation.
+func (m *EvaluationPlanMutation) ClearedFields() []string {
+	var fields []string
+	if m.FieldCleared(evaluationplan.FieldCronExpression) {
+		fields = append(fields, evaluationplan.FieldCronExpression)
+	}
+	return fields
+}
+
+// FieldCleared returns a boolean indicating if a field with the given name was
+// cleared in this mutation.
+func (m *EvaluationPlanMutation) FieldCleared(name string) bool {
+	_, ok := m.clearedFields[name]
+	return ok
+}
+
+// ClearField clears the value of the field with the given name. It returns an
+// error if the field is not defined in the schema.
+func (m *EvaluationPlanMutation) ClearField(name string) error {
+	switch name {
+	case evaluationplan.FieldCronExpression:
+		m.ClearCronExpression()
+		return nil
+	}
+	return fmt.Errorf("unknown EvaluationPlan nullable field %s", name)
+}
+
+// ResetField resets all changes in the mutation for the field with the given name.
+// It returns an error if the field is not defined in the schema.
+func (m *EvaluationPlanMutation) ResetField(name string) error {
+	switch name {
+	case evaluationplan.FieldName:
+		m.ResetName()
+		return nil
+	case evaluationplan.FieldDatasetVersionID:
+		m.ResetDatasetVersionID()
+		return nil
+	case evaluationplan.FieldTriggerType:
+		m.ResetTriggerType()
+		return nil
+	case evaluationplan.FieldCronExpression:
+		m.ResetCronExpression()
+		return nil
+	case evaluationplan.FieldModelMatrix:
+		m.ResetModelMatrix()
+		return nil
+	case evaluationplan.FieldMaxRunCost:
+		m.ResetMaxRunCost()
+		return nil
+	case evaluationplan.FieldDailyCostLimit:
+		m.ResetDailyCostLimit()
+		return nil
+	case evaluationplan.FieldMaxConcurrency:
+		m.ResetMaxConcurrency()
+		return nil
+	case evaluationplan.FieldEnabled:
+		m.ResetEnabled()
+		return nil
+	case evaluationplan.FieldCreatedBy:
+		m.ResetCreatedBy()
+		return nil
+	case evaluationplan.FieldCreatedAt:
+		m.ResetCreatedAt()
+		return nil
+	case evaluationplan.FieldUpdatedAt:
+		m.ResetUpdatedAt()
+		return nil
+	}
+	return fmt.Errorf("unknown EvaluationPlan field %s", name)
+}
+
+// AddedEdges returns all edge names that were set/added in this mutation.
+func (m *EvaluationPlanMutation) AddedEdges() []string {
+	edges := make([]string, 0, 2)
+	if m.dataset_version != nil {
+		edges = append(edges, evaluationplan.EdgeDatasetVersion)
+	}
+	if m.runs != nil {
+		edges = append(edges, evaluationplan.EdgeRuns)
+	}
+	return edges
+}
+
+// AddedIDs returns all IDs (to other nodes) that were added for the given edge
+// name in this mutation.
+func (m *EvaluationPlanMutation) AddedIDs(name string) []ent.Value {
+	switch name {
+	case evaluationplan.EdgeDatasetVersion:
+		if id := m.dataset_version; id != nil {
+			return []ent.Value{*id}
+		}
+	case evaluationplan.EdgeRuns:
+		ids := make([]ent.Value, 0, len(m.runs))
+		for id := range m.runs {
+			ids = append(ids, id)
+		}
+		return ids
+	}
+	return nil
+}
+
+// RemovedEdges returns all edge names that were removed in this mutation.
+func (m *EvaluationPlanMutation) RemovedEdges() []string {
+	edges := make([]string, 0, 2)
+	if m.removedruns != nil {
+		edges = append(edges, evaluationplan.EdgeRuns)
+	}
+	return edges
+}
+
+// RemovedIDs returns all IDs (to other nodes) that were removed for the edge with
+// the given name in this mutation.
+func (m *EvaluationPlanMutation) RemovedIDs(name string) []ent.Value {
+	switch name {
+	case evaluationplan.EdgeRuns:
+		ids := make([]ent.Value, 0, len(m.removedruns))
+		for id := range m.removedruns {
+			ids = append(ids, id)
+		}
+		return ids
+	}
+	return nil
+}
+
+// ClearedEdges returns all edge names that were cleared in this mutation.
+func (m *EvaluationPlanMutation) ClearedEdges() []string {
+	edges := make([]string, 0, 2)
+	if m.cleareddataset_version {
+		edges = append(edges, evaluationplan.EdgeDatasetVersion)
+	}
+	if m.clearedruns {
+		edges = append(edges, evaluationplan.EdgeRuns)
+	}
+	return edges
+}
+
+// EdgeCleared returns a boolean which indicates if the edge with the given name
+// was cleared in this mutation.
+func (m *EvaluationPlanMutation) EdgeCleared(name string) bool {
+	switch name {
+	case evaluationplan.EdgeDatasetVersion:
+		return m.cleareddataset_version
+	case evaluationplan.EdgeRuns:
+		return m.clearedruns
+	}
+	return false
+}
+
+// ClearEdge clears the value of the edge with the given name. It returns an error
+// if that edge is not defined in the schema.
+func (m *EvaluationPlanMutation) ClearEdge(name string) error {
+	switch name {
+	case evaluationplan.EdgeDatasetVersion:
+		m.ClearDatasetVersion()
+		return nil
+	}
+	return fmt.Errorf("unknown EvaluationPlan unique edge %s", name)
+}
+
+// ResetEdge resets all changes to the edge with the given name in this mutation.
+// It returns an error if the edge is not defined in the schema.
+func (m *EvaluationPlanMutation) ResetEdge(name string) error {
+	switch name {
+	case evaluationplan.EdgeDatasetVersion:
+		m.ResetDatasetVersion()
+		return nil
+	case evaluationplan.EdgeRuns:
+		m.ResetRuns()
+		return nil
+	}
+	return fmt.Errorf("unknown EvaluationPlan edge %s", name)
+}
+
 // EvaluationRouteEvidenceMutation represents an operation that mutates the EvaluationRouteEvidence nodes in the graph.
 type EvaluationRouteEvidenceMutation struct {
 	config
@@ -24132,6 +27808,1290 @@ func (m *EvaluationRouteEvidenceMutation) ResetEdge(name string) error {
 		return nil
 	}
 	return fmt.Errorf("unknown EvaluationRouteEvidence edge %s", name)
+}
+
+// EvaluationRunMutation represents an operation that mutates the EvaluationRun nodes in the graph.
+type EvaluationRunMutation struct {
+	config
+	op               Op
+	typ              string
+	id               *uuid.UUID
+	trigger_source   *string
+	baseline_ref     *map[string]interface{}
+	candidate_ref    *map[string]interface{}
+	status           *string
+	budget_limit     *float64
+	addbudget_limit  *float64
+	reserved_cost    *float64
+	addreserved_cost *float64
+	actual_cost      *float64
+	addactual_cost   *float64
+	calibration_mode *bool
+	created_by       *int64
+	addcreated_by    *int64
+	started_at       *time.Time
+	finished_at      *time.Time
+	created_at       *time.Time
+	updated_at       *time.Time
+	clearedFields    map[string]struct{}
+	plan             *uuid.UUID
+	clearedplan      bool
+	done             bool
+	oldValue         func(context.Context) (*EvaluationRun, error)
+	predicates       []predicate.EvaluationRun
+}
+
+var _ ent.Mutation = (*EvaluationRunMutation)(nil)
+
+// evaluationrunOption allows management of the mutation configuration using functional options.
+type evaluationrunOption func(*EvaluationRunMutation)
+
+// newEvaluationRunMutation creates new mutation for the EvaluationRun entity.
+func newEvaluationRunMutation(c config, op Op, opts ...evaluationrunOption) *EvaluationRunMutation {
+	m := &EvaluationRunMutation{
+		config:        c,
+		op:            op,
+		typ:           TypeEvaluationRun,
+		clearedFields: make(map[string]struct{}),
+	}
+	for _, opt := range opts {
+		opt(m)
+	}
+	return m
+}
+
+// withEvaluationRunID sets the ID field of the mutation.
+func withEvaluationRunID(id uuid.UUID) evaluationrunOption {
+	return func(m *EvaluationRunMutation) {
+		var (
+			err   error
+			once  sync.Once
+			value *EvaluationRun
+		)
+		m.oldValue = func(ctx context.Context) (*EvaluationRun, error) {
+			once.Do(func() {
+				if m.done {
+					err = errors.New("querying old values post mutation is not allowed")
+				} else {
+					value, err = m.Client().EvaluationRun.Get(ctx, id)
+				}
+			})
+			return value, err
+		}
+		m.id = &id
+	}
+}
+
+// withEvaluationRun sets the old EvaluationRun of the mutation.
+func withEvaluationRun(node *EvaluationRun) evaluationrunOption {
+	return func(m *EvaluationRunMutation) {
+		m.oldValue = func(context.Context) (*EvaluationRun, error) {
+			return node, nil
+		}
+		m.id = &node.ID
+	}
+}
+
+// Client returns a new `ent.Client` from the mutation. If the mutation was
+// executed in a transaction (ent.Tx), a transactional client is returned.
+func (m EvaluationRunMutation) Client() *Client {
+	client := &Client{config: m.config}
+	client.init()
+	return client
+}
+
+// Tx returns an `ent.Tx` for mutations that were executed in transactions;
+// it returns an error otherwise.
+func (m EvaluationRunMutation) Tx() (*Tx, error) {
+	if _, ok := m.driver.(*txDriver); !ok {
+		return nil, errors.New("ent: mutation is not running in a transaction")
+	}
+	tx := &Tx{config: m.config}
+	tx.init()
+	return tx, nil
+}
+
+// SetID sets the value of the id field. Note that this
+// operation is only accepted on creation of EvaluationRun entities.
+func (m *EvaluationRunMutation) SetID(id uuid.UUID) {
+	m.id = &id
+}
+
+// ID returns the ID value in the mutation. Note that the ID is only available
+// if it was provided to the builder or after it was returned from the database.
+func (m *EvaluationRunMutation) ID() (id uuid.UUID, exists bool) {
+	if m.id == nil {
+		return
+	}
+	return *m.id, true
+}
+
+// IDs queries the database and returns the entity ids that match the mutation's predicate.
+// That means, if the mutation is applied within a transaction with an isolation level such
+// as sql.LevelSerializable, the returned ids match the ids of the rows that will be updated
+// or updated by the mutation.
+func (m *EvaluationRunMutation) IDs(ctx context.Context) ([]uuid.UUID, error) {
+	switch {
+	case m.op.Is(OpUpdateOne | OpDeleteOne):
+		id, exists := m.ID()
+		if exists {
+			return []uuid.UUID{id}, nil
+		}
+		fallthrough
+	case m.op.Is(OpUpdate | OpDelete):
+		return m.Client().EvaluationRun.Query().Where(m.predicates...).IDs(ctx)
+	default:
+		return nil, fmt.Errorf("IDs is not allowed on %s operations", m.op)
+	}
+}
+
+// SetPlanID sets the "plan_id" field.
+func (m *EvaluationRunMutation) SetPlanID(u uuid.UUID) {
+	m.plan = &u
+}
+
+// PlanID returns the value of the "plan_id" field in the mutation.
+func (m *EvaluationRunMutation) PlanID() (r uuid.UUID, exists bool) {
+	v := m.plan
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldPlanID returns the old "plan_id" field's value of the EvaluationRun entity.
+// If the EvaluationRun object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *EvaluationRunMutation) OldPlanID(ctx context.Context) (v uuid.UUID, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldPlanID is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldPlanID requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldPlanID: %w", err)
+	}
+	return oldValue.PlanID, nil
+}
+
+// ResetPlanID resets all changes to the "plan_id" field.
+func (m *EvaluationRunMutation) ResetPlanID() {
+	m.plan = nil
+}
+
+// SetTriggerSource sets the "trigger_source" field.
+func (m *EvaluationRunMutation) SetTriggerSource(s string) {
+	m.trigger_source = &s
+}
+
+// TriggerSource returns the value of the "trigger_source" field in the mutation.
+func (m *EvaluationRunMutation) TriggerSource() (r string, exists bool) {
+	v := m.trigger_source
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldTriggerSource returns the old "trigger_source" field's value of the EvaluationRun entity.
+// If the EvaluationRun object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *EvaluationRunMutation) OldTriggerSource(ctx context.Context) (v string, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldTriggerSource is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldTriggerSource requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldTriggerSource: %w", err)
+	}
+	return oldValue.TriggerSource, nil
+}
+
+// ResetTriggerSource resets all changes to the "trigger_source" field.
+func (m *EvaluationRunMutation) ResetTriggerSource() {
+	m.trigger_source = nil
+}
+
+// SetBaselineRef sets the "baseline_ref" field.
+func (m *EvaluationRunMutation) SetBaselineRef(value map[string]interface{}) {
+	m.baseline_ref = &value
+}
+
+// BaselineRef returns the value of the "baseline_ref" field in the mutation.
+func (m *EvaluationRunMutation) BaselineRef() (r map[string]interface{}, exists bool) {
+	v := m.baseline_ref
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldBaselineRef returns the old "baseline_ref" field's value of the EvaluationRun entity.
+// If the EvaluationRun object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *EvaluationRunMutation) OldBaselineRef(ctx context.Context) (v map[string]interface{}, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldBaselineRef is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldBaselineRef requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldBaselineRef: %w", err)
+	}
+	return oldValue.BaselineRef, nil
+}
+
+// ResetBaselineRef resets all changes to the "baseline_ref" field.
+func (m *EvaluationRunMutation) ResetBaselineRef() {
+	m.baseline_ref = nil
+}
+
+// SetCandidateRef sets the "candidate_ref" field.
+func (m *EvaluationRunMutation) SetCandidateRef(value map[string]interface{}) {
+	m.candidate_ref = &value
+}
+
+// CandidateRef returns the value of the "candidate_ref" field in the mutation.
+func (m *EvaluationRunMutation) CandidateRef() (r map[string]interface{}, exists bool) {
+	v := m.candidate_ref
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldCandidateRef returns the old "candidate_ref" field's value of the EvaluationRun entity.
+// If the EvaluationRun object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *EvaluationRunMutation) OldCandidateRef(ctx context.Context) (v map[string]interface{}, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldCandidateRef is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldCandidateRef requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldCandidateRef: %w", err)
+	}
+	return oldValue.CandidateRef, nil
+}
+
+// ResetCandidateRef resets all changes to the "candidate_ref" field.
+func (m *EvaluationRunMutation) ResetCandidateRef() {
+	m.candidate_ref = nil
+}
+
+// SetStatus sets the "status" field.
+func (m *EvaluationRunMutation) SetStatus(s string) {
+	m.status = &s
+}
+
+// Status returns the value of the "status" field in the mutation.
+func (m *EvaluationRunMutation) Status() (r string, exists bool) {
+	v := m.status
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldStatus returns the old "status" field's value of the EvaluationRun entity.
+// If the EvaluationRun object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *EvaluationRunMutation) OldStatus(ctx context.Context) (v string, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldStatus is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldStatus requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldStatus: %w", err)
+	}
+	return oldValue.Status, nil
+}
+
+// ResetStatus resets all changes to the "status" field.
+func (m *EvaluationRunMutation) ResetStatus() {
+	m.status = nil
+}
+
+// SetBudgetLimit sets the "budget_limit" field.
+func (m *EvaluationRunMutation) SetBudgetLimit(f float64) {
+	m.budget_limit = &f
+	m.addbudget_limit = nil
+}
+
+// BudgetLimit returns the value of the "budget_limit" field in the mutation.
+func (m *EvaluationRunMutation) BudgetLimit() (r float64, exists bool) {
+	v := m.budget_limit
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldBudgetLimit returns the old "budget_limit" field's value of the EvaluationRun entity.
+// If the EvaluationRun object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *EvaluationRunMutation) OldBudgetLimit(ctx context.Context) (v float64, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldBudgetLimit is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldBudgetLimit requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldBudgetLimit: %w", err)
+	}
+	return oldValue.BudgetLimit, nil
+}
+
+// AddBudgetLimit adds f to the "budget_limit" field.
+func (m *EvaluationRunMutation) AddBudgetLimit(f float64) {
+	if m.addbudget_limit != nil {
+		*m.addbudget_limit += f
+	} else {
+		m.addbudget_limit = &f
+	}
+}
+
+// AddedBudgetLimit returns the value that was added to the "budget_limit" field in this mutation.
+func (m *EvaluationRunMutation) AddedBudgetLimit() (r float64, exists bool) {
+	v := m.addbudget_limit
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// ResetBudgetLimit resets all changes to the "budget_limit" field.
+func (m *EvaluationRunMutation) ResetBudgetLimit() {
+	m.budget_limit = nil
+	m.addbudget_limit = nil
+}
+
+// SetReservedCost sets the "reserved_cost" field.
+func (m *EvaluationRunMutation) SetReservedCost(f float64) {
+	m.reserved_cost = &f
+	m.addreserved_cost = nil
+}
+
+// ReservedCost returns the value of the "reserved_cost" field in the mutation.
+func (m *EvaluationRunMutation) ReservedCost() (r float64, exists bool) {
+	v := m.reserved_cost
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldReservedCost returns the old "reserved_cost" field's value of the EvaluationRun entity.
+// If the EvaluationRun object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *EvaluationRunMutation) OldReservedCost(ctx context.Context) (v float64, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldReservedCost is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldReservedCost requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldReservedCost: %w", err)
+	}
+	return oldValue.ReservedCost, nil
+}
+
+// AddReservedCost adds f to the "reserved_cost" field.
+func (m *EvaluationRunMutation) AddReservedCost(f float64) {
+	if m.addreserved_cost != nil {
+		*m.addreserved_cost += f
+	} else {
+		m.addreserved_cost = &f
+	}
+}
+
+// AddedReservedCost returns the value that was added to the "reserved_cost" field in this mutation.
+func (m *EvaluationRunMutation) AddedReservedCost() (r float64, exists bool) {
+	v := m.addreserved_cost
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// ResetReservedCost resets all changes to the "reserved_cost" field.
+func (m *EvaluationRunMutation) ResetReservedCost() {
+	m.reserved_cost = nil
+	m.addreserved_cost = nil
+}
+
+// SetActualCost sets the "actual_cost" field.
+func (m *EvaluationRunMutation) SetActualCost(f float64) {
+	m.actual_cost = &f
+	m.addactual_cost = nil
+}
+
+// ActualCost returns the value of the "actual_cost" field in the mutation.
+func (m *EvaluationRunMutation) ActualCost() (r float64, exists bool) {
+	v := m.actual_cost
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldActualCost returns the old "actual_cost" field's value of the EvaluationRun entity.
+// If the EvaluationRun object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *EvaluationRunMutation) OldActualCost(ctx context.Context) (v float64, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldActualCost is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldActualCost requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldActualCost: %w", err)
+	}
+	return oldValue.ActualCost, nil
+}
+
+// AddActualCost adds f to the "actual_cost" field.
+func (m *EvaluationRunMutation) AddActualCost(f float64) {
+	if m.addactual_cost != nil {
+		*m.addactual_cost += f
+	} else {
+		m.addactual_cost = &f
+	}
+}
+
+// AddedActualCost returns the value that was added to the "actual_cost" field in this mutation.
+func (m *EvaluationRunMutation) AddedActualCost() (r float64, exists bool) {
+	v := m.addactual_cost
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// ResetActualCost resets all changes to the "actual_cost" field.
+func (m *EvaluationRunMutation) ResetActualCost() {
+	m.actual_cost = nil
+	m.addactual_cost = nil
+}
+
+// SetCalibrationMode sets the "calibration_mode" field.
+func (m *EvaluationRunMutation) SetCalibrationMode(b bool) {
+	m.calibration_mode = &b
+}
+
+// CalibrationMode returns the value of the "calibration_mode" field in the mutation.
+func (m *EvaluationRunMutation) CalibrationMode() (r bool, exists bool) {
+	v := m.calibration_mode
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldCalibrationMode returns the old "calibration_mode" field's value of the EvaluationRun entity.
+// If the EvaluationRun object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *EvaluationRunMutation) OldCalibrationMode(ctx context.Context) (v bool, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldCalibrationMode is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldCalibrationMode requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldCalibrationMode: %w", err)
+	}
+	return oldValue.CalibrationMode, nil
+}
+
+// ResetCalibrationMode resets all changes to the "calibration_mode" field.
+func (m *EvaluationRunMutation) ResetCalibrationMode() {
+	m.calibration_mode = nil
+}
+
+// SetCreatedBy sets the "created_by" field.
+func (m *EvaluationRunMutation) SetCreatedBy(i int64) {
+	m.created_by = &i
+	m.addcreated_by = nil
+}
+
+// CreatedBy returns the value of the "created_by" field in the mutation.
+func (m *EvaluationRunMutation) CreatedBy() (r int64, exists bool) {
+	v := m.created_by
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldCreatedBy returns the old "created_by" field's value of the EvaluationRun entity.
+// If the EvaluationRun object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *EvaluationRunMutation) OldCreatedBy(ctx context.Context) (v *int64, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldCreatedBy is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldCreatedBy requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldCreatedBy: %w", err)
+	}
+	return oldValue.CreatedBy, nil
+}
+
+// AddCreatedBy adds i to the "created_by" field.
+func (m *EvaluationRunMutation) AddCreatedBy(i int64) {
+	if m.addcreated_by != nil {
+		*m.addcreated_by += i
+	} else {
+		m.addcreated_by = &i
+	}
+}
+
+// AddedCreatedBy returns the value that was added to the "created_by" field in this mutation.
+func (m *EvaluationRunMutation) AddedCreatedBy() (r int64, exists bool) {
+	v := m.addcreated_by
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// ClearCreatedBy clears the value of the "created_by" field.
+func (m *EvaluationRunMutation) ClearCreatedBy() {
+	m.created_by = nil
+	m.addcreated_by = nil
+	m.clearedFields[evaluationrun.FieldCreatedBy] = struct{}{}
+}
+
+// CreatedByCleared returns if the "created_by" field was cleared in this mutation.
+func (m *EvaluationRunMutation) CreatedByCleared() bool {
+	_, ok := m.clearedFields[evaluationrun.FieldCreatedBy]
+	return ok
+}
+
+// ResetCreatedBy resets all changes to the "created_by" field.
+func (m *EvaluationRunMutation) ResetCreatedBy() {
+	m.created_by = nil
+	m.addcreated_by = nil
+	delete(m.clearedFields, evaluationrun.FieldCreatedBy)
+}
+
+// SetStartedAt sets the "started_at" field.
+func (m *EvaluationRunMutation) SetStartedAt(t time.Time) {
+	m.started_at = &t
+}
+
+// StartedAt returns the value of the "started_at" field in the mutation.
+func (m *EvaluationRunMutation) StartedAt() (r time.Time, exists bool) {
+	v := m.started_at
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldStartedAt returns the old "started_at" field's value of the EvaluationRun entity.
+// If the EvaluationRun object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *EvaluationRunMutation) OldStartedAt(ctx context.Context) (v *time.Time, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldStartedAt is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldStartedAt requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldStartedAt: %w", err)
+	}
+	return oldValue.StartedAt, nil
+}
+
+// ClearStartedAt clears the value of the "started_at" field.
+func (m *EvaluationRunMutation) ClearStartedAt() {
+	m.started_at = nil
+	m.clearedFields[evaluationrun.FieldStartedAt] = struct{}{}
+}
+
+// StartedAtCleared returns if the "started_at" field was cleared in this mutation.
+func (m *EvaluationRunMutation) StartedAtCleared() bool {
+	_, ok := m.clearedFields[evaluationrun.FieldStartedAt]
+	return ok
+}
+
+// ResetStartedAt resets all changes to the "started_at" field.
+func (m *EvaluationRunMutation) ResetStartedAt() {
+	m.started_at = nil
+	delete(m.clearedFields, evaluationrun.FieldStartedAt)
+}
+
+// SetFinishedAt sets the "finished_at" field.
+func (m *EvaluationRunMutation) SetFinishedAt(t time.Time) {
+	m.finished_at = &t
+}
+
+// FinishedAt returns the value of the "finished_at" field in the mutation.
+func (m *EvaluationRunMutation) FinishedAt() (r time.Time, exists bool) {
+	v := m.finished_at
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldFinishedAt returns the old "finished_at" field's value of the EvaluationRun entity.
+// If the EvaluationRun object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *EvaluationRunMutation) OldFinishedAt(ctx context.Context) (v *time.Time, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldFinishedAt is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldFinishedAt requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldFinishedAt: %w", err)
+	}
+	return oldValue.FinishedAt, nil
+}
+
+// ClearFinishedAt clears the value of the "finished_at" field.
+func (m *EvaluationRunMutation) ClearFinishedAt() {
+	m.finished_at = nil
+	m.clearedFields[evaluationrun.FieldFinishedAt] = struct{}{}
+}
+
+// FinishedAtCleared returns if the "finished_at" field was cleared in this mutation.
+func (m *EvaluationRunMutation) FinishedAtCleared() bool {
+	_, ok := m.clearedFields[evaluationrun.FieldFinishedAt]
+	return ok
+}
+
+// ResetFinishedAt resets all changes to the "finished_at" field.
+func (m *EvaluationRunMutation) ResetFinishedAt() {
+	m.finished_at = nil
+	delete(m.clearedFields, evaluationrun.FieldFinishedAt)
+}
+
+// SetCreatedAt sets the "created_at" field.
+func (m *EvaluationRunMutation) SetCreatedAt(t time.Time) {
+	m.created_at = &t
+}
+
+// CreatedAt returns the value of the "created_at" field in the mutation.
+func (m *EvaluationRunMutation) CreatedAt() (r time.Time, exists bool) {
+	v := m.created_at
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldCreatedAt returns the old "created_at" field's value of the EvaluationRun entity.
+// If the EvaluationRun object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *EvaluationRunMutation) OldCreatedAt(ctx context.Context) (v time.Time, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldCreatedAt is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldCreatedAt requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldCreatedAt: %w", err)
+	}
+	return oldValue.CreatedAt, nil
+}
+
+// ResetCreatedAt resets all changes to the "created_at" field.
+func (m *EvaluationRunMutation) ResetCreatedAt() {
+	m.created_at = nil
+}
+
+// SetUpdatedAt sets the "updated_at" field.
+func (m *EvaluationRunMutation) SetUpdatedAt(t time.Time) {
+	m.updated_at = &t
+}
+
+// UpdatedAt returns the value of the "updated_at" field in the mutation.
+func (m *EvaluationRunMutation) UpdatedAt() (r time.Time, exists bool) {
+	v := m.updated_at
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldUpdatedAt returns the old "updated_at" field's value of the EvaluationRun entity.
+// If the EvaluationRun object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *EvaluationRunMutation) OldUpdatedAt(ctx context.Context) (v time.Time, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldUpdatedAt is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldUpdatedAt requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldUpdatedAt: %w", err)
+	}
+	return oldValue.UpdatedAt, nil
+}
+
+// ResetUpdatedAt resets all changes to the "updated_at" field.
+func (m *EvaluationRunMutation) ResetUpdatedAt() {
+	m.updated_at = nil
+}
+
+// ClearPlan clears the "plan" edge to the EvaluationPlan entity.
+func (m *EvaluationRunMutation) ClearPlan() {
+	m.clearedplan = true
+	m.clearedFields[evaluationrun.FieldPlanID] = struct{}{}
+}
+
+// PlanCleared reports if the "plan" edge to the EvaluationPlan entity was cleared.
+func (m *EvaluationRunMutation) PlanCleared() bool {
+	return m.clearedplan
+}
+
+// PlanIDs returns the "plan" edge IDs in the mutation.
+// Note that IDs always returns len(IDs) <= 1 for unique edges, and you should use
+// PlanID instead. It exists only for internal usage by the builders.
+func (m *EvaluationRunMutation) PlanIDs() (ids []uuid.UUID) {
+	if id := m.plan; id != nil {
+		ids = append(ids, *id)
+	}
+	return
+}
+
+// ResetPlan resets all changes to the "plan" edge.
+func (m *EvaluationRunMutation) ResetPlan() {
+	m.plan = nil
+	m.clearedplan = false
+}
+
+// Where appends a list predicates to the EvaluationRunMutation builder.
+func (m *EvaluationRunMutation) Where(ps ...predicate.EvaluationRun) {
+	m.predicates = append(m.predicates, ps...)
+}
+
+// WhereP appends storage-level predicates to the EvaluationRunMutation builder. Using this method,
+// users can use type-assertion to append predicates that do not depend on any generated package.
+func (m *EvaluationRunMutation) WhereP(ps ...func(*sql.Selector)) {
+	p := make([]predicate.EvaluationRun, len(ps))
+	for i := range ps {
+		p[i] = ps[i]
+	}
+	m.Where(p...)
+}
+
+// Op returns the operation name.
+func (m *EvaluationRunMutation) Op() Op {
+	return m.op
+}
+
+// SetOp allows setting the mutation operation.
+func (m *EvaluationRunMutation) SetOp(op Op) {
+	m.op = op
+}
+
+// Type returns the node type of this mutation (EvaluationRun).
+func (m *EvaluationRunMutation) Type() string {
+	return m.typ
+}
+
+// Fields returns all fields that were changed during this mutation. Note that in
+// order to get all numeric fields that were incremented/decremented, call
+// AddedFields().
+func (m *EvaluationRunMutation) Fields() []string {
+	fields := make([]string, 0, 14)
+	if m.plan != nil {
+		fields = append(fields, evaluationrun.FieldPlanID)
+	}
+	if m.trigger_source != nil {
+		fields = append(fields, evaluationrun.FieldTriggerSource)
+	}
+	if m.baseline_ref != nil {
+		fields = append(fields, evaluationrun.FieldBaselineRef)
+	}
+	if m.candidate_ref != nil {
+		fields = append(fields, evaluationrun.FieldCandidateRef)
+	}
+	if m.status != nil {
+		fields = append(fields, evaluationrun.FieldStatus)
+	}
+	if m.budget_limit != nil {
+		fields = append(fields, evaluationrun.FieldBudgetLimit)
+	}
+	if m.reserved_cost != nil {
+		fields = append(fields, evaluationrun.FieldReservedCost)
+	}
+	if m.actual_cost != nil {
+		fields = append(fields, evaluationrun.FieldActualCost)
+	}
+	if m.calibration_mode != nil {
+		fields = append(fields, evaluationrun.FieldCalibrationMode)
+	}
+	if m.created_by != nil {
+		fields = append(fields, evaluationrun.FieldCreatedBy)
+	}
+	if m.started_at != nil {
+		fields = append(fields, evaluationrun.FieldStartedAt)
+	}
+	if m.finished_at != nil {
+		fields = append(fields, evaluationrun.FieldFinishedAt)
+	}
+	if m.created_at != nil {
+		fields = append(fields, evaluationrun.FieldCreatedAt)
+	}
+	if m.updated_at != nil {
+		fields = append(fields, evaluationrun.FieldUpdatedAt)
+	}
+	return fields
+}
+
+// Field returns the value of a field with the given name. The second boolean
+// return value indicates that this field was not set, or was not defined in the
+// schema.
+func (m *EvaluationRunMutation) Field(name string) (ent.Value, bool) {
+	switch name {
+	case evaluationrun.FieldPlanID:
+		return m.PlanID()
+	case evaluationrun.FieldTriggerSource:
+		return m.TriggerSource()
+	case evaluationrun.FieldBaselineRef:
+		return m.BaselineRef()
+	case evaluationrun.FieldCandidateRef:
+		return m.CandidateRef()
+	case evaluationrun.FieldStatus:
+		return m.Status()
+	case evaluationrun.FieldBudgetLimit:
+		return m.BudgetLimit()
+	case evaluationrun.FieldReservedCost:
+		return m.ReservedCost()
+	case evaluationrun.FieldActualCost:
+		return m.ActualCost()
+	case evaluationrun.FieldCalibrationMode:
+		return m.CalibrationMode()
+	case evaluationrun.FieldCreatedBy:
+		return m.CreatedBy()
+	case evaluationrun.FieldStartedAt:
+		return m.StartedAt()
+	case evaluationrun.FieldFinishedAt:
+		return m.FinishedAt()
+	case evaluationrun.FieldCreatedAt:
+		return m.CreatedAt()
+	case evaluationrun.FieldUpdatedAt:
+		return m.UpdatedAt()
+	}
+	return nil, false
+}
+
+// OldField returns the old value of the field from the database. An error is
+// returned if the mutation operation is not UpdateOne, or the query to the
+// database failed.
+func (m *EvaluationRunMutation) OldField(ctx context.Context, name string) (ent.Value, error) {
+	switch name {
+	case evaluationrun.FieldPlanID:
+		return m.OldPlanID(ctx)
+	case evaluationrun.FieldTriggerSource:
+		return m.OldTriggerSource(ctx)
+	case evaluationrun.FieldBaselineRef:
+		return m.OldBaselineRef(ctx)
+	case evaluationrun.FieldCandidateRef:
+		return m.OldCandidateRef(ctx)
+	case evaluationrun.FieldStatus:
+		return m.OldStatus(ctx)
+	case evaluationrun.FieldBudgetLimit:
+		return m.OldBudgetLimit(ctx)
+	case evaluationrun.FieldReservedCost:
+		return m.OldReservedCost(ctx)
+	case evaluationrun.FieldActualCost:
+		return m.OldActualCost(ctx)
+	case evaluationrun.FieldCalibrationMode:
+		return m.OldCalibrationMode(ctx)
+	case evaluationrun.FieldCreatedBy:
+		return m.OldCreatedBy(ctx)
+	case evaluationrun.FieldStartedAt:
+		return m.OldStartedAt(ctx)
+	case evaluationrun.FieldFinishedAt:
+		return m.OldFinishedAt(ctx)
+	case evaluationrun.FieldCreatedAt:
+		return m.OldCreatedAt(ctx)
+	case evaluationrun.FieldUpdatedAt:
+		return m.OldUpdatedAt(ctx)
+	}
+	return nil, fmt.Errorf("unknown EvaluationRun field %s", name)
+}
+
+// SetField sets the value of a field with the given name. It returns an error if
+// the field is not defined in the schema, or if the type mismatched the field
+// type.
+func (m *EvaluationRunMutation) SetField(name string, value ent.Value) error {
+	switch name {
+	case evaluationrun.FieldPlanID:
+		v, ok := value.(uuid.UUID)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetPlanID(v)
+		return nil
+	case evaluationrun.FieldTriggerSource:
+		v, ok := value.(string)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetTriggerSource(v)
+		return nil
+	case evaluationrun.FieldBaselineRef:
+		v, ok := value.(map[string]interface{})
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetBaselineRef(v)
+		return nil
+	case evaluationrun.FieldCandidateRef:
+		v, ok := value.(map[string]interface{})
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetCandidateRef(v)
+		return nil
+	case evaluationrun.FieldStatus:
+		v, ok := value.(string)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetStatus(v)
+		return nil
+	case evaluationrun.FieldBudgetLimit:
+		v, ok := value.(float64)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetBudgetLimit(v)
+		return nil
+	case evaluationrun.FieldReservedCost:
+		v, ok := value.(float64)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetReservedCost(v)
+		return nil
+	case evaluationrun.FieldActualCost:
+		v, ok := value.(float64)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetActualCost(v)
+		return nil
+	case evaluationrun.FieldCalibrationMode:
+		v, ok := value.(bool)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetCalibrationMode(v)
+		return nil
+	case evaluationrun.FieldCreatedBy:
+		v, ok := value.(int64)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetCreatedBy(v)
+		return nil
+	case evaluationrun.FieldStartedAt:
+		v, ok := value.(time.Time)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetStartedAt(v)
+		return nil
+	case evaluationrun.FieldFinishedAt:
+		v, ok := value.(time.Time)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetFinishedAt(v)
+		return nil
+	case evaluationrun.FieldCreatedAt:
+		v, ok := value.(time.Time)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetCreatedAt(v)
+		return nil
+	case evaluationrun.FieldUpdatedAt:
+		v, ok := value.(time.Time)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetUpdatedAt(v)
+		return nil
+	}
+	return fmt.Errorf("unknown EvaluationRun field %s", name)
+}
+
+// AddedFields returns all numeric fields that were incremented/decremented during
+// this mutation.
+func (m *EvaluationRunMutation) AddedFields() []string {
+	var fields []string
+	if m.addbudget_limit != nil {
+		fields = append(fields, evaluationrun.FieldBudgetLimit)
+	}
+	if m.addreserved_cost != nil {
+		fields = append(fields, evaluationrun.FieldReservedCost)
+	}
+	if m.addactual_cost != nil {
+		fields = append(fields, evaluationrun.FieldActualCost)
+	}
+	if m.addcreated_by != nil {
+		fields = append(fields, evaluationrun.FieldCreatedBy)
+	}
+	return fields
+}
+
+// AddedField returns the numeric value that was incremented/decremented on a field
+// with the given name. The second boolean return value indicates that this field
+// was not set, or was not defined in the schema.
+func (m *EvaluationRunMutation) AddedField(name string) (ent.Value, bool) {
+	switch name {
+	case evaluationrun.FieldBudgetLimit:
+		return m.AddedBudgetLimit()
+	case evaluationrun.FieldReservedCost:
+		return m.AddedReservedCost()
+	case evaluationrun.FieldActualCost:
+		return m.AddedActualCost()
+	case evaluationrun.FieldCreatedBy:
+		return m.AddedCreatedBy()
+	}
+	return nil, false
+}
+
+// AddField adds the value to the field with the given name. It returns an error if
+// the field is not defined in the schema, or if the type mismatched the field
+// type.
+func (m *EvaluationRunMutation) AddField(name string, value ent.Value) error {
+	switch name {
+	case evaluationrun.FieldBudgetLimit:
+		v, ok := value.(float64)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.AddBudgetLimit(v)
+		return nil
+	case evaluationrun.FieldReservedCost:
+		v, ok := value.(float64)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.AddReservedCost(v)
+		return nil
+	case evaluationrun.FieldActualCost:
+		v, ok := value.(float64)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.AddActualCost(v)
+		return nil
+	case evaluationrun.FieldCreatedBy:
+		v, ok := value.(int64)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.AddCreatedBy(v)
+		return nil
+	}
+	return fmt.Errorf("unknown EvaluationRun numeric field %s", name)
+}
+
+// ClearedFields returns all nullable fields that were cleared during this
+// mutation.
+func (m *EvaluationRunMutation) ClearedFields() []string {
+	var fields []string
+	if m.FieldCleared(evaluationrun.FieldCreatedBy) {
+		fields = append(fields, evaluationrun.FieldCreatedBy)
+	}
+	if m.FieldCleared(evaluationrun.FieldStartedAt) {
+		fields = append(fields, evaluationrun.FieldStartedAt)
+	}
+	if m.FieldCleared(evaluationrun.FieldFinishedAt) {
+		fields = append(fields, evaluationrun.FieldFinishedAt)
+	}
+	return fields
+}
+
+// FieldCleared returns a boolean indicating if a field with the given name was
+// cleared in this mutation.
+func (m *EvaluationRunMutation) FieldCleared(name string) bool {
+	_, ok := m.clearedFields[name]
+	return ok
+}
+
+// ClearField clears the value of the field with the given name. It returns an
+// error if the field is not defined in the schema.
+func (m *EvaluationRunMutation) ClearField(name string) error {
+	switch name {
+	case evaluationrun.FieldCreatedBy:
+		m.ClearCreatedBy()
+		return nil
+	case evaluationrun.FieldStartedAt:
+		m.ClearStartedAt()
+		return nil
+	case evaluationrun.FieldFinishedAt:
+		m.ClearFinishedAt()
+		return nil
+	}
+	return fmt.Errorf("unknown EvaluationRun nullable field %s", name)
+}
+
+// ResetField resets all changes in the mutation for the field with the given name.
+// It returns an error if the field is not defined in the schema.
+func (m *EvaluationRunMutation) ResetField(name string) error {
+	switch name {
+	case evaluationrun.FieldPlanID:
+		m.ResetPlanID()
+		return nil
+	case evaluationrun.FieldTriggerSource:
+		m.ResetTriggerSource()
+		return nil
+	case evaluationrun.FieldBaselineRef:
+		m.ResetBaselineRef()
+		return nil
+	case evaluationrun.FieldCandidateRef:
+		m.ResetCandidateRef()
+		return nil
+	case evaluationrun.FieldStatus:
+		m.ResetStatus()
+		return nil
+	case evaluationrun.FieldBudgetLimit:
+		m.ResetBudgetLimit()
+		return nil
+	case evaluationrun.FieldReservedCost:
+		m.ResetReservedCost()
+		return nil
+	case evaluationrun.FieldActualCost:
+		m.ResetActualCost()
+		return nil
+	case evaluationrun.FieldCalibrationMode:
+		m.ResetCalibrationMode()
+		return nil
+	case evaluationrun.FieldCreatedBy:
+		m.ResetCreatedBy()
+		return nil
+	case evaluationrun.FieldStartedAt:
+		m.ResetStartedAt()
+		return nil
+	case evaluationrun.FieldFinishedAt:
+		m.ResetFinishedAt()
+		return nil
+	case evaluationrun.FieldCreatedAt:
+		m.ResetCreatedAt()
+		return nil
+	case evaluationrun.FieldUpdatedAt:
+		m.ResetUpdatedAt()
+		return nil
+	}
+	return fmt.Errorf("unknown EvaluationRun field %s", name)
+}
+
+// AddedEdges returns all edge names that were set/added in this mutation.
+func (m *EvaluationRunMutation) AddedEdges() []string {
+	edges := make([]string, 0, 1)
+	if m.plan != nil {
+		edges = append(edges, evaluationrun.EdgePlan)
+	}
+	return edges
+}
+
+// AddedIDs returns all IDs (to other nodes) that were added for the given edge
+// name in this mutation.
+func (m *EvaluationRunMutation) AddedIDs(name string) []ent.Value {
+	switch name {
+	case evaluationrun.EdgePlan:
+		if id := m.plan; id != nil {
+			return []ent.Value{*id}
+		}
+	}
+	return nil
+}
+
+// RemovedEdges returns all edge names that were removed in this mutation.
+func (m *EvaluationRunMutation) RemovedEdges() []string {
+	edges := make([]string, 0, 1)
+	return edges
+}
+
+// RemovedIDs returns all IDs (to other nodes) that were removed for the edge with
+// the given name in this mutation.
+func (m *EvaluationRunMutation) RemovedIDs(name string) []ent.Value {
+	return nil
+}
+
+// ClearedEdges returns all edge names that were cleared in this mutation.
+func (m *EvaluationRunMutation) ClearedEdges() []string {
+	edges := make([]string, 0, 1)
+	if m.clearedplan {
+		edges = append(edges, evaluationrun.EdgePlan)
+	}
+	return edges
+}
+
+// EdgeCleared returns a boolean which indicates if the edge with the given name
+// was cleared in this mutation.
+func (m *EvaluationRunMutation) EdgeCleared(name string) bool {
+	switch name {
+	case evaluationrun.EdgePlan:
+		return m.clearedplan
+	}
+	return false
+}
+
+// ClearEdge clears the value of the edge with the given name. It returns an error
+// if that edge is not defined in the schema.
+func (m *EvaluationRunMutation) ClearEdge(name string) error {
+	switch name {
+	case evaluationrun.EdgePlan:
+		m.ClearPlan()
+		return nil
+	}
+	return fmt.Errorf("unknown EvaluationRun unique edge %s", name)
+}
+
+// ResetEdge resets all changes to the edge with the given name in this mutation.
+// It returns an error if the edge is not defined in the schema.
+func (m *EvaluationRunMutation) ResetEdge(name string) error {
+	switch name {
+	case evaluationrun.EdgePlan:
+		m.ResetPlan()
+		return nil
+	}
+	return fmt.Errorf("unknown EvaluationRun edge %s", name)
 }
 
 // GroupMutation represents an operation that mutates the Group nodes in the graph.

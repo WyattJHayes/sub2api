@@ -24,7 +24,11 @@ import (
 	"github.com/Wei-Shaw/sub2api/ent/channelmonitorrequesttemplate"
 	"github.com/Wei-Shaw/sub2api/ent/compositemodelroute"
 	"github.com/Wei-Shaw/sub2api/ent/errorpassthroughrule"
+	"github.com/Wei-Shaw/sub2api/ent/evaluationcase"
+	"github.com/Wei-Shaw/sub2api/ent/evaluationdatasetversion"
+	"github.com/Wei-Shaw/sub2api/ent/evaluationplan"
 	"github.com/Wei-Shaw/sub2api/ent/evaluationrouteevidence"
+	"github.com/Wei-Shaw/sub2api/ent/evaluationrun"
 	"github.com/Wei-Shaw/sub2api/ent/group"
 	"github.com/Wei-Shaw/sub2api/ent/idempotencyrecord"
 	"github.com/Wei-Shaw/sub2api/ent/identityadoptiondecision"
@@ -539,6 +543,87 @@ func (f TraverseErrorPassthroughRule) Traverse(ctx context.Context, q ent.Query)
 	return fmt.Errorf("unexpected query type %T. expect *ent.ErrorPassthroughRuleQuery", q)
 }
 
+// The EvaluationCaseFunc type is an adapter to allow the use of ordinary function as a Querier.
+type EvaluationCaseFunc func(context.Context, *ent.EvaluationCaseQuery) (ent.Value, error)
+
+// Query calls f(ctx, q).
+func (f EvaluationCaseFunc) Query(ctx context.Context, q ent.Query) (ent.Value, error) {
+	if q, ok := q.(*ent.EvaluationCaseQuery); ok {
+		return f(ctx, q)
+	}
+	return nil, fmt.Errorf("unexpected query type %T. expect *ent.EvaluationCaseQuery", q)
+}
+
+// The TraverseEvaluationCase type is an adapter to allow the use of ordinary function as Traverser.
+type TraverseEvaluationCase func(context.Context, *ent.EvaluationCaseQuery) error
+
+// Intercept is a dummy implementation of Intercept that returns the next Querier in the pipeline.
+func (f TraverseEvaluationCase) Intercept(next ent.Querier) ent.Querier {
+	return next
+}
+
+// Traverse calls f(ctx, q).
+func (f TraverseEvaluationCase) Traverse(ctx context.Context, q ent.Query) error {
+	if q, ok := q.(*ent.EvaluationCaseQuery); ok {
+		return f(ctx, q)
+	}
+	return fmt.Errorf("unexpected query type %T. expect *ent.EvaluationCaseQuery", q)
+}
+
+// The EvaluationDatasetVersionFunc type is an adapter to allow the use of ordinary function as a Querier.
+type EvaluationDatasetVersionFunc func(context.Context, *ent.EvaluationDatasetVersionQuery) (ent.Value, error)
+
+// Query calls f(ctx, q).
+func (f EvaluationDatasetVersionFunc) Query(ctx context.Context, q ent.Query) (ent.Value, error) {
+	if q, ok := q.(*ent.EvaluationDatasetVersionQuery); ok {
+		return f(ctx, q)
+	}
+	return nil, fmt.Errorf("unexpected query type %T. expect *ent.EvaluationDatasetVersionQuery", q)
+}
+
+// The TraverseEvaluationDatasetVersion type is an adapter to allow the use of ordinary function as Traverser.
+type TraverseEvaluationDatasetVersion func(context.Context, *ent.EvaluationDatasetVersionQuery) error
+
+// Intercept is a dummy implementation of Intercept that returns the next Querier in the pipeline.
+func (f TraverseEvaluationDatasetVersion) Intercept(next ent.Querier) ent.Querier {
+	return next
+}
+
+// Traverse calls f(ctx, q).
+func (f TraverseEvaluationDatasetVersion) Traverse(ctx context.Context, q ent.Query) error {
+	if q, ok := q.(*ent.EvaluationDatasetVersionQuery); ok {
+		return f(ctx, q)
+	}
+	return fmt.Errorf("unexpected query type %T. expect *ent.EvaluationDatasetVersionQuery", q)
+}
+
+// The EvaluationPlanFunc type is an adapter to allow the use of ordinary function as a Querier.
+type EvaluationPlanFunc func(context.Context, *ent.EvaluationPlanQuery) (ent.Value, error)
+
+// Query calls f(ctx, q).
+func (f EvaluationPlanFunc) Query(ctx context.Context, q ent.Query) (ent.Value, error) {
+	if q, ok := q.(*ent.EvaluationPlanQuery); ok {
+		return f(ctx, q)
+	}
+	return nil, fmt.Errorf("unexpected query type %T. expect *ent.EvaluationPlanQuery", q)
+}
+
+// The TraverseEvaluationPlan type is an adapter to allow the use of ordinary function as Traverser.
+type TraverseEvaluationPlan func(context.Context, *ent.EvaluationPlanQuery) error
+
+// Intercept is a dummy implementation of Intercept that returns the next Querier in the pipeline.
+func (f TraverseEvaluationPlan) Intercept(next ent.Querier) ent.Querier {
+	return next
+}
+
+// Traverse calls f(ctx, q).
+func (f TraverseEvaluationPlan) Traverse(ctx context.Context, q ent.Query) error {
+	if q, ok := q.(*ent.EvaluationPlanQuery); ok {
+		return f(ctx, q)
+	}
+	return fmt.Errorf("unexpected query type %T. expect *ent.EvaluationPlanQuery", q)
+}
+
 // The EvaluationRouteEvidenceFunc type is an adapter to allow the use of ordinary function as a Querier.
 type EvaluationRouteEvidenceFunc func(context.Context, *ent.EvaluationRouteEvidenceQuery) (ent.Value, error)
 
@@ -564,6 +649,33 @@ func (f TraverseEvaluationRouteEvidence) Traverse(ctx context.Context, q ent.Que
 		return f(ctx, q)
 	}
 	return fmt.Errorf("unexpected query type %T. expect *ent.EvaluationRouteEvidenceQuery", q)
+}
+
+// The EvaluationRunFunc type is an adapter to allow the use of ordinary function as a Querier.
+type EvaluationRunFunc func(context.Context, *ent.EvaluationRunQuery) (ent.Value, error)
+
+// Query calls f(ctx, q).
+func (f EvaluationRunFunc) Query(ctx context.Context, q ent.Query) (ent.Value, error) {
+	if q, ok := q.(*ent.EvaluationRunQuery); ok {
+		return f(ctx, q)
+	}
+	return nil, fmt.Errorf("unexpected query type %T. expect *ent.EvaluationRunQuery", q)
+}
+
+// The TraverseEvaluationRun type is an adapter to allow the use of ordinary function as Traverser.
+type TraverseEvaluationRun func(context.Context, *ent.EvaluationRunQuery) error
+
+// Intercept is a dummy implementation of Intercept that returns the next Querier in the pipeline.
+func (f TraverseEvaluationRun) Intercept(next ent.Querier) ent.Querier {
+	return next
+}
+
+// Traverse calls f(ctx, q).
+func (f TraverseEvaluationRun) Traverse(ctx context.Context, q ent.Query) error {
+	if q, ok := q.(*ent.EvaluationRunQuery); ok {
+		return f(ctx, q)
+	}
+	return fmt.Errorf("unexpected query type %T. expect *ent.EvaluationRunQuery", q)
 }
 
 // The GroupFunc type is an adapter to allow the use of ordinary function as a Querier.
@@ -1222,8 +1334,16 @@ func NewQuery(q ent.Query) (Query, error) {
 		return &query[*ent.CompositeModelRouteQuery, predicate.CompositeModelRoute, compositemodelroute.OrderOption]{typ: ent.TypeCompositeModelRoute, tq: q}, nil
 	case *ent.ErrorPassthroughRuleQuery:
 		return &query[*ent.ErrorPassthroughRuleQuery, predicate.ErrorPassthroughRule, errorpassthroughrule.OrderOption]{typ: ent.TypeErrorPassthroughRule, tq: q}, nil
+	case *ent.EvaluationCaseQuery:
+		return &query[*ent.EvaluationCaseQuery, predicate.EvaluationCase, evaluationcase.OrderOption]{typ: ent.TypeEvaluationCase, tq: q}, nil
+	case *ent.EvaluationDatasetVersionQuery:
+		return &query[*ent.EvaluationDatasetVersionQuery, predicate.EvaluationDatasetVersion, evaluationdatasetversion.OrderOption]{typ: ent.TypeEvaluationDatasetVersion, tq: q}, nil
+	case *ent.EvaluationPlanQuery:
+		return &query[*ent.EvaluationPlanQuery, predicate.EvaluationPlan, evaluationplan.OrderOption]{typ: ent.TypeEvaluationPlan, tq: q}, nil
 	case *ent.EvaluationRouteEvidenceQuery:
 		return &query[*ent.EvaluationRouteEvidenceQuery, predicate.EvaluationRouteEvidence, evaluationrouteevidence.OrderOption]{typ: ent.TypeEvaluationRouteEvidence, tq: q}, nil
+	case *ent.EvaluationRunQuery:
+		return &query[*ent.EvaluationRunQuery, predicate.EvaluationRun, evaluationrun.OrderOption]{typ: ent.TypeEvaluationRun, tq: q}, nil
 	case *ent.GroupQuery:
 		return &query[*ent.GroupQuery, predicate.Group, group.OrderOption]{typ: ent.TypeGroup, tq: q}, nil
 	case *ent.IdempotencyRecordQuery:
