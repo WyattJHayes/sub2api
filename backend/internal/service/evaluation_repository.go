@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"time"
 
@@ -34,13 +35,15 @@ type EvaluationRun struct {
 }
 
 type AssignmentLease struct {
-	ID         uuid.UUID
-	SampleID   uuid.UUID
-	RunID      uuid.UUID
-	ModelRoute string
-	Attempt    int
-	Token      string
-	ExpiresAt  time.Time
+	ID                uuid.UUID
+	SampleID          uuid.UUID
+	RunID             uuid.UUID
+	ModelRoute        string
+	ModelConfig       json.RawMessage
+	ModelConfigSHA256 string
+	Attempt           int
+	Token             string
+	ExpiresAt         time.Time
 }
 
 type AssignmentTransition struct {
