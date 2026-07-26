@@ -291,8 +291,12 @@ func TestEvaluationSampleExecutionIdentityMigrationUpgradesOriginal191(t *testin
 	conn, err := integrationDB.Conn(ctx)
 	require.NoError(t, err)
 	t.Cleanup(func() {
-		_, _ = integrationDB.ExecContext(context.Background(), "DROP SCHEMA IF EXISTS "+schema+" CASCADE")
-		_ = conn.Close()
+		resetErr := resetEvaluationMigrationTestSearchPath(context.Background(), conn)
+		closeErr := conn.Close()
+		_, dropErr := integrationDB.ExecContext(context.Background(), "DROP SCHEMA IF EXISTS "+schema+" CASCADE")
+		require.NoError(t, resetErr)
+		require.NoError(t, closeErr)
+		require.NoError(t, dropErr)
 	})
 	require.NoError(t, setEvaluationMigrationTestSearchPath(ctx, conn, schema))
 	require.NoError(t, executeEvaluationMigrationSQL(ctx, conn, `CREATE TABLE users (id BIGINT PRIMARY KEY)`))
@@ -333,6 +337,28 @@ func TestEvaluationSampleExecutionIdentityMigrationUpgradesOriginal191(t *testin
 	require.Error(t, err)
 }
 
+func TestEvaluationMigrationTestSearchPathRestoresPublicSchema(t *testing.T) {
+	ctx := context.Background()
+	schema := "evaluation_search_path_" + strings.ReplaceAll(uuid.NewString(), "-", "")
+	conn, err := integrationDB.Conn(ctx)
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		resetErr := resetEvaluationMigrationTestSearchPath(context.Background(), conn)
+		closeErr := conn.Close()
+		_, dropErr := integrationDB.ExecContext(context.Background(), "DROP SCHEMA IF EXISTS "+schema+" CASCADE")
+		require.NoError(t, resetErr)
+		require.NoError(t, closeErr)
+		require.NoError(t, dropErr)
+	})
+
+	require.NoError(t, setEvaluationMigrationTestSearchPath(ctx, conn, schema))
+	require.NoError(t, resetEvaluationMigrationTestSearchPath(ctx, conn))
+
+	var currentSchema string
+	require.NoError(t, conn.QueryRowContext(ctx, "SELECT current_schema()").Scan(&currentSchema))
+	require.Equal(t, "public", currentSchema)
+}
+
 type original191SampleFixture struct {
 	sampleID uuid.UUID
 }
@@ -342,6 +368,11 @@ func setEvaluationMigrationTestSearchPath(ctx context.Context, conn *sql.Conn, s
 		return err
 	}
 	_, err := conn.ExecContext(ctx, "SET search_path TO "+schema)
+	return err
+}
+
+func resetEvaluationMigrationTestSearchPath(ctx context.Context, conn *sql.Conn) error {
+	_, err := conn.ExecContext(ctx, "RESET search_path")
 	return err
 }
 
