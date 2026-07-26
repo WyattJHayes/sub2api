@@ -5,10 +5,12 @@ package repository
 import (
 	"context"
 	"database/sql"
+	"fmt"
 	"sync"
 	"testing"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/stretchr/testify/require"
 )
 
@@ -67,6 +69,22 @@ func TestMigrationsRunner_IsIdempotent_AndSchemaIsUpToDate(t *testing.T) {
 	requireColumn(t, tx, "evaluation_route_evidence", "fallback_chain", "jsonb", 0, false)
 	requireColumn(t, tx, "evaluation_route_evidence", "billed_amount", "numeric", 0, true)
 	requireNumericColumn(t, tx, "evaluation_route_evidence", "billed_amount", 20, 8)
+
+	// Radar control plane: immutable configuration and mutable execution state.
+	for _, table := range []string{
+		"evaluation_dataset_versions",
+		"evaluation_cases",
+		"evaluation_plans",
+		"evaluation_runs",
+		"evaluation_samples",
+		"evaluation_assignments",
+		"evaluation_workers",
+		"evaluation_artifacts",
+		"evaluation_run_events",
+		"evaluation_budget_ledger",
+	} {
+		requireTable(t, tx, table)
+	}
 
 	// redeem_codes: subscription fields
 	requireColumn(t, tx, "redeem_codes", "group_id", "bigint", 0, true)
@@ -167,6 +185,116 @@ func TestMigrationsRunner_IsIdempotent_AndSchemaIsUpToDate(t *testing.T) {
 
 	// user_allowed_groups: created_at should be timestamptz
 	requireColumn(t, tx, "user_allowed_groups", "created_at", "timestamp with time zone", 0, false)
+}
+
+func TestRadarControlPlaneConstraints(t *testing.T) {
+	t.Run("terminal run cannot return to running", func(t *testing.T) {
+		tx := testTx(t)
+		fixture := insertRadarControlPlaneConstraintFixture(t, tx)
+		_, err := tx.ExecContext(context.Background(),
+			"UPDATE evaluation_runs SET status = 'running' WHERE id = $1", fixture.runID)
+		require.Error(t, err)
+	})
+
+	t.Run("negative plan budget is rejected", func(t *testing.T) {
+		tx := testTx(t)
+		fixture := insertRadarControlPlaneConstraintFixture(t, tx)
+		_, err := tx.ExecContext(context.Background(), `
+			INSERT INTO evaluation_plans (
+				id, name, dataset_version_id, trigger_type, model_matrix,
+				max_run_cost, daily_cost_limit, max_concurrency, created_by
+			) VALUES ($1, 'invalid-budget', $2, 'manual', '[]'::jsonb, -0.01, 1, 1, $3)`,
+			uuid.New(), fixture.datasetID, fixture.actorID)
+		require.Error(t, err)
+	})
+
+	t.Run("sample identity is unique within a run", func(t *testing.T) {
+		tx := testTx(t)
+		fixture := insertRadarControlPlaneConstraintFixture(t, tx)
+		_, err := tx.ExecContext(context.Background(), `
+			INSERT INTO evaluation_samples (
+				id, run_id, case_id, model_route, sample_index, priority, status, estimated_cost
+			) VALUES ($1, $2, $3, 'candidate', 0, 'P0', 'pending', 0.01)`,
+			uuid.New(), fixture.runID, fixture.caseID)
+		require.Error(t, err)
+	})
+
+	t.Run("unknown failure class is rejected", func(t *testing.T) {
+		tx := testTx(t)
+		fixture := insertRadarControlPlaneConstraintFixture(t, tx)
+		_, err := tx.ExecContext(context.Background(),
+			"UPDATE evaluation_samples SET failure_class = 'mystery_failure' WHERE id = $1", fixture.sampleID)
+		require.Error(t, err)
+	})
+}
+
+type radarControlPlaneConstraintFixture struct {
+	actorID   int64
+	datasetID uuid.UUID
+	caseID    uuid.UUID
+	runID     uuid.UUID
+	sampleID  uuid.UUID
+}
+
+func insertRadarControlPlaneConstraintFixture(t *testing.T, tx *sql.Tx) radarControlPlaneConstraintFixture {
+	t.Helper()
+	ctx := context.Background()
+	suffix := uuid.NewString()
+	fixture := radarControlPlaneConstraintFixture{
+		datasetID: uuid.New(),
+		caseID:    uuid.New(),
+		runID:     uuid.New(),
+		sampleID:  uuid.New(),
+	}
+	require.NoError(t, tx.QueryRowContext(ctx, `
+		INSERT INTO users (email, password_hash, role, balance, concurrency, status)
+		VALUES ($1, 'radar-control-plane-test', 'admin', 0, 1, 'active')
+		RETURNING id`, "radar-control-plane-"+suffix+"@example.com").Scan(&fixture.actorID))
+	require.NoError(t, execRadarFixtureSQL(ctx, tx, `
+		INSERT INTO evaluation_dataset_versions (
+			id, dataset_key, version, manifest_sha256, source_type, status, created_by, published_at
+		) VALUES ($1, $2, 'v1', $3, 'synthetic', 'published', $4, NOW())`,
+		fixture.datasetID, "radar-constraints-"+suffix, fmt.Sprintf("%064d", 1), fixture.actorID))
+	require.NoError(t, execRadarFixtureSQL(ctx, tx, `
+		INSERT INTO evaluation_cases (
+			id, dataset_version_id, case_key, capability_domain, priority, weight, sample_count,
+			prompt_spec, expected_spec, execution_spec, grader_id, grader_version,
+			content_sha256, confidentiality
+		) VALUES ($1, $2, 'case-1', 'protocol', 'P0', 1, 1,
+			'{}'::jsonb, '{}'::jsonb, '{}'::jsonb, 'exact', 'v1', $3, 'synthetic')`,
+		fixture.caseID, fixture.datasetID, fmt.Sprintf("%064d", 2)))
+	planID := uuid.New()
+	require.NoError(t, execRadarFixtureSQL(ctx, tx, `
+		INSERT INTO evaluation_plans (
+			id, name, dataset_version_id, trigger_type, model_matrix,
+			max_run_cost, daily_cost_limit, max_concurrency, created_by
+		) VALUES ($1, 'constraint-plan', $2, 'manual', '[]'::jsonb, 1, 2, 1, $3)`,
+		planID, fixture.datasetID, fixture.actorID))
+	require.NoError(t, execRadarFixtureSQL(ctx, tx, `
+		INSERT INTO evaluation_runs (
+			id, plan_id, trigger_source, baseline_ref, candidate_ref, status,
+			budget_limit, reserved_cost, actual_cost, created_by, finished_at
+		) VALUES ($1, $2, 'manual', '{}'::jsonb, '{}'::jsonb, 'completed',
+			1, 0.01, 0.01, $3, NOW())`, fixture.runID, planID, fixture.actorID))
+	require.NoError(t, execRadarFixtureSQL(ctx, tx, `
+		INSERT INTO evaluation_samples (
+			id, run_id, case_id, model_route, sample_index, priority, status, estimated_cost
+		) VALUES ($1, $2, $3, 'candidate', 0, 'P0', 'completed', 0.01)`,
+		fixture.sampleID, fixture.runID, fixture.caseID))
+	return fixture
+}
+
+func execRadarFixtureSQL(ctx context.Context, tx *sql.Tx, query string, args ...any) error {
+	_, err := tx.ExecContext(ctx, query, args...)
+	return err
+}
+
+func requireTable(t *testing.T, tx *sql.Tx, table string) {
+	t.Helper()
+	var regclass sql.NullString
+	require.NoError(t, tx.QueryRowContext(context.Background(),
+		"SELECT to_regclass('public.' || $1)", table).Scan(&regclass))
+	require.True(t, regclass.Valid, "expected table %s to exist", table)
 }
 
 func TestMigrationsRunner_AuthIdentityAndPaymentSchemaStayAligned(t *testing.T) {
