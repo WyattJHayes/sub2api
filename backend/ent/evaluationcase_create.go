@@ -457,60 +457,6 @@ type (
 	}
 )
 
-// SetPromptSpec sets the "prompt_spec" field.
-func (u *EvaluationCaseUpsert) SetPromptSpec(v map[string]interface{}) *EvaluationCaseUpsert {
-	u.Set(evaluationcase.FieldPromptSpec, v)
-	return u
-}
-
-// UpdatePromptSpec sets the "prompt_spec" field to the value that was provided on create.
-func (u *EvaluationCaseUpsert) UpdatePromptSpec() *EvaluationCaseUpsert {
-	u.SetExcluded(evaluationcase.FieldPromptSpec)
-	return u
-}
-
-// ClearPromptSpec clears the value of the "prompt_spec" field.
-func (u *EvaluationCaseUpsert) ClearPromptSpec() *EvaluationCaseUpsert {
-	u.SetNull(evaluationcase.FieldPromptSpec)
-	return u
-}
-
-// SetExpectedSpec sets the "expected_spec" field.
-func (u *EvaluationCaseUpsert) SetExpectedSpec(v map[string]interface{}) *EvaluationCaseUpsert {
-	u.Set(evaluationcase.FieldExpectedSpec, v)
-	return u
-}
-
-// UpdateExpectedSpec sets the "expected_spec" field to the value that was provided on create.
-func (u *EvaluationCaseUpsert) UpdateExpectedSpec() *EvaluationCaseUpsert {
-	u.SetExcluded(evaluationcase.FieldExpectedSpec)
-	return u
-}
-
-// ClearExpectedSpec clears the value of the "expected_spec" field.
-func (u *EvaluationCaseUpsert) ClearExpectedSpec() *EvaluationCaseUpsert {
-	u.SetNull(evaluationcase.FieldExpectedSpec)
-	return u
-}
-
-// SetEncryptedSpec sets the "encrypted_spec" field.
-func (u *EvaluationCaseUpsert) SetEncryptedSpec(v string) *EvaluationCaseUpsert {
-	u.Set(evaluationcase.FieldEncryptedSpec, v)
-	return u
-}
-
-// UpdateEncryptedSpec sets the "encrypted_spec" field to the value that was provided on create.
-func (u *EvaluationCaseUpsert) UpdateEncryptedSpec() *EvaluationCaseUpsert {
-	u.SetExcluded(evaluationcase.FieldEncryptedSpec)
-	return u
-}
-
-// ClearEncryptedSpec clears the value of the "encrypted_spec" field.
-func (u *EvaluationCaseUpsert) ClearEncryptedSpec() *EvaluationCaseUpsert {
-	u.SetNull(evaluationcase.FieldEncryptedSpec)
-	return u
-}
-
 // UpdateNewValues updates the mutable fields using the new values that were set on create except the ID field.
 // Using this option is equivalent to using:
 //
@@ -545,6 +491,15 @@ func (u *EvaluationCaseUpsertOne) UpdateNewValues() *EvaluationCaseUpsertOne {
 		}
 		if _, exists := u.create.mutation.SampleCount(); exists {
 			s.SetIgnore(evaluationcase.FieldSampleCount)
+		}
+		if _, exists := u.create.mutation.PromptSpec(); exists {
+			s.SetIgnore(evaluationcase.FieldPromptSpec)
+		}
+		if _, exists := u.create.mutation.ExpectedSpec(); exists {
+			s.SetIgnore(evaluationcase.FieldExpectedSpec)
+		}
+		if _, exists := u.create.mutation.EncryptedSpec(); exists {
+			s.SetIgnore(evaluationcase.FieldEncryptedSpec)
 		}
 		if _, exists := u.create.mutation.ExecutionSpec(); exists {
 			s.SetIgnore(evaluationcase.FieldExecutionSpec)
@@ -596,69 +551,6 @@ func (u *EvaluationCaseUpsertOne) Update(set func(*EvaluationCaseUpsert)) *Evalu
 		set(&EvaluationCaseUpsert{UpdateSet: update})
 	}))
 	return u
-}
-
-// SetPromptSpec sets the "prompt_spec" field.
-func (u *EvaluationCaseUpsertOne) SetPromptSpec(v map[string]interface{}) *EvaluationCaseUpsertOne {
-	return u.Update(func(s *EvaluationCaseUpsert) {
-		s.SetPromptSpec(v)
-	})
-}
-
-// UpdatePromptSpec sets the "prompt_spec" field to the value that was provided on create.
-func (u *EvaluationCaseUpsertOne) UpdatePromptSpec() *EvaluationCaseUpsertOne {
-	return u.Update(func(s *EvaluationCaseUpsert) {
-		s.UpdatePromptSpec()
-	})
-}
-
-// ClearPromptSpec clears the value of the "prompt_spec" field.
-func (u *EvaluationCaseUpsertOne) ClearPromptSpec() *EvaluationCaseUpsertOne {
-	return u.Update(func(s *EvaluationCaseUpsert) {
-		s.ClearPromptSpec()
-	})
-}
-
-// SetExpectedSpec sets the "expected_spec" field.
-func (u *EvaluationCaseUpsertOne) SetExpectedSpec(v map[string]interface{}) *EvaluationCaseUpsertOne {
-	return u.Update(func(s *EvaluationCaseUpsert) {
-		s.SetExpectedSpec(v)
-	})
-}
-
-// UpdateExpectedSpec sets the "expected_spec" field to the value that was provided on create.
-func (u *EvaluationCaseUpsertOne) UpdateExpectedSpec() *EvaluationCaseUpsertOne {
-	return u.Update(func(s *EvaluationCaseUpsert) {
-		s.UpdateExpectedSpec()
-	})
-}
-
-// ClearExpectedSpec clears the value of the "expected_spec" field.
-func (u *EvaluationCaseUpsertOne) ClearExpectedSpec() *EvaluationCaseUpsertOne {
-	return u.Update(func(s *EvaluationCaseUpsert) {
-		s.ClearExpectedSpec()
-	})
-}
-
-// SetEncryptedSpec sets the "encrypted_spec" field.
-func (u *EvaluationCaseUpsertOne) SetEncryptedSpec(v string) *EvaluationCaseUpsertOne {
-	return u.Update(func(s *EvaluationCaseUpsert) {
-		s.SetEncryptedSpec(v)
-	})
-}
-
-// UpdateEncryptedSpec sets the "encrypted_spec" field to the value that was provided on create.
-func (u *EvaluationCaseUpsertOne) UpdateEncryptedSpec() *EvaluationCaseUpsertOne {
-	return u.Update(func(s *EvaluationCaseUpsert) {
-		s.UpdateEncryptedSpec()
-	})
-}
-
-// ClearEncryptedSpec clears the value of the "encrypted_spec" field.
-func (u *EvaluationCaseUpsertOne) ClearEncryptedSpec() *EvaluationCaseUpsertOne {
-	return u.Update(func(s *EvaluationCaseUpsert) {
-		s.ClearEncryptedSpec()
-	})
 }
 
 // Exec executes the query.
@@ -862,6 +754,15 @@ func (u *EvaluationCaseUpsertBulk) UpdateNewValues() *EvaluationCaseUpsertBulk {
 			if _, exists := b.mutation.SampleCount(); exists {
 				s.SetIgnore(evaluationcase.FieldSampleCount)
 			}
+			if _, exists := b.mutation.PromptSpec(); exists {
+				s.SetIgnore(evaluationcase.FieldPromptSpec)
+			}
+			if _, exists := b.mutation.ExpectedSpec(); exists {
+				s.SetIgnore(evaluationcase.FieldExpectedSpec)
+			}
+			if _, exists := b.mutation.EncryptedSpec(); exists {
+				s.SetIgnore(evaluationcase.FieldEncryptedSpec)
+			}
 			if _, exists := b.mutation.ExecutionSpec(); exists {
 				s.SetIgnore(evaluationcase.FieldExecutionSpec)
 			}
@@ -913,69 +814,6 @@ func (u *EvaluationCaseUpsertBulk) Update(set func(*EvaluationCaseUpsert)) *Eval
 		set(&EvaluationCaseUpsert{UpdateSet: update})
 	}))
 	return u
-}
-
-// SetPromptSpec sets the "prompt_spec" field.
-func (u *EvaluationCaseUpsertBulk) SetPromptSpec(v map[string]interface{}) *EvaluationCaseUpsertBulk {
-	return u.Update(func(s *EvaluationCaseUpsert) {
-		s.SetPromptSpec(v)
-	})
-}
-
-// UpdatePromptSpec sets the "prompt_spec" field to the value that was provided on create.
-func (u *EvaluationCaseUpsertBulk) UpdatePromptSpec() *EvaluationCaseUpsertBulk {
-	return u.Update(func(s *EvaluationCaseUpsert) {
-		s.UpdatePromptSpec()
-	})
-}
-
-// ClearPromptSpec clears the value of the "prompt_spec" field.
-func (u *EvaluationCaseUpsertBulk) ClearPromptSpec() *EvaluationCaseUpsertBulk {
-	return u.Update(func(s *EvaluationCaseUpsert) {
-		s.ClearPromptSpec()
-	})
-}
-
-// SetExpectedSpec sets the "expected_spec" field.
-func (u *EvaluationCaseUpsertBulk) SetExpectedSpec(v map[string]interface{}) *EvaluationCaseUpsertBulk {
-	return u.Update(func(s *EvaluationCaseUpsert) {
-		s.SetExpectedSpec(v)
-	})
-}
-
-// UpdateExpectedSpec sets the "expected_spec" field to the value that was provided on create.
-func (u *EvaluationCaseUpsertBulk) UpdateExpectedSpec() *EvaluationCaseUpsertBulk {
-	return u.Update(func(s *EvaluationCaseUpsert) {
-		s.UpdateExpectedSpec()
-	})
-}
-
-// ClearExpectedSpec clears the value of the "expected_spec" field.
-func (u *EvaluationCaseUpsertBulk) ClearExpectedSpec() *EvaluationCaseUpsertBulk {
-	return u.Update(func(s *EvaluationCaseUpsert) {
-		s.ClearExpectedSpec()
-	})
-}
-
-// SetEncryptedSpec sets the "encrypted_spec" field.
-func (u *EvaluationCaseUpsertBulk) SetEncryptedSpec(v string) *EvaluationCaseUpsertBulk {
-	return u.Update(func(s *EvaluationCaseUpsert) {
-		s.SetEncryptedSpec(v)
-	})
-}
-
-// UpdateEncryptedSpec sets the "encrypted_spec" field to the value that was provided on create.
-func (u *EvaluationCaseUpsertBulk) UpdateEncryptedSpec() *EvaluationCaseUpsertBulk {
-	return u.Update(func(s *EvaluationCaseUpsert) {
-		s.UpdateEncryptedSpec()
-	})
-}
-
-// ClearEncryptedSpec clears the value of the "encrypted_spec" field.
-func (u *EvaluationCaseUpsertBulk) ClearEncryptedSpec() *EvaluationCaseUpsertBulk {
-	return u.Update(func(s *EvaluationCaseUpsert) {
-		s.ClearEncryptedSpec()
-	})
 }
 
 // Exec executes the query.

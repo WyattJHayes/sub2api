@@ -209,6 +209,97 @@ CREATE INDEX IF NOT EXISTS idx_evaluation_run_events_run_created
 CREATE INDEX IF NOT EXISTS idx_evaluation_budget_ledger_run_created
     ON evaluation_budget_ledger (run_id, created_at);
 
+CREATE OR REPLACE FUNCTION enforce_evaluation_dataset_version_lifecycle()
+RETURNS TRIGGER AS $$
+BEGIN
+    IF TG_OP = 'DELETE' THEN
+        IF OLD.status IN ('published', 'retired') THEN
+            RAISE EXCEPTION 'published evaluation dataset version % cannot be deleted', OLD.id;
+        END IF;
+        RETURN OLD;
+    END IF;
+
+    IF TG_OP = 'UPDATE' AND OLD.status IN ('published', 'retired') THEN
+        IF OLD.status = 'published'
+            AND NEW.status = 'retired'
+            AND NEW.retired_at IS NOT NULL
+            AND NEW.id IS NOT DISTINCT FROM OLD.id
+            AND NEW.dataset_key IS NOT DISTINCT FROM OLD.dataset_key
+            AND NEW.version IS NOT DISTINCT FROM OLD.version
+            AND NEW.manifest_sha256 IS NOT DISTINCT FROM OLD.manifest_sha256
+            AND NEW.source_type IS NOT DISTINCT FROM OLD.source_type
+            AND NEW.created_by IS NOT DISTINCT FROM OLD.created_by
+            AND NEW.published_at IS NOT DISTINCT FROM OLD.published_at
+            AND NEW.created_at IS NOT DISTINCT FROM OLD.created_at THEN
+            RETURN NEW;
+        END IF;
+
+        RAISE EXCEPTION 'published evaluation dataset version % is immutable', OLD.id;
+    END IF;
+
+    IF NEW.status = 'published' THEN
+        IF NEW.source_type NOT IN ('public', 'synthetic') THEN
+            RAISE EXCEPTION 'evaluation dataset version % with source type % cannot be published', NEW.id, NEW.source_type;
+        END IF;
+
+        IF EXISTS (
+            SELECT 1
+            FROM evaluation_cases
+            WHERE dataset_version_id = NEW.id
+              AND confidentiality NOT IN ('public', 'synthetic')
+        ) THEN
+            RAISE EXCEPTION 'evaluation dataset version % contains cases outside P1 provenance', NEW.id;
+        END IF;
+    END IF;
+
+    RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+DROP TRIGGER IF EXISTS trg_evaluation_dataset_versions_lifecycle ON evaluation_dataset_versions;
+CREATE TRIGGER trg_evaluation_dataset_versions_lifecycle
+    BEFORE INSERT OR UPDATE OR DELETE ON evaluation_dataset_versions
+    FOR EACH ROW EXECUTE FUNCTION enforce_evaluation_dataset_version_lifecycle();
+
+CREATE OR REPLACE FUNCTION enforce_evaluation_case_dataset_lifecycle()
+RETURNS TRIGGER AS $$
+DECLARE
+    parent_status VARCHAR(20);
+BEGIN
+    IF TG_OP IN ('UPDATE', 'DELETE') THEN
+        SELECT status INTO parent_status
+        FROM evaluation_dataset_versions
+        WHERE id = OLD.dataset_version_id
+        FOR SHARE;
+
+        IF parent_status IS DISTINCT FROM 'draft' THEN
+            RAISE EXCEPTION 'cases in evaluation dataset version % cannot be changed after publication', OLD.dataset_version_id;
+        END IF;
+    END IF;
+
+    IF TG_OP IN ('INSERT', 'UPDATE') THEN
+        SELECT status INTO parent_status
+        FROM evaluation_dataset_versions
+        WHERE id = NEW.dataset_version_id
+        FOR SHARE;
+
+        IF parent_status IS DISTINCT FROM 'draft' THEN
+            RAISE EXCEPTION 'cases cannot be added to evaluation dataset version % after publication', NEW.dataset_version_id;
+        END IF;
+    END IF;
+
+    IF TG_OP = 'DELETE' THEN
+        RETURN OLD;
+    END IF;
+    RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+DROP TRIGGER IF EXISTS trg_evaluation_cases_dataset_lifecycle ON evaluation_cases;
+CREATE TRIGGER trg_evaluation_cases_dataset_lifecycle
+    BEFORE INSERT OR UPDATE OR DELETE ON evaluation_cases
+    FOR EACH ROW EXECUTE FUNCTION enforce_evaluation_case_dataset_lifecycle();
+
 CREATE OR REPLACE FUNCTION prevent_terminal_evaluation_run_reopen()
 RETURNS TRIGGER AS $$
 BEGIN
@@ -223,4 +314,3 @@ DROP TRIGGER IF EXISTS trg_evaluation_runs_terminal_status ON evaluation_runs;
 CREATE TRIGGER trg_evaluation_runs_terminal_status
     BEFORE UPDATE OF status ON evaluation_runs
     FOR EACH ROW EXECUTE FUNCTION prevent_terminal_evaluation_run_reopen();
-

@@ -958,6 +958,13 @@ var (
 		Name:       "evaluation_dataset_versions",
 		Columns:    EvaluationDatasetVersionsColumns,
 		PrimaryKey: []*schema.Column{EvaluationDatasetVersionsColumns[0]},
+		Indexes: []*schema.Index{
+			{
+				Name:    "evaluationdatasetversion_dataset_key_version",
+				Unique:  true,
+				Columns: []*schema.Column{EvaluationDatasetVersionsColumns[1], EvaluationDatasetVersionsColumns[2]},
+			},
+		},
 	}
 	// EvaluationPlansColumns holds the columns for the "evaluation_plans" table.
 	EvaluationPlansColumns = []*schema.Column{

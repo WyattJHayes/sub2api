@@ -188,6 +188,87 @@ func TestMigrationsRunner_IsIdempotent_AndSchemaIsUpToDate(t *testing.T) {
 }
 
 func TestRadarControlPlaneConstraints(t *testing.T) {
+	t.Run("published dataset content cannot be updated", func(t *testing.T) {
+		tx := testTx(t)
+		fixture := insertRadarControlPlaneConstraintFixture(t, tx)
+		_, err := tx.ExecContext(context.Background(), `
+			UPDATE evaluation_dataset_versions
+			SET manifest_sha256 = $1
+			WHERE id = $2`, fmt.Sprintf("%064d", 3), fixture.datasetID)
+		require.Error(t, err)
+	})
+
+	t.Run("published dataset cannot be deleted", func(t *testing.T) {
+		tx := testTx(t)
+		fixture := insertRadarDatasetFixture(t, tx, "synthetic")
+		require.NoError(t, execRadarFixtureSQL(context.Background(), tx, `
+			UPDATE evaluation_dataset_versions
+			SET status = 'published', published_at = NOW()
+			WHERE id = $1`, fixture.datasetID))
+		_, err := tx.ExecContext(context.Background(),
+			"DELETE FROM evaluation_dataset_versions WHERE id = $1", fixture.datasetID)
+		require.Error(t, err)
+	})
+
+	t.Run("case cannot be added after publication", func(t *testing.T) {
+		tx := testTx(t)
+		fixture := insertRadarControlPlaneConstraintFixture(t, tx)
+		_, err := tx.ExecContext(context.Background(), `
+			INSERT INTO evaluation_cases (
+				id, dataset_version_id, case_key, capability_domain, priority, weight, sample_count,
+				prompt_spec, expected_spec, execution_spec, grader_id, grader_version,
+				content_sha256, confidentiality
+			) VALUES ($1, $2, 'late-case', 'protocol', 'P0', 1, 1,
+				'{}'::jsonb, '{}'::jsonb, '{}'::jsonb, 'exact', 'v1', $3, 'synthetic')`,
+			uuid.New(), fixture.datasetID, fmt.Sprintf("%064d", 3))
+		require.Error(t, err)
+	})
+
+	t.Run("published case payload cannot be updated", func(t *testing.T) {
+		tx := testTx(t)
+		fixture := insertRadarControlPlaneConstraintFixture(t, tx)
+		_, err := tx.ExecContext(context.Background(), `
+			UPDATE evaluation_cases
+			SET prompt_spec = '{"changed":true}'::jsonb
+			WHERE id = $1`, fixture.caseID)
+		require.Error(t, err)
+	})
+
+	t.Run("published case cannot be deleted", func(t *testing.T) {
+		tx := testTx(t)
+		fixture := insertRadarPublishedDatasetWithCaseFixture(t, tx)
+		_, err := tx.ExecContext(context.Background(),
+			"DELETE FROM evaluation_cases WHERE id = $1", fixture.caseID)
+		require.Error(t, err)
+	})
+
+	t.Run("imported dataset cannot be published", func(t *testing.T) {
+		tx := testTx(t)
+		fixture := insertRadarDatasetFixture(t, tx, "imported")
+		_, err := tx.ExecContext(context.Background(), `
+			UPDATE evaluation_dataset_versions
+			SET status = 'published', published_at = NOW()
+			WHERE id = $1`, fixture.datasetID)
+		require.Error(t, err)
+	})
+
+	t.Run("dataset with restricted case cannot be published", func(t *testing.T) {
+		tx := testTx(t)
+		fixture := insertRadarDatasetFixture(t, tx, "synthetic")
+		require.NoError(t, execRadarFixtureSQL(context.Background(), tx, `
+			INSERT INTO evaluation_cases (
+				id, dataset_version_id, case_key, capability_domain, priority, weight, sample_count,
+				encrypted_spec, execution_spec, grader_id, grader_version, content_sha256, confidentiality
+			) VALUES ($1, $2, 'restricted-case', 'safety', 'P0', 1, 1,
+				'encrypted', '{}'::jsonb, 'exact', 'v1', $3, 'restricted')`,
+			uuid.New(), fixture.datasetID, fmt.Sprintf("%064d", 2)))
+		_, err := tx.ExecContext(context.Background(), `
+			UPDATE evaluation_dataset_versions
+			SET status = 'published', published_at = NOW()
+			WHERE id = $1`, fixture.datasetID)
+		require.Error(t, err)
+	})
+
 	t.Run("terminal run cannot return to running", func(t *testing.T) {
 		tx := testTx(t)
 		fixture := insertRadarControlPlaneConstraintFixture(t, tx)
@@ -239,30 +320,9 @@ type radarControlPlaneConstraintFixture struct {
 func insertRadarControlPlaneConstraintFixture(t *testing.T, tx *sql.Tx) radarControlPlaneConstraintFixture {
 	t.Helper()
 	ctx := context.Background()
-	suffix := uuid.NewString()
-	fixture := radarControlPlaneConstraintFixture{
-		datasetID: uuid.New(),
-		caseID:    uuid.New(),
-		runID:     uuid.New(),
-		sampleID:  uuid.New(),
-	}
-	require.NoError(t, tx.QueryRowContext(ctx, `
-		INSERT INTO users (email, password_hash, role, balance, concurrency, status)
-		VALUES ($1, 'radar-control-plane-test', 'admin', 0, 1, 'active')
-		RETURNING id`, "radar-control-plane-"+suffix+"@example.com").Scan(&fixture.actorID))
-	require.NoError(t, execRadarFixtureSQL(ctx, tx, `
-		INSERT INTO evaluation_dataset_versions (
-			id, dataset_key, version, manifest_sha256, source_type, status, created_by, published_at
-		) VALUES ($1, $2, 'v1', $3, 'synthetic', 'published', $4, NOW())`,
-		fixture.datasetID, "radar-constraints-"+suffix, fmt.Sprintf("%064d", 1), fixture.actorID))
-	require.NoError(t, execRadarFixtureSQL(ctx, tx, `
-		INSERT INTO evaluation_cases (
-			id, dataset_version_id, case_key, capability_domain, priority, weight, sample_count,
-			prompt_spec, expected_spec, execution_spec, grader_id, grader_version,
-			content_sha256, confidentiality
-		) VALUES ($1, $2, 'case-1', 'protocol', 'P0', 1, 1,
-			'{}'::jsonb, '{}'::jsonb, '{}'::jsonb, 'exact', 'v1', $3, 'synthetic')`,
-		fixture.caseID, fixture.datasetID, fmt.Sprintf("%064d", 2)))
+	fixture := insertRadarPublishedDatasetWithCaseFixture(t, tx)
+	fixture.runID = uuid.New()
+	fixture.sampleID = uuid.New()
 	planID := uuid.New()
 	require.NoError(t, execRadarFixtureSQL(ctx, tx, `
 		INSERT INTO evaluation_plans (
@@ -281,6 +341,48 @@ func insertRadarControlPlaneConstraintFixture(t *testing.T, tx *sql.Tx) radarCon
 			id, run_id, case_id, model_route, sample_index, priority, status, estimated_cost
 		) VALUES ($1, $2, $3, 'candidate', 0, 'P0', 'completed', 0.01)`,
 		fixture.sampleID, fixture.runID, fixture.caseID))
+	return fixture
+}
+
+func insertRadarPublishedDatasetWithCaseFixture(t *testing.T, tx *sql.Tx) radarControlPlaneConstraintFixture {
+	t.Helper()
+	ctx := context.Background()
+	fixture := insertRadarDatasetFixture(t, tx, "synthetic")
+	fixture.caseID = uuid.New()
+	require.NoError(t, execRadarFixtureSQL(ctx, tx, `
+		INSERT INTO evaluation_cases (
+			id, dataset_version_id, case_key, capability_domain, priority, weight, sample_count,
+			prompt_spec, expected_spec, execution_spec, grader_id, grader_version,
+			content_sha256, confidentiality
+		) VALUES ($1, $2, 'case-1', 'protocol', 'P0', 1, 1,
+			'{}'::jsonb, '{}'::jsonb, '{}'::jsonb, 'exact', 'v1', $3, 'synthetic')`,
+		fixture.caseID, fixture.datasetID, fmt.Sprintf("%064d", 2)))
+	require.NoError(t, execRadarFixtureSQL(ctx, tx, `
+		UPDATE evaluation_dataset_versions
+		SET status = 'published', published_at = NOW()
+		WHERE id = $1`, fixture.datasetID))
+	return fixture
+}
+
+func insertRadarDatasetFixture(t *testing.T, tx *sql.Tx, sourceType string) radarControlPlaneConstraintFixture {
+	t.Helper()
+	ctx := context.Background()
+	suffix := uuid.NewString()
+	fixture := radarControlPlaneConstraintFixture{
+		datasetID: uuid.New(),
+		caseID:    uuid.New(),
+		runID:     uuid.New(),
+		sampleID:  uuid.New(),
+	}
+	require.NoError(t, tx.QueryRowContext(ctx, `
+		INSERT INTO users (email, password_hash, role, balance, concurrency, status)
+		VALUES ($1, 'radar-control-plane-test', 'admin', 0, 1, 'active')
+		RETURNING id`, "radar-control-plane-"+suffix+"@example.com").Scan(&fixture.actorID))
+	require.NoError(t, execRadarFixtureSQL(ctx, tx, `
+		INSERT INTO evaluation_dataset_versions (
+			id, dataset_key, version, manifest_sha256, source_type, status, created_by
+		) VALUES ($1, $2, 'v1', $3, $4, 'draft', $5)`,
+		fixture.datasetID, "radar-constraints-"+suffix, fmt.Sprintf("%064d", 1), sourceType, fixture.actorID))
 	return fixture
 }
 

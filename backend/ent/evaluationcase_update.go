@@ -27,50 +27,6 @@ func (_u *EvaluationCaseUpdate) Where(ps ...predicate.EvaluationCase) *Evaluatio
 	return _u
 }
 
-// SetPromptSpec sets the "prompt_spec" field.
-func (_u *EvaluationCaseUpdate) SetPromptSpec(v map[string]interface{}) *EvaluationCaseUpdate {
-	_u.mutation.SetPromptSpec(v)
-	return _u
-}
-
-// ClearPromptSpec clears the value of the "prompt_spec" field.
-func (_u *EvaluationCaseUpdate) ClearPromptSpec() *EvaluationCaseUpdate {
-	_u.mutation.ClearPromptSpec()
-	return _u
-}
-
-// SetExpectedSpec sets the "expected_spec" field.
-func (_u *EvaluationCaseUpdate) SetExpectedSpec(v map[string]interface{}) *EvaluationCaseUpdate {
-	_u.mutation.SetExpectedSpec(v)
-	return _u
-}
-
-// ClearExpectedSpec clears the value of the "expected_spec" field.
-func (_u *EvaluationCaseUpdate) ClearExpectedSpec() *EvaluationCaseUpdate {
-	_u.mutation.ClearExpectedSpec()
-	return _u
-}
-
-// SetEncryptedSpec sets the "encrypted_spec" field.
-func (_u *EvaluationCaseUpdate) SetEncryptedSpec(v string) *EvaluationCaseUpdate {
-	_u.mutation.SetEncryptedSpec(v)
-	return _u
-}
-
-// SetNillableEncryptedSpec sets the "encrypted_spec" field if the given value is not nil.
-func (_u *EvaluationCaseUpdate) SetNillableEncryptedSpec(v *string) *EvaluationCaseUpdate {
-	if v != nil {
-		_u.SetEncryptedSpec(*v)
-	}
-	return _u
-}
-
-// ClearEncryptedSpec clears the value of the "encrypted_spec" field.
-func (_u *EvaluationCaseUpdate) ClearEncryptedSpec() *EvaluationCaseUpdate {
-	_u.mutation.ClearEncryptedSpec()
-	return _u
-}
-
 // Mutation returns the EvaluationCaseMutation object of the builder.
 func (_u *EvaluationCaseUpdate) Mutation() *EvaluationCaseMutation {
 	return _u.mutation
@@ -123,20 +79,11 @@ func (_u *EvaluationCaseUpdate) sqlSave(ctx context.Context) (_node int, err err
 			}
 		}
 	}
-	if value, ok := _u.mutation.PromptSpec(); ok {
-		_spec.SetField(evaluationcase.FieldPromptSpec, field.TypeJSON, value)
-	}
 	if _u.mutation.PromptSpecCleared() {
 		_spec.ClearField(evaluationcase.FieldPromptSpec, field.TypeJSON)
 	}
-	if value, ok := _u.mutation.ExpectedSpec(); ok {
-		_spec.SetField(evaluationcase.FieldExpectedSpec, field.TypeJSON, value)
-	}
 	if _u.mutation.ExpectedSpecCleared() {
 		_spec.ClearField(evaluationcase.FieldExpectedSpec, field.TypeJSON)
-	}
-	if value, ok := _u.mutation.EncryptedSpec(); ok {
-		_spec.SetField(evaluationcase.FieldEncryptedSpec, field.TypeString, value)
 	}
 	if _u.mutation.EncryptedSpecCleared() {
 		_spec.ClearField(evaluationcase.FieldEncryptedSpec, field.TypeString)
@@ -159,50 +106,6 @@ type EvaluationCaseUpdateOne struct {
 	fields   []string
 	hooks    []Hook
 	mutation *EvaluationCaseMutation
-}
-
-// SetPromptSpec sets the "prompt_spec" field.
-func (_u *EvaluationCaseUpdateOne) SetPromptSpec(v map[string]interface{}) *EvaluationCaseUpdateOne {
-	_u.mutation.SetPromptSpec(v)
-	return _u
-}
-
-// ClearPromptSpec clears the value of the "prompt_spec" field.
-func (_u *EvaluationCaseUpdateOne) ClearPromptSpec() *EvaluationCaseUpdateOne {
-	_u.mutation.ClearPromptSpec()
-	return _u
-}
-
-// SetExpectedSpec sets the "expected_spec" field.
-func (_u *EvaluationCaseUpdateOne) SetExpectedSpec(v map[string]interface{}) *EvaluationCaseUpdateOne {
-	_u.mutation.SetExpectedSpec(v)
-	return _u
-}
-
-// ClearExpectedSpec clears the value of the "expected_spec" field.
-func (_u *EvaluationCaseUpdateOne) ClearExpectedSpec() *EvaluationCaseUpdateOne {
-	_u.mutation.ClearExpectedSpec()
-	return _u
-}
-
-// SetEncryptedSpec sets the "encrypted_spec" field.
-func (_u *EvaluationCaseUpdateOne) SetEncryptedSpec(v string) *EvaluationCaseUpdateOne {
-	_u.mutation.SetEncryptedSpec(v)
-	return _u
-}
-
-// SetNillableEncryptedSpec sets the "encrypted_spec" field if the given value is not nil.
-func (_u *EvaluationCaseUpdateOne) SetNillableEncryptedSpec(v *string) *EvaluationCaseUpdateOne {
-	if v != nil {
-		_u.SetEncryptedSpec(*v)
-	}
-	return _u
-}
-
-// ClearEncryptedSpec clears the value of the "encrypted_spec" field.
-func (_u *EvaluationCaseUpdateOne) ClearEncryptedSpec() *EvaluationCaseUpdateOne {
-	_u.mutation.ClearEncryptedSpec()
-	return _u
 }
 
 // Mutation returns the EvaluationCaseMutation object of the builder.
@@ -287,20 +190,11 @@ func (_u *EvaluationCaseUpdateOne) sqlSave(ctx context.Context) (_node *Evaluati
 			}
 		}
 	}
-	if value, ok := _u.mutation.PromptSpec(); ok {
-		_spec.SetField(evaluationcase.FieldPromptSpec, field.TypeJSON, value)
-	}
 	if _u.mutation.PromptSpecCleared() {
 		_spec.ClearField(evaluationcase.FieldPromptSpec, field.TypeJSON)
 	}
-	if value, ok := _u.mutation.ExpectedSpec(); ok {
-		_spec.SetField(evaluationcase.FieldExpectedSpec, field.TypeJSON, value)
-	}
 	if _u.mutation.ExpectedSpecCleared() {
 		_spec.ClearField(evaluationcase.FieldExpectedSpec, field.TypeJSON)
-	}
-	if value, ok := _u.mutation.EncryptedSpec(); ok {
-		_spec.SetField(evaluationcase.FieldEncryptedSpec, field.TypeString, value)
 	}
 	if _u.mutation.EncryptedSpecCleared() {
 		_spec.ClearField(evaluationcase.FieldEncryptedSpec, field.TypeString)
