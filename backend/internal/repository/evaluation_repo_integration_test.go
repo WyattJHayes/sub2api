@@ -153,6 +153,36 @@ func TestEvaluationRepository_EmptyCapabilitiesCannotClaim(t *testing.T) {
 	require.Zero(t, leased)
 }
 
+func TestEvaluationRepository_EmptyCapabilitiesCannotReclaimExpired(t *testing.T) {
+	ctx := context.Background()
+	fixture := createEvaluationRepositoryFixture(t, 1, []string{"route-a"}, 1)
+	repo := NewEvaluationRepository(integrationDB)
+	_, err := repo.CreateRunWithMatrix(ctx, service.CreateRunInput{
+		PlanID:        fixture.planID,
+		TriggerSource: "manual",
+		BaselineRef:   map[string]any{"revision": "baseline-1"},
+		CandidateRef:  map[string]any{"revision": "candidate-1"},
+		CreatedBy:     fixture.userID,
+	})
+	require.NoError(t, err)
+
+	old, err := repo.ClaimAssignment(ctx, fixture.workerIDs[0], []string{"coding"}, time.Minute)
+	require.NoError(t, err)
+	require.NotNil(t, old)
+	_, err = integrationDB.ExecContext(ctx,
+		"UPDATE evaluation_assignments SET lease_expires_at = NOW() - INTERVAL '1 second' WHERE id = $1", old.ID)
+	require.NoError(t, err)
+
+	fresh, err := repo.ClaimAssignment(ctx, fixture.workerIDs[1], []string{}, time.Minute)
+	require.NoError(t, err)
+	require.Nil(t, fresh)
+
+	var attempts int
+	require.NoError(t, integrationDB.QueryRowContext(ctx,
+		`SELECT COUNT(*) FROM evaluation_assignments WHERE sample_id = $1`, old.SampleID).Scan(&attempts))
+	require.Equal(t, 1, attempts)
+}
+
 type evaluationRepositoryFixture struct {
 	userID    int64
 	datasetID uuid.UUID
