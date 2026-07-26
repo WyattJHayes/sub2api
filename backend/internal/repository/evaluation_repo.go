@@ -64,7 +64,7 @@ func (r *evaluationRepository) CreateRunWithMatrix(ctx context.Context, input se
 		return nil, fmt.Errorf("evaluation dataset for plan %s is not published", input.PlanID)
 	}
 
-	routes, err := matrixRoutes(matrixJSON)
+	matrix, err := evaluationMatrixEntries(matrixJSON)
 	if err != nil {
 		return nil, err
 	}
@@ -78,7 +78,7 @@ func (r *evaluationRepository) CreateRunWithMatrix(ctx context.Context, input se
 
 	totalReservation := decimal.Zero
 	for _, evaluationCase := range cases {
-		multiplicity := int64(len(routes) * 2 * evaluationCase.sampleCount)
+		multiplicity := int64(len(matrix) * 2 * evaluationCase.sampleCount)
 		totalReservation = totalReservation.Add(evaluationCase.estimatedCost.Mul(decimal.NewFromInt(multiplicity)))
 	}
 	if totalReservation.GreaterThan(budgetLimit) {
@@ -100,24 +100,29 @@ func (r *evaluationRepository) CreateRunWithMatrix(ctx context.Context, input se
 		BudgetLimit:  budgetLimit,
 		ReservedCost: totalReservation,
 	}
+	if totalReservation.Equal(budgetLimit) {
+		run.Status = service.RunStatusBudgetPaused
+	}
 	err = tx.QueryRowContext(ctx, `
 		INSERT INTO evaluation_runs (
 			id, plan_id, trigger_source, baseline_ref, candidate_ref, status,
 			budget_limit, reserved_cost, created_by
-		) VALUES ($1, $2, $3, $4::jsonb, $5::jsonb, 'pending', $6, $7, NULLIF($8, 0))
+		) VALUES ($1, $2, $3, $4::jsonb, $5::jsonb, $6, $7, $8, NULLIF($9, 0))
 		RETURNING created_at`,
 		run.ID, run.PlanID, input.TriggerSource, baselineRef, candidateRef,
-		run.BudgetLimit, run.ReservedCost, input.CreatedBy).Scan(&run.CreatedAt)
+		run.Status, run.BudgetLimit, run.ReservedCost, input.CreatedBy).Scan(&run.CreatedAt)
 	if err != nil {
 		return nil, fmt.Errorf("insert evaluation run: %w", err)
 	}
 
 	for _, evaluationCase := range cases {
-		for _, route := range routes {
+		for _, matrixEntry := range matrix {
 			for _, side := range []string{"baseline", "candidate"} {
-				modelRoute := side + ":" + route
+				modelRoute := side + ":" + matrixEntry.route
 				for sampleIndex := 0; sampleIndex < evaluationCase.sampleCount; sampleIndex++ {
-					if err := insertEvaluationSampleAndAssignment(ctx, tx, run.ID, evaluationCase, modelRoute, sampleIndex); err != nil {
+					if err := insertEvaluationSampleAndAssignment(
+						ctx, tx, run.ID, evaluationCase, modelRoute, matrixEntry, sampleIndex,
+					); err != nil {
 						return nil, err
 					}
 				}
@@ -130,6 +135,12 @@ func (r *evaluationRepository) CreateRunWithMatrix(ctx context.Context, input se
 		VALUES ($1, $2, 'run_created', '{}'::jsonb, 'user', NULLIF($3, ''))`,
 		uuid.New(), run.ID, strconvFormatInt(input.CreatedBy)); err != nil {
 		return nil, fmt.Errorf("insert run created event: %w", err)
+	}
+	warningThreshold := budgetLimit.Mul(decimal.NewFromInt(8)).Div(decimal.NewFromInt(10))
+	if !totalReservation.LessThan(warningThreshold) {
+		if err := insertEvaluationBudgetWarning(ctx, tx, run.ID, totalReservation, budgetLimit); err != nil {
+			return nil, err
+		}
 	}
 	if err := tx.Commit(); err != nil {
 		return nil, fmt.Errorf("commit evaluation run transaction: %w", err)
@@ -153,19 +164,26 @@ func (r *evaluationRepository) ClaimAssignment(ctx context.Context, workerID uui
 	}
 	defer func() { _ = tx.Rollback() }()
 
-	var workerExists int
+	var registeredCapabilities pq.StringArray
 	err = tx.QueryRowContext(ctx, `
-		SELECT 1 FROM evaluation_workers
+		SELECT capabilities FROM evaluation_workers
 		WHERE id = $1 AND status = 'active'
-		FOR KEY SHARE`, workerID).Scan(&workerExists)
+		FOR KEY SHARE`, workerID).Scan(&registeredCapabilities)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, errors.New("evaluation worker is unavailable")
 	}
 	if err != nil {
 		return nil, fmt.Errorf("lock evaluation worker: %w", err)
 	}
+	authorizedCapabilities := intersectCapabilities(capabilities, registeredCapabilities)
+	if len(authorizedCapabilities) == 0 {
+		if err := tx.Commit(); err != nil {
+			return nil, fmt.Errorf("commit unauthorized evaluation assignment claim: %w", err)
+		}
+		return nil, nil
+	}
 
-	reclaimed, err := reclaimExpiredAssignment(ctx, tx, capabilities)
+	reclaimed, err := reclaimExpiredAssignment(ctx, tx, authorizedCapabilities)
 	if err != nil {
 		return nil, err
 	}
@@ -173,7 +191,7 @@ func (r *evaluationRepository) ClaimAssignment(ctx context.Context, workerID uui
 	if reclaimed != nil {
 		candidate = *reclaimed
 	} else {
-		candidate, err = selectPendingAssignment(ctx, tx, capabilities)
+		candidate, err = selectPendingAssignment(ctx, tx, authorizedCapabilities)
 		if errors.Is(err, sql.ErrNoRows) {
 			if err := tx.Commit(); err != nil {
 				return nil, fmt.Errorf("commit empty evaluation assignment claim: %w", err)
@@ -183,6 +201,16 @@ func (r *evaluationRepository) ClaimAssignment(ctx context.Context, workerID uui
 		if err != nil {
 			return nil, err
 		}
+		eligible, eligibilityErr := lockRunLeaseEligibility(ctx, tx, candidate.runID, candidate.priority)
+		if eligibilityErr != nil {
+			return nil, eligibilityErr
+		}
+		if !eligible {
+			if err := tx.Commit(); err != nil {
+				return nil, fmt.Errorf("commit ineligible evaluation assignment claim: %w", err)
+			}
+			return nil, nil
+		}
 	}
 
 	token, tokenHash, err := newLeaseToken()
@@ -190,12 +218,14 @@ func (r *evaluationRepository) ClaimAssignment(ctx context.Context, workerID uui
 		return nil, err
 	}
 	lease := &service.AssignmentLease{
-		ID:         candidate.id,
-		SampleID:   candidate.sampleID,
-		RunID:      candidate.runID,
-		ModelRoute: candidate.modelRoute,
-		Attempt:    candidate.attempt,
-		Token:      token,
+		ID:                candidate.id,
+		SampleID:          candidate.sampleID,
+		RunID:             candidate.runID,
+		ModelRoute:        candidate.modelRoute,
+		ModelConfig:       append(json.RawMessage(nil), candidate.modelConfig...),
+		ModelConfigSHA256: candidate.modelConfigSHA256,
+		Attempt:           candidate.attempt,
+		Token:             token,
 	}
 	err = tx.QueryRowContext(ctx, `
 		UPDATE evaluation_assignments
@@ -327,13 +357,23 @@ func loadEvaluationCases(ctx context.Context, tx *sql.Tx, planID uuid.UUID) ([]e
 	return cases, nil
 }
 
-func insertEvaluationSampleAndAssignment(ctx context.Context, tx *sql.Tx, runID uuid.UUID, evaluationCase evaluationCaseForRun, modelRoute string, sampleIndex int) error {
+func insertEvaluationSampleAndAssignment(
+	ctx context.Context,
+	tx *sql.Tx,
+	runID uuid.UUID,
+	evaluationCase evaluationCaseForRun,
+	modelRoute string,
+	matrixEntry evaluationMatrixEntry,
+	sampleIndex int,
+) error {
 	sampleID := uuid.New()
 	if _, err := tx.ExecContext(ctx, `
 		INSERT INTO evaluation_samples (
-			id, run_id, case_id, model_route, sample_index, priority, status, estimated_cost
-		) VALUES ($1, $2, $3, $4, $5, $6, 'pending', $7)`,
-		sampleID, runID, evaluationCase.id, modelRoute, sampleIndex, evaluationCase.priority, evaluationCase.estimatedCost); err != nil {
+			id, run_id, case_id, model_route, model_config, model_config_sha256,
+			sample_index, priority, status, estimated_cost
+		) VALUES ($1, $2, $3, $4, $5::jsonb, $6, $7, $8, 'pending', $9)`,
+		sampleID, runID, evaluationCase.id, modelRoute, matrixEntry.config,
+		matrixEntry.configSHA256, sampleIndex, evaluationCase.priority, evaluationCase.estimatedCost); err != nil {
 		return fmt.Errorf("insert evaluation sample: %w", err)
 	}
 	assignmentID := uuid.New()
@@ -353,34 +393,52 @@ func insertEvaluationSampleAndAssignment(ctx context.Context, tx *sql.Tx, runID 
 }
 
 type assignmentCandidate struct {
-	id          uuid.UUID
-	sampleID    uuid.UUID
-	runID       uuid.UUID
-	caseID      uuid.UUID
-	modelRoute  string
-	sampleIndex int
-	attempt     int
+	id                uuid.UUID
+	sampleID          uuid.UUID
+	runID             uuid.UUID
+	caseID            uuid.UUID
+	modelRoute        string
+	modelConfig       []byte
+	modelConfigSHA256 string
+	priority          string
+	sampleIndex       int
+	attempt           int
 }
 
 func reclaimExpiredAssignment(ctx context.Context, tx *sql.Tx, capabilities []string) (*assignmentCandidate, error) {
 	var expired assignmentCandidate
 	err := tx.QueryRowContext(ctx, `
-		SELECT a.id, a.sample_id, s.run_id, s.case_id, s.model_route, s.sample_index, a.attempt
+		SELECT a.id, a.sample_id, s.run_id, s.case_id, s.model_route,
+			s.model_config, s.model_config_sha256, s.priority, s.sample_index, a.attempt
 		FROM evaluation_assignments a
 		JOIN evaluation_samples s ON s.id = a.sample_id
 		JOIN evaluation_cases c ON c.id = s.case_id
+		JOIN evaluation_runs r ON r.id = s.run_id
 		WHERE a.status IN ('leased', 'running') AND a.lease_expires_at <= NOW()
 			AND c.capability_domain = ANY($1::text[])
+			AND (
+				(r.status IN ('pending', 'running') AND r.reserved_cost < r.budget_limit)
+				OR (r.status IN ('pending', 'running', 'budget_paused')
+					AND r.reserved_cost = r.budget_limit AND s.priority = 'P0')
+			)
 		ORDER BY a.lease_expires_at, a.id
 		FOR UPDATE OF a SKIP LOCKED
 		LIMIT 1`, pq.Array(capabilities)).Scan(
 		&expired.id, &expired.sampleID, &expired.runID, &expired.caseID,
-		&expired.modelRoute, &expired.sampleIndex, &expired.attempt)
+		&expired.modelRoute, &expired.modelConfig, &expired.modelConfigSHA256,
+		&expired.priority, &expired.sampleIndex, &expired.attempt)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, nil
 	}
 	if err != nil {
 		return nil, fmt.Errorf("lock expired evaluation assignment: %w", err)
+	}
+	eligible, err := lockRunLeaseEligibility(ctx, tx, expired.runID, expired.priority)
+	if err != nil {
+		return nil, err
+	}
+	if !eligible {
+		return nil, nil
 	}
 	if _, err := tx.ExecContext(ctx, `
 		UPDATE evaluation_assignments
@@ -407,29 +465,43 @@ func reclaimExpiredAssignment(ctx context.Context, tx *sql.Tx, capabilities []st
 func selectPendingAssignment(ctx context.Context, tx *sql.Tx, capabilities []string) (assignmentCandidate, error) {
 	var candidate assignmentCandidate
 	err := tx.QueryRowContext(ctx, `
-		SELECT a.id, a.sample_id, s.run_id, s.case_id, s.model_route, s.sample_index, a.attempt
+		SELECT a.id, a.sample_id, s.run_id, s.case_id, s.model_route,
+			s.model_config, s.model_config_sha256, s.priority, s.sample_index, a.attempt
 		FROM evaluation_assignments a
 		JOIN evaluation_samples s ON s.id = a.sample_id
 		JOIN evaluation_cases c ON c.id = s.case_id
+		JOIN evaluation_runs r ON r.id = s.run_id
 		WHERE a.status = 'pending'
 			AND c.capability_domain = ANY($1::text[])
+			AND (
+				(r.status IN ('pending', 'running') AND r.reserved_cost < r.budget_limit)
+				OR (r.status IN ('pending', 'running', 'budget_paused')
+					AND r.reserved_cost = r.budget_limit AND s.priority = 'P0')
+			)
 		ORDER BY s.priority, a.created_at, a.id
 		FOR UPDATE OF a SKIP LOCKED
 		LIMIT 1`, pq.Array(capabilities)).Scan(
 		&candidate.id, &candidate.sampleID, &candidate.runID, &candidate.caseID,
-		&candidate.modelRoute, &candidate.sampleIndex, &candidate.attempt)
+		&candidate.modelRoute, &candidate.modelConfig, &candidate.modelConfigSHA256,
+		&candidate.priority, &candidate.sampleIndex, &candidate.attempt)
 	if err != nil {
 		return assignmentCandidate{}, err
 	}
 	return candidate, nil
 }
 
-func matrixRoutes(matrixJSON []byte) ([]string, error) {
+type evaluationMatrixEntry struct {
+	route        string
+	config       []byte
+	configSHA256 string
+}
+
+func evaluationMatrixEntries(matrixJSON []byte) ([]evaluationMatrixEntry, error) {
 	var matrix []map[string]any
 	if err := json.Unmarshal(matrixJSON, &matrix); err != nil {
 		return nil, fmt.Errorf("decode evaluation model matrix: %w", err)
 	}
-	routes := make([]string, 0, len(matrix))
+	entries := make([]evaluationMatrixEntry, 0, len(matrix))
 	seen := make(map[string]struct{}, len(matrix))
 	for _, entry := range matrix {
 		route := ""
@@ -446,12 +518,77 @@ func matrixRoutes(matrixJSON []byte) ([]string, error) {
 			return nil, fmt.Errorf("evaluation model matrix duplicates route %q", route)
 		}
 		seen[route] = struct{}{}
-		routes = append(routes, route)
+		config, err := json.Marshal(entry)
+		if err != nil {
+			return nil, fmt.Errorf("canonicalize evaluation model matrix entry %q: %w", route, err)
+		}
+		entries = append(entries, evaluationMatrixEntry{
+			route: route, config: config, configSHA256: hashString(string(config)),
+		})
 	}
-	if len(routes) == 0 {
+	if len(entries) == 0 {
 		return nil, errors.New("evaluation model matrix is empty")
 	}
-	return routes, nil
+	return entries, nil
+}
+
+func intersectCapabilities(requested, registered []string) []string {
+	allowed := make(map[string]struct{}, len(registered))
+	for _, capability := range registered {
+		allowed[capability] = struct{}{}
+	}
+	result := make([]string, 0, len(requested))
+	seen := make(map[string]struct{}, len(requested))
+	for _, capability := range requested {
+		if _, ok := allowed[capability]; !ok {
+			continue
+		}
+		if _, duplicate := seen[capability]; duplicate {
+			continue
+		}
+		seen[capability] = struct{}{}
+		result = append(result, capability)
+	}
+	return result
+}
+
+func lockRunLeaseEligibility(ctx context.Context, tx *sql.Tx, runID uuid.UUID, priority string) (bool, error) {
+	var status service.RunStatus
+	var reservedCost, budgetLimit decimal.Decimal
+	if err := tx.QueryRowContext(ctx, `
+		SELECT status, reserved_cost, budget_limit
+		FROM evaluation_runs WHERE id = $1 FOR UPDATE`, runID).Scan(&status, &reservedCost, &budgetLimit); err != nil {
+		return false, fmt.Errorf("lock evaluation run budget: %w", err)
+	}
+	if (status == service.RunStatusPending || status == service.RunStatusRunning) && reservedCost.LessThan(budgetLimit) {
+		return true, nil
+	}
+	return priority == string(service.CasePriorityP0) && reservedCost.Equal(budgetLimit) &&
+		(status == service.RunStatusPending || status == service.RunStatusRunning || status == service.RunStatusBudgetPaused), nil
+}
+
+func insertEvaluationBudgetWarning(
+	ctx context.Context,
+	tx *sql.Tx,
+	runID uuid.UUID,
+	reservedCost decimal.Decimal,
+	budgetLimit decimal.Decimal,
+) error {
+	if _, err := tx.ExecContext(ctx, `
+		INSERT INTO evaluation_budget_ledger (
+			id, run_id, entry_type, amount, idempotency_key
+		) VALUES ($1, $2, 'warning', $3, $4)`,
+		uuid.New(), runID, reservedCost, hashString("budget_warning\x00"+runID.String())); err != nil {
+		return fmt.Errorf("insert evaluation budget warning ledger entry: %w", err)
+	}
+	if _, err := tx.ExecContext(ctx, `
+		INSERT INTO evaluation_run_events (id, run_id, event_type, payload, actor_type)
+		VALUES ($1, $2, 'budget_warning', jsonb_build_object(
+			'reserved_cost', $3::text, 'budget_limit', $4::text, 'threshold_percent', 80
+		), 'system')`, uuid.New(), runID, reservedCost, budgetLimit); err != nil {
+		return fmt.Errorf("insert evaluation budget warning event: %w", err)
+	}
+	return nil
 }
 
 func assignmentIdempotencyKey(runID, caseID uuid.UUID, modelRoute string, sampleIndex, attempt int) string {

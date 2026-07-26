@@ -99,6 +99,8 @@ CREATE TABLE IF NOT EXISTS evaluation_samples (
     run_id UUID NOT NULL REFERENCES evaluation_runs(id),
     case_id UUID NOT NULL REFERENCES evaluation_cases(id),
     model_route VARCHAR(200) NOT NULL,
+    model_config JSONB NOT NULL DEFAULT '{}'::jsonb,
+    model_config_sha256 CHAR(64) NOT NULL DEFAULT '44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a',
     sample_index INT NOT NULL CHECK (sample_index BETWEEN 0 AND 9),
     priority VARCHAR(4) NOT NULL CHECK (priority IN ('P0', 'P1', 'P2')),
     status VARCHAR(24) NOT NULL CHECK (status IN (
@@ -299,6 +301,30 @@ DROP TRIGGER IF EXISTS trg_evaluation_cases_dataset_lifecycle ON evaluation_case
 CREATE TRIGGER trg_evaluation_cases_dataset_lifecycle
     BEFORE INSERT OR UPDATE OR DELETE ON evaluation_cases
     FOR EACH ROW EXECUTE FUNCTION enforce_evaluation_case_dataset_lifecycle();
+
+CREATE OR REPLACE FUNCTION enforce_evaluation_sample_execution_identity()
+RETURNS TRIGGER AS $$
+BEGIN
+    IF NEW.id IS DISTINCT FROM OLD.id
+        OR NEW.run_id IS DISTINCT FROM OLD.run_id
+        OR NEW.case_id IS DISTINCT FROM OLD.case_id
+        OR NEW.model_route IS DISTINCT FROM OLD.model_route
+        OR NEW.model_config IS DISTINCT FROM OLD.model_config
+        OR NEW.model_config_sha256 IS DISTINCT FROM OLD.model_config_sha256
+        OR NEW.sample_index IS DISTINCT FROM OLD.sample_index
+        OR NEW.priority IS DISTINCT FROM OLD.priority
+        OR NEW.estimated_cost IS DISTINCT FROM OLD.estimated_cost THEN
+        RAISE EXCEPTION 'evaluation sample execution identity % is immutable', OLD.id;
+    END IF;
+
+    RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+DROP TRIGGER IF EXISTS trg_evaluation_samples_execution_identity ON evaluation_samples;
+CREATE TRIGGER trg_evaluation_samples_execution_identity
+    BEFORE UPDATE ON evaluation_samples
+    FOR EACH ROW EXECUTE FUNCTION enforce_evaluation_sample_execution_identity();
 
 CREATE OR REPLACE FUNCTION prevent_terminal_evaluation_run_reopen()
 RETURNS TRIGGER AS $$
