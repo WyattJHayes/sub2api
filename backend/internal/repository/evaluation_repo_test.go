@@ -24,3 +24,19 @@ func TestEvaluationMatrixEntriesPreservesNumericLexemes(t *testing.T) {
 		t.Errorf("configSHA256 = %s, want %x", got, wantHash)
 	}
 }
+
+func TestCanonicalizeModelConfigPreservesNumbersAndDigestBytes(t *testing.T) {
+	config, err := canonicalizeModelConfig([]byte(`{"temperature": 0.12345678901234567890123456789, "route": "route-a", "seed": 9007199254740993}`))
+	if err != nil {
+		t.Fatalf("canonicalizeModelConfig() error = %v", err)
+	}
+
+	const wantConfig = `{"route":"route-a","seed":9007199254740993,"temperature":0.12345678901234567890123456789}`
+	if got := string(config); got != wantConfig {
+		t.Errorf("config = %s, want %s", got, wantConfig)
+	}
+	wantHash := sha256.Sum256([]byte(wantConfig))
+	if got := hashString(string(config)); got != fmt.Sprintf("%x", wantHash) {
+		t.Errorf("config SHA256 = %s, want %x", got, wantHash)
+	}
+}

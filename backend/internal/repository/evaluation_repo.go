@@ -10,6 +10,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"strings"
 	"time"
 
@@ -213,6 +214,13 @@ func (r *evaluationRepository) ClaimAssignment(ctx context.Context, workerID uui
 			return nil, nil
 		}
 	}
+	canonicalConfig, err := canonicalizeModelConfig(candidate.modelConfig)
+	if err != nil {
+		return nil, fmt.Errorf("canonicalize evaluation sample %s model configuration: %w", candidate.sampleID, err)
+	}
+	if hashString(string(canonicalConfig)) != candidate.modelConfigSHA256 {
+		return nil, fmt.Errorf("evaluation sample %s model configuration digest mismatch", candidate.sampleID)
+	}
 
 	token, tokenHash, err := newLeaseToken()
 	if err != nil {
@@ -223,7 +231,7 @@ func (r *evaluationRepository) ClaimAssignment(ctx context.Context, workerID uui
 		SampleID:          candidate.sampleID,
 		RunID:             candidate.runID,
 		ModelRoute:        candidate.modelRoute,
-		ModelConfig:       append(json.RawMessage(nil), candidate.modelConfig...),
+		ModelConfig:       append(json.RawMessage(nil), canonicalConfig...),
 		ModelConfigSHA256: candidate.modelConfigSHA256,
 		Attempt:           candidate.attempt,
 		Token:             token,
@@ -525,6 +533,10 @@ func evaluationMatrixEntries(matrixJSON []byte) ([]evaluationMatrixEntry, error)
 		if err != nil {
 			return nil, fmt.Errorf("canonicalize evaluation model matrix entry %q: %w", route, err)
 		}
+		config, err = canonicalizeModelConfig(config)
+		if err != nil {
+			return nil, fmt.Errorf("canonicalize evaluation model matrix entry %q: %w", route, err)
+		}
 		entries = append(entries, evaluationMatrixEntry{
 			route: route, config: config, configSHA256: hashString(string(config)),
 		})
@@ -533,6 +545,26 @@ func evaluationMatrixEntries(matrixJSON []byte) ([]evaluationMatrixEntry, error)
 		return nil, errors.New("evaluation model matrix is empty")
 	}
 	return entries, nil
+}
+
+func canonicalizeModelConfig(raw []byte) ([]byte, error) {
+	decoder := json.NewDecoder(bytes.NewReader(raw))
+	decoder.UseNumber()
+	var value any
+	if err := decoder.Decode(&value); err != nil {
+		return nil, fmt.Errorf("decode JSON: %w", err)
+	}
+	if err := decoder.Decode(&struct{}{}); err != io.EOF {
+		if err == nil {
+			return nil, errors.New("decode JSON: multiple values")
+		}
+		return nil, fmt.Errorf("decode JSON suffix: %w", err)
+	}
+	canonical, err := json.Marshal(value)
+	if err != nil {
+		return nil, fmt.Errorf("marshal JSON: %w", err)
+	}
+	return canonical, nil
 }
 
 func intersectCapabilities(requested, registered []string) []string {

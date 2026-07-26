@@ -225,8 +225,8 @@ func TestEvaluationRepository_FreezesModelConfigurationInLease(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, lease)
 	require.JSONEq(t, `{"max_tokens":64,"route":"route-a","temperature":0.2}`, string(lease.ModelConfig))
-	expectedHash := sha256.Sum256([]byte(`{"max_tokens":64,"route":"route-a","temperature":0.2}`))
-	require.Equal(t, fmt.Sprintf("%x", expectedHash), lease.ModelConfigSHA256)
+	returnedHash := sha256.Sum256(lease.ModelConfig)
+	require.Equal(t, fmt.Sprintf("%x", returnedHash), lease.ModelConfigSHA256)
 
 	_, err = integrationDB.ExecContext(ctx, `
 		UPDATE evaluation_samples SET model_config = '{}'::jsonb WHERE run_id = $1`, run.ID)
@@ -255,6 +255,34 @@ func TestEvaluationRepository_FreezesLosslessNumericModelConfiguration(t *testin
 	require.Equal(t, expectedConfig, string(lease.ModelConfig))
 	expectedHash := sha256.Sum256([]byte(expectedConfig))
 	require.Equal(t, fmt.Sprintf("%x", expectedHash), lease.ModelConfigSHA256)
+	returnedHash := sha256.Sum256(lease.ModelConfig)
+	require.Equal(t, fmt.Sprintf("%x", returnedHash), lease.ModelConfigSHA256)
+}
+
+func TestEvaluationRepository_RejectsMismatchedStoredModelConfigDigest(t *testing.T) {
+	ctx := context.Background()
+	fixture := createEvaluationRepositoryFixtureWithCases(t, []evaluationCaseFixtureSpec{
+		{capability: "coding", priority: "P0", sampleCount: 1, estimatedCost: decimal.RequireFromString("0.01")},
+	}, []map[string]any{{"route": "route-a", "seed": json.Number("9007199254740993")}}, decimal.RequireFromString("100"))
+	repo := NewEvaluationRepository(integrationDB)
+	run, err := repo.CreateRunWithMatrix(ctx, service.CreateRunInput{
+		PlanID: fixture.planID, TriggerSource: "manual", CreatedBy: fixture.userID,
+	})
+	require.NoError(t, err)
+
+	tx, err := integrationDB.BeginTx(ctx, nil)
+	require.NoError(t, err)
+	_, err = tx.ExecContext(ctx, `SET LOCAL session_replication_role = replica`)
+	require.NoError(t, err)
+	_, err = tx.ExecContext(ctx, `
+		UPDATE evaluation_samples SET model_config_sha256 = $1 WHERE run_id = $2`,
+		strings.Repeat("0", 64), run.ID)
+	require.NoError(t, err)
+	require.NoError(t, tx.Commit())
+
+	lease, err := repo.ClaimAssignment(ctx, fixture.workerIDs[0], []string{"coding"}, time.Minute)
+	require.Nil(t, lease)
+	require.ErrorContains(t, err, "model configuration digest mismatch")
 }
 
 func TestEvaluationSampleExecutionIdentityMigrationUpgradesOriginal191(t *testing.T) {
@@ -286,6 +314,7 @@ func TestEvaluationSampleExecutionIdentityMigrationUpgradesOriginal191(t *testin
 	fixture := insertOriginal191EvaluationSample(t, ctx, conn)
 	upgrade192, err := migrations.FS.ReadFile("192_add_evaluation_sample_execution_identity.sql")
 	require.NoError(t, err)
+	require.NoError(t, executeEvaluationMigrationSQL(ctx, conn, string(upgrade192)))
 	require.NoError(t, executeEvaluationMigrationSQL(ctx, conn, string(upgrade192)))
 
 	var modelConfig, modelConfigHash string
