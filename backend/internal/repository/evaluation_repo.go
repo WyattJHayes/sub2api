@@ -168,7 +168,7 @@ func (r *evaluationRepository) ClaimAssignment(ctx context.Context, workerID uui
 	err = tx.QueryRowContext(ctx, `
 		SELECT capabilities FROM evaluation_workers
 		WHERE id = $1 AND status = 'active'
-		FOR KEY SHARE`, workerID).Scan(&registeredCapabilities)
+		FOR UPDATE`, workerID).Scan(&registeredCapabilities)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, errors.New("evaluation worker is unavailable")
 	}
