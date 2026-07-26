@@ -183,6 +183,104 @@ func TestEvaluationRepository_EmptyCapabilitiesCannotReclaimExpired(t *testing.T
 	require.Equal(t, 1, attempts)
 }
 
+func TestEvaluationRepository_RegisteredCapabilitiesBoundClaims(t *testing.T) {
+	ctx := context.Background()
+	fixture := createEvaluationRepositoryFixtureWithCases(t, []evaluationCaseFixtureSpec{
+		{capability: "safety", priority: "P0", sampleCount: 1, estimatedCost: decimal.RequireFromString("0.01")},
+	}, []map[string]any{{"route": "route-a"}}, decimal.RequireFromString("100"))
+	repo := NewEvaluationRepository(integrationDB)
+	_, err := repo.CreateRunWithMatrix(ctx, service.CreateRunInput{
+		PlanID: fixture.planID, TriggerSource: "manual", CreatedBy: fixture.userID,
+	})
+	require.NoError(t, err)
+
+	lease, err := repo.ClaimAssignment(ctx, fixture.workerIDs[0], []string{"safety"}, time.Minute)
+	require.NoError(t, err)
+	require.Nil(t, lease)
+}
+
+func TestEvaluationRepository_FreezesModelConfigurationInLease(t *testing.T) {
+	ctx := context.Background()
+	fixture := createEvaluationRepositoryFixtureWithCases(t, []evaluationCaseFixtureSpec{
+		{capability: "coding", priority: "P0", sampleCount: 1, estimatedCost: decimal.RequireFromString("0.01")},
+	}, []map[string]any{{
+		"route": "route-a", "temperature": 0.2, "max_tokens": 64,
+	}}, decimal.RequireFromString("100"))
+	repo := NewEvaluationRepository(integrationDB)
+	run, err := repo.CreateRunWithMatrix(ctx, service.CreateRunInput{
+		PlanID: fixture.planID, TriggerSource: "manual", CreatedBy: fixture.userID,
+	})
+	require.NoError(t, err)
+
+	_, err = integrationDB.ExecContext(ctx, `
+		UPDATE evaluation_plans
+		SET model_matrix = '[{"route":"route-a","temperature":0.9,"max_tokens":128}]'::jsonb
+		WHERE id = $1`, fixture.planID)
+	require.NoError(t, err)
+
+	lease, err := repo.ClaimAssignment(ctx, fixture.workerIDs[0], []string{"coding"}, time.Minute)
+	require.NoError(t, err)
+	require.NotNil(t, lease)
+	require.JSONEq(t, `{"max_tokens":64,"route":"route-a","temperature":0.2}`, string(lease.ModelConfig))
+	expectedHash := sha256.Sum256([]byte(`{"max_tokens":64,"route":"route-a","temperature":0.2}`))
+	require.Equal(t, fmt.Sprintf("%x", expectedHash), lease.ModelConfigSHA256)
+
+	_, err = integrationDB.ExecContext(ctx, `
+		UPDATE evaluation_samples SET model_config = '{}'::jsonb WHERE run_id = $1`, run.ID)
+	require.Error(t, err)
+}
+
+func TestEvaluationRepository_RecordsBudgetWarningAtEightyPercent(t *testing.T) {
+	ctx := context.Background()
+	fixture := createEvaluationRepositoryFixtureWithCases(t, []evaluationCaseFixtureSpec{
+		{capability: "coding", priority: "P1", sampleCount: 1, estimatedCost: decimal.RequireFromString("40")},
+	}, []map[string]any{{"route": "route-a"}}, decimal.RequireFromString("100"))
+	repo := NewEvaluationRepository(integrationDB)
+	run, err := repo.CreateRunWithMatrix(ctx, service.CreateRunInput{
+		PlanID: fixture.planID, TriggerSource: "manual", CreatedBy: fixture.userID,
+	})
+	require.NoError(t, err)
+	require.Equal(t, service.RunStatusPending, run.Status)
+
+	var warnings int
+	require.NoError(t, integrationDB.QueryRowContext(ctx, `
+		SELECT COUNT(*) FROM evaluation_run_events
+		WHERE run_id = $1 AND event_type = 'budget_warning'`, run.ID).Scan(&warnings))
+	require.Equal(t, 1, warnings)
+
+	lease, err := repo.ClaimAssignment(ctx, fixture.workerIDs[0], []string{"coding"}, time.Minute)
+	require.NoError(t, err)
+	require.NotNil(t, lease)
+}
+
+func TestEvaluationRepository_AtBudgetLimitLeasesOnlyP0(t *testing.T) {
+	ctx := context.Background()
+	fixture := createEvaluationRepositoryFixtureWithCases(t, []evaluationCaseFixtureSpec{
+		{capability: "coding", priority: "P0", sampleCount: 1, estimatedCost: decimal.RequireFromString("10")},
+		{capability: "coding", priority: "P1", sampleCount: 1, estimatedCost: decimal.RequireFromString("40")},
+	}, []map[string]any{{"route": "route-a"}}, decimal.RequireFromString("100"))
+	repo := NewEvaluationRepository(integrationDB)
+	run, err := repo.CreateRunWithMatrix(ctx, service.CreateRunInput{
+		PlanID: fixture.planID, TriggerSource: "manual", CreatedBy: fixture.userID,
+	})
+	require.NoError(t, err)
+	require.Equal(t, service.RunStatusBudgetPaused, run.Status)
+
+	for i := 0; i < 2; i++ {
+		lease, claimErr := repo.ClaimAssignment(ctx, fixture.workerIDs[i], []string{"coding"}, time.Minute)
+		require.NoError(t, claimErr)
+		require.NotNil(t, lease)
+		var priority string
+		require.NoError(t, integrationDB.QueryRowContext(ctx,
+			`SELECT priority FROM evaluation_samples WHERE id = $1`, lease.SampleID).Scan(&priority))
+		require.Equal(t, "P0", priority)
+	}
+
+	lease, err := repo.ClaimAssignment(ctx, fixture.workerIDs[2], []string{"coding"}, time.Minute)
+	require.NoError(t, err)
+	require.Nil(t, lease)
+}
+
 type evaluationRepositoryFixture struct {
 	userID    int64
 	datasetID uuid.UUID
@@ -190,7 +288,35 @@ type evaluationRepositoryFixture struct {
 	workerIDs []uuid.UUID
 }
 
+type evaluationCaseFixtureSpec struct {
+	capability    string
+	priority      string
+	sampleCount   int
+	estimatedCost decimal.Decimal
+}
+
 func createEvaluationRepositoryFixture(t *testing.T, caseCount int, routes []string, sampleCount int) evaluationRepositoryFixture {
+	t.Helper()
+	cases := make([]evaluationCaseFixtureSpec, caseCount)
+	for i := range cases {
+		cases[i] = evaluationCaseFixtureSpec{
+			capability: "coding", priority: "P0", sampleCount: sampleCount,
+			estimatedCost: decimal.RequireFromString("0.01"),
+		}
+	}
+	matrix := make([]map[string]any, 0, len(routes))
+	for _, route := range routes {
+		matrix = append(matrix, map[string]any{"route": route})
+	}
+	return createEvaluationRepositoryFixtureWithCases(t, cases, matrix, decimal.RequireFromString("100"))
+}
+
+func createEvaluationRepositoryFixtureWithCases(
+	t *testing.T,
+	cases []evaluationCaseFixtureSpec,
+	matrix []map[string]any,
+	budgetLimit decimal.Decimal,
+) evaluationRepositoryFixture {
 	t.Helper()
 	ctx := context.Background()
 	user := mustCreateUser(t, integrationEntClient, &service.User{Email: "evaluation-repository-" + uuid.NewString() + "@example.com"})
@@ -203,26 +329,23 @@ func createEvaluationRepositoryFixture(t *testing.T, caseCount int, routes []str
 		) VALUES ($1, $2, $3, $4, 'synthetic', 'draft', $5)`,
 		datasetID, "evaluation-repository-"+uuid.NewString(), "v1", fmt.Sprintf("%064d", 1), user.ID)
 	require.NoError(t, err)
-	for i := 0; i < caseCount; i++ {
+	for i, evaluationCase := range cases {
 		_, err = integrationDB.ExecContext(ctx, `
 			INSERT INTO evaluation_cases (
 				id, dataset_version_id, case_key, capability_domain, priority, weight, sample_count,
 				prompt_spec, expected_spec, execution_spec, grader_id, grader_version,
 				content_sha256, confidentiality, estimated_cost
 			) VALUES (
-				$1, $2, $3, 'coding', 'P0', 1, $4,
-				'{}'::jsonb, '{}'::jsonb, '{}'::jsonb, 'grader', 'v1',
-				$5, 'synthetic', 0.01
-			)`, uuid.New(), datasetID, fmt.Sprintf("case-%d", i), sampleCount, fmt.Sprintf("%064d", i+10))
+					$1, $2, $3, $4, $5, 1, $6,
+					'{}'::jsonb, '{}'::jsonb, '{}'::jsonb, 'grader', 'v1',
+					$7, 'synthetic', $8
+				)`, uuid.New(), datasetID, fmt.Sprintf("case-%d", i), evaluationCase.capability,
+			evaluationCase.priority, evaluationCase.sampleCount, fmt.Sprintf("%064d", i+10), evaluationCase.estimatedCost)
 		require.NoError(t, err)
 	}
 	_, err = integrationDB.ExecContext(ctx, `
 		UPDATE evaluation_dataset_versions SET status = 'published', published_at = NOW() WHERE id = $1`, datasetID)
 	require.NoError(t, err)
-	matrix := make([]map[string]any, 0, len(routes))
-	for _, route := range routes {
-		matrix = append(matrix, map[string]any{"route": route})
-	}
 	matrixJSON, err := json.Marshal(matrix)
 	require.NoError(t, err)
 	_, err = integrationDB.ExecContext(ctx, `
@@ -231,7 +354,7 @@ func createEvaluationRepositoryFixture(t *testing.T, caseCount int, routes []str
 			max_run_cost, daily_cost_limit, max_concurrency, created_by
 		) VALUES ($1, $2, $3, 'manual', $4::jsonb, $5, $6, 10, $7)`,
 		planID, "evaluation-plan-"+uuid.NewString(), datasetID, matrixJSON,
-		decimal.RequireFromString("100.00000000"), decimal.RequireFromString("100.00000000"), user.ID)
+		budgetLimit, budgetLimit, user.ID)
 	require.NoError(t, err)
 
 	workers := make([]uuid.UUID, 3)
