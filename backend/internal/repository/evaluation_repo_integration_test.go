@@ -155,6 +155,7 @@ func TestEvaluationRepository_EmptyCapabilitiesCannotClaim(t *testing.T) {
 
 type evaluationRepositoryFixture struct {
 	userID    int64
+	datasetID uuid.UUID
 	planID    uuid.UUID
 	workerIDs []uuid.UUID
 }
@@ -206,11 +207,56 @@ func createEvaluationRepositoryFixture(t *testing.T, caseCount int, routes []str
 	workers := make([]uuid.UUID, 3)
 	for i := range workers {
 		workers[i] = uuid.New()
+		tokenHash := sha256.Sum256([]byte(uuid.NewString()))
 		_, err = integrationDB.ExecContext(ctx, `
 			INSERT INTO evaluation_workers (id, name, worker_kind, token_hash, capabilities)
 			VALUES ($1, $2, 'runner', $3, ARRAY['coding'])`,
-			workers[i], "worker-"+uuid.NewString(), fmt.Sprintf("%064d", i+100))
+			workers[i], "worker-"+uuid.NewString(), fmt.Sprintf("%x", tokenHash))
 		require.NoError(t, err)
 	}
-	return evaluationRepositoryFixture{userID: user.ID, planID: planID, workerIDs: workers}
+	fixture := evaluationRepositoryFixture{
+		userID: user.ID, datasetID: datasetID, planID: planID, workerIDs: workers,
+	}
+	t.Cleanup(func() {
+		cleanupEvaluationRepositoryFixture(t, fixture)
+	})
+	return fixture
+}
+
+func cleanupEvaluationRepositoryFixture(t *testing.T, fixture evaluationRepositoryFixture) {
+	t.Helper()
+	ctx := context.Background()
+	tx, err := integrationDB.BeginTx(ctx, nil)
+	require.NoError(t, err)
+	defer func() { _ = tx.Rollback() }()
+	_, err = tx.ExecContext(ctx, `SET LOCAL session_replication_role = replica`)
+	require.NoError(t, err)
+
+	for _, statement := range []string{
+		`DELETE FROM evaluation_budget_ledger WHERE run_id IN (SELECT id FROM evaluation_runs WHERE plan_id = $1)`,
+		`DELETE FROM evaluation_artifacts WHERE run_id IN (SELECT id FROM evaluation_runs WHERE plan_id = $1)`,
+		`DELETE FROM evaluation_assignments WHERE sample_id IN (
+			SELECT s.id FROM evaluation_samples s
+			JOIN evaluation_runs r ON r.id = s.run_id
+			WHERE r.plan_id = $1
+		)`,
+		`DELETE FROM evaluation_samples WHERE run_id IN (SELECT id FROM evaluation_runs WHERE plan_id = $1)`,
+		`DELETE FROM evaluation_run_events WHERE run_id IN (SELECT id FROM evaluation_runs WHERE plan_id = $1)`,
+		`DELETE FROM evaluation_runs WHERE plan_id = $1`,
+		`DELETE FROM evaluation_plans WHERE id = $1`,
+	} {
+		_, err = tx.ExecContext(ctx, statement, fixture.planID)
+		require.NoError(t, err)
+	}
+	_, err = tx.ExecContext(ctx, `DELETE FROM evaluation_cases WHERE dataset_version_id = $1`, fixture.datasetID)
+	require.NoError(t, err)
+	_, err = tx.ExecContext(ctx, `DELETE FROM evaluation_dataset_versions WHERE id = $1`, fixture.datasetID)
+	require.NoError(t, err)
+	for _, workerID := range fixture.workerIDs {
+		_, err = tx.ExecContext(ctx, `DELETE FROM evaluation_workers WHERE id = $1`, workerID)
+		require.NoError(t, err)
+	}
+	_, err = tx.ExecContext(ctx, `DELETE FROM users WHERE id = $1`, fixture.userID)
+	require.NoError(t, err)
+	require.NoError(t, tx.Commit())
 }
