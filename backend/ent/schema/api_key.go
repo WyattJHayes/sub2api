@@ -134,6 +134,7 @@ func (APIKey) Edges() []ent.Edge {
 			Unique(),
 		edge.To("usage_logs", UsageLog.Type),
 		edge.To("evaluation_route_evidence", EvaluationRouteEvidence.Type),
+		edge.To("evaluation_plans", EvaluationPlan.Type),
 	}
 }
 

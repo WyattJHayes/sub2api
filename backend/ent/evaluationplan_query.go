@@ -13,6 +13,7 @@ import (
 	"entgo.io/ent/dialect/sql"
 	"entgo.io/ent/dialect/sql/sqlgraph"
 	"entgo.io/ent/schema/field"
+	"github.com/Wei-Shaw/sub2api/ent/apikey"
 	"github.com/Wei-Shaw/sub2api/ent/evaluationdatasetversion"
 	"github.com/Wei-Shaw/sub2api/ent/evaluationplan"
 	"github.com/Wei-Shaw/sub2api/ent/evaluationrun"
@@ -28,6 +29,7 @@ type EvaluationPlanQuery struct {
 	inters             []Interceptor
 	predicates         []predicate.EvaluationPlan
 	withDatasetVersion *EvaluationDatasetVersionQuery
+	withGatewayAPIKey  *APIKeyQuery
 	withRuns           *EvaluationRunQuery
 	modifiers          []func(*sql.Selector)
 	// intermediate query (i.e. traversal path).
@@ -81,6 +83,28 @@ func (_q *EvaluationPlanQuery) QueryDatasetVersion() *EvaluationDatasetVersionQu
 			sqlgraph.From(evaluationplan.Table, evaluationplan.FieldID, selector),
 			sqlgraph.To(evaluationdatasetversion.Table, evaluationdatasetversion.FieldID),
 			sqlgraph.Edge(sqlgraph.M2O, true, evaluationplan.DatasetVersionTable, evaluationplan.DatasetVersionColumn),
+		)
+		fromU = sqlgraph.SetNeighbors(_q.driver.Dialect(), step)
+		return fromU, nil
+	}
+	return query
+}
+
+// QueryGatewayAPIKey chains the current query on the "gateway_api_key" edge.
+func (_q *EvaluationPlanQuery) QueryGatewayAPIKey() *APIKeyQuery {
+	query := (&APIKeyClient{config: _q.config}).Query()
+	query.path = func(ctx context.Context) (fromU *sql.Selector, err error) {
+		if err := _q.prepareQuery(ctx); err != nil {
+			return nil, err
+		}
+		selector := _q.sqlQuery(ctx)
+		if err := selector.Err(); err != nil {
+			return nil, err
+		}
+		step := sqlgraph.NewStep(
+			sqlgraph.From(evaluationplan.Table, evaluationplan.FieldID, selector),
+			sqlgraph.To(apikey.Table, apikey.FieldID),
+			sqlgraph.Edge(sqlgraph.M2O, true, evaluationplan.GatewayAPIKeyTable, evaluationplan.GatewayAPIKeyColumn),
 		)
 		fromU = sqlgraph.SetNeighbors(_q.driver.Dialect(), step)
 		return fromU, nil
@@ -303,6 +327,7 @@ func (_q *EvaluationPlanQuery) Clone() *EvaluationPlanQuery {
 		inters:             append([]Interceptor{}, _q.inters...),
 		predicates:         append([]predicate.EvaluationPlan{}, _q.predicates...),
 		withDatasetVersion: _q.withDatasetVersion.Clone(),
+		withGatewayAPIKey:  _q.withGatewayAPIKey.Clone(),
 		withRuns:           _q.withRuns.Clone(),
 		// clone intermediate query.
 		sql:  _q.sql.Clone(),
@@ -318,6 +343,17 @@ func (_q *EvaluationPlanQuery) WithDatasetVersion(opts ...func(*EvaluationDatase
 		opt(query)
 	}
 	_q.withDatasetVersion = query
+	return _q
+}
+
+// WithGatewayAPIKey tells the query-builder to eager-load the nodes that are connected to
+// the "gateway_api_key" edge. The optional arguments are used to configure the query builder of the edge.
+func (_q *EvaluationPlanQuery) WithGatewayAPIKey(opts ...func(*APIKeyQuery)) *EvaluationPlanQuery {
+	query := (&APIKeyClient{config: _q.config}).Query()
+	for _, opt := range opts {
+		opt(query)
+	}
+	_q.withGatewayAPIKey = query
 	return _q
 }
 
@@ -410,8 +446,9 @@ func (_q *EvaluationPlanQuery) sqlAll(ctx context.Context, hooks ...queryHook) (
 	var (
 		nodes       = []*EvaluationPlan{}
 		_spec       = _q.querySpec()
-		loadedTypes = [2]bool{
+		loadedTypes = [3]bool{
 			_q.withDatasetVersion != nil,
+			_q.withGatewayAPIKey != nil,
 			_q.withRuns != nil,
 		}
 	)
@@ -439,6 +476,12 @@ func (_q *EvaluationPlanQuery) sqlAll(ctx context.Context, hooks ...queryHook) (
 	if query := _q.withDatasetVersion; query != nil {
 		if err := _q.loadDatasetVersion(ctx, query, nodes, nil,
 			func(n *EvaluationPlan, e *EvaluationDatasetVersion) { n.Edges.DatasetVersion = e }); err != nil {
+			return nil, err
+		}
+	}
+	if query := _q.withGatewayAPIKey; query != nil {
+		if err := _q.loadGatewayAPIKey(ctx, query, nodes, nil,
+			func(n *EvaluationPlan, e *APIKey) { n.Edges.GatewayAPIKey = e }); err != nil {
 			return nil, err
 		}
 	}
@@ -474,6 +517,38 @@ func (_q *EvaluationPlanQuery) loadDatasetVersion(ctx context.Context, query *Ev
 		nodes, ok := nodeids[n.ID]
 		if !ok {
 			return fmt.Errorf(`unexpected foreign-key "dataset_version_id" returned %v`, n.ID)
+		}
+		for i := range nodes {
+			assign(nodes[i], n)
+		}
+	}
+	return nil
+}
+func (_q *EvaluationPlanQuery) loadGatewayAPIKey(ctx context.Context, query *APIKeyQuery, nodes []*EvaluationPlan, init func(*EvaluationPlan), assign func(*EvaluationPlan, *APIKey)) error {
+	ids := make([]int64, 0, len(nodes))
+	nodeids := make(map[int64][]*EvaluationPlan)
+	for i := range nodes {
+		if nodes[i].GatewayAPIKeyID == nil {
+			continue
+		}
+		fk := *nodes[i].GatewayAPIKeyID
+		if _, ok := nodeids[fk]; !ok {
+			ids = append(ids, fk)
+		}
+		nodeids[fk] = append(nodeids[fk], nodes[i])
+	}
+	if len(ids) == 0 {
+		return nil
+	}
+	query.Where(apikey.IDIn(ids...))
+	neighbors, err := query.All(ctx)
+	if err != nil {
+		return err
+	}
+	for _, n := range neighbors {
+		nodes, ok := nodeids[n.ID]
+		if !ok {
+			return fmt.Errorf(`unexpected foreign-key "gateway_api_key_id" returned %v`, n.ID)
 		}
 		for i := range nodes {
 			assign(nodes[i], n)
@@ -542,6 +617,9 @@ func (_q *EvaluationPlanQuery) querySpec() *sqlgraph.QuerySpec {
 		}
 		if _q.withDatasetVersion != nil {
 			_spec.Node.AddColumnOnce(evaluationplan.FieldDatasetVersionID)
+		}
+		if _q.withGatewayAPIKey != nil {
+			_spec.Node.AddColumnOnce(evaluationplan.FieldGatewayAPIKeyID)
 		}
 	}
 	if ps := _q.predicates; len(ps) > 0 {

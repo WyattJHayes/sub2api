@@ -19,6 +19,8 @@ const (
 	FieldName = "name"
 	// FieldDatasetVersionID holds the string denoting the dataset_version_id field in the database.
 	FieldDatasetVersionID = "dataset_version_id"
+	// FieldGatewayAPIKeyID holds the string denoting the gateway_api_key_id field in the database.
+	FieldGatewayAPIKeyID = "gateway_api_key_id"
 	// FieldTriggerType holds the string denoting the trigger_type field in the database.
 	FieldTriggerType = "trigger_type"
 	// FieldCronExpression holds the string denoting the cron_expression field in the database.
@@ -41,6 +43,8 @@ const (
 	FieldUpdatedAt = "updated_at"
 	// EdgeDatasetVersion holds the string denoting the dataset_version edge name in mutations.
 	EdgeDatasetVersion = "dataset_version"
+	// EdgeGatewayAPIKey holds the string denoting the gateway_api_key edge name in mutations.
+	EdgeGatewayAPIKey = "gateway_api_key"
 	// EdgeRuns holds the string denoting the runs edge name in mutations.
 	EdgeRuns = "runs"
 	// Table holds the table name of the evaluationplan in the database.
@@ -52,6 +56,13 @@ const (
 	DatasetVersionInverseTable = "evaluation_dataset_versions"
 	// DatasetVersionColumn is the table column denoting the dataset_version relation/edge.
 	DatasetVersionColumn = "dataset_version_id"
+	// GatewayAPIKeyTable is the table that holds the gateway_api_key relation/edge.
+	GatewayAPIKeyTable = "evaluation_plans"
+	// GatewayAPIKeyInverseTable is the table name for the APIKey entity.
+	// It exists in this package in order to avoid circular dependency with the "apikey" package.
+	GatewayAPIKeyInverseTable = "api_keys"
+	// GatewayAPIKeyColumn is the table column denoting the gateway_api_key relation/edge.
+	GatewayAPIKeyColumn = "gateway_api_key_id"
 	// RunsTable is the table that holds the runs relation/edge.
 	RunsTable = "evaluation_runs"
 	// RunsInverseTable is the table name for the EvaluationRun entity.
@@ -66,6 +77,7 @@ var Columns = []string{
 	FieldID,
 	FieldName,
 	FieldDatasetVersionID,
+	FieldGatewayAPIKeyID,
 	FieldTriggerType,
 	FieldCronExpression,
 	FieldModelMatrix,
@@ -125,6 +137,11 @@ func ByDatasetVersionID(opts ...sql.OrderTermOption) OrderOption {
 	return sql.OrderByField(FieldDatasetVersionID, opts...).ToFunc()
 }
 
+// ByGatewayAPIKeyID orders the results by the gateway_api_key_id field.
+func ByGatewayAPIKeyID(opts ...sql.OrderTermOption) OrderOption {
+	return sql.OrderByField(FieldGatewayAPIKeyID, opts...).ToFunc()
+}
+
 // ByTriggerType orders the results by the trigger_type field.
 func ByTriggerType(opts ...sql.OrderTermOption) OrderOption {
 	return sql.OrderByField(FieldTriggerType, opts...).ToFunc()
@@ -177,6 +194,13 @@ func ByDatasetVersionField(field string, opts ...sql.OrderTermOption) OrderOptio
 	}
 }
 
+// ByGatewayAPIKeyField orders the results by gateway_api_key field.
+func ByGatewayAPIKeyField(field string, opts ...sql.OrderTermOption) OrderOption {
+	return func(s *sql.Selector) {
+		sqlgraph.OrderByNeighborTerms(s, newGatewayAPIKeyStep(), sql.OrderByField(field, opts...))
+	}
+}
+
 // ByRunsCount orders the results by runs count.
 func ByRunsCount(opts ...sql.OrderTermOption) OrderOption {
 	return func(s *sql.Selector) {
@@ -195,6 +219,13 @@ func newDatasetVersionStep() *sqlgraph.Step {
 		sqlgraph.From(Table, FieldID),
 		sqlgraph.To(DatasetVersionInverseTable, FieldID),
 		sqlgraph.Edge(sqlgraph.M2O, true, DatasetVersionTable, DatasetVersionColumn),
+	)
+}
+func newGatewayAPIKeyStep() *sqlgraph.Step {
+	return sqlgraph.NewStep(
+		sqlgraph.From(Table, FieldID),
+		sqlgraph.To(GatewayAPIKeyInverseTable, FieldID),
+		sqlgraph.Edge(sqlgraph.M2O, true, GatewayAPIKeyTable, GatewayAPIKeyColumn),
 	)
 }
 func newRunsStep() *sqlgraph.Step {

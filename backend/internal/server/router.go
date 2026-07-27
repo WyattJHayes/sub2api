@@ -115,6 +115,7 @@ func registerRoutes(
 ) {
 	// 通用路由（健康检查、状态等）
 	routes.RegisterCommonRoutes(r)
+	registerPrivateWorkerRoutes(r, h)
 
 	// API v1
 	v1 := r.Group("/api/v1")
@@ -127,4 +128,11 @@ func registerRoutes(
 	routes.RegisterPaymentRoutes(v1, h.Payment, h.PaymentWebhook, h.Admin.Payment, jwtAuth, adminAuth, auditLog, settingService)
 
 	handler.RegisterPageRoutes(v1, cfg.Pricing.DataDir, gin.HandlerFunc(jwtAuth), gin.HandlerFunc(adminAuth), settingService)
+}
+
+func registerPrivateWorkerRoutes(r gin.IRouter, h *handler.Handlers) {
+	if h == nil || h.RadarWorker == nil {
+		return
+	}
+	routes.RegisterRadarWorkerRoutes(r, h.RadarWorker)
 }

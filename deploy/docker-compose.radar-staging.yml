@@ -1,0 +1,163 @@
+name: sub2api-radar-staging
+
+services:
+  sub2api-staging:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile.radar-control-staging
+    image: sub2api/radar-control-plane:staging
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:${RADAR_CONTROL_PLANE_PORT:-18080}:8080"
+    environment:
+      AUTO_SETUP: "true"
+      SERVER_HOST: "0.0.0.0"
+      SERVER_PORT: "8080"
+      SERVER_MODE: "release"
+      DATABASE_HOST: postgres-staging
+      DATABASE_PORT: "5432"
+      DATABASE_USER: ${RADAR_POSTGRES_USER:-radar}
+      DATABASE_PASSWORD: ${RADAR_POSTGRES_PASSWORD:?RADAR_POSTGRES_PASSWORD is required}
+      DATABASE_DBNAME: ${RADAR_POSTGRES_DB:-radar}
+      DATABASE_SSLMODE: disable
+      REDIS_HOST: redis-staging
+      REDIS_PORT: "6379"
+      REDIS_DB: "0"
+      JWT_SECRET: ${RADAR_JWT_SECRET:?RADAR_JWT_SECRET is required}
+      ADMIN_EMAIL: ${RADAR_ADMIN_EMAIL:-radar-admin@staging.local}
+      ADMIN_PASSWORD: ${RADAR_ADMIN_PASSWORD:?RADAR_ADMIN_PASSWORD is required}
+      RADAR_ENABLED: "true"
+      RADAR_CONTEXT_SIGNING_KEY: ${RADAR_CONTEXT_SIGNING_KEY:?RADAR_CONTEXT_SIGNING_KEY is required}
+      RADAR_EVIDENCE_HASH_KEY: ${RADAR_EVIDENCE_HASH_KEY:?RADAR_EVIDENCE_HASH_KEY is required}
+      RADAR_REGION: ${RADAR_REGION:-staging}
+      RADAR_ROUTE_PROFILE_VERSION: ${RADAR_ROUTE_PROFILE_VERSION:-staging-v1}
+    depends_on:
+      postgres-staging:
+        condition: service_healthy
+      redis-staging:
+        condition: service_healthy
+    networks:
+      - control_plane
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-T", "5", "-O", "/dev/null", "http://localhost:8080/health"]
+      interval: 15s
+      timeout: 5s
+      start_period: 45s
+      retries: 5
+
+  postgres-staging:
+    image: postgres:18-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${RADAR_POSTGRES_USER:-radar}
+      POSTGRES_PASSWORD: ${RADAR_POSTGRES_PASSWORD:?RADAR_POSTGRES_PASSWORD is required}
+      POSTGRES_DB: ${RADAR_POSTGRES_DB:-radar}
+      PGDATA: /var/lib/postgresql/data
+    volumes:
+      - radar_staging_postgres:/var/lib/postgresql/data
+    networks:
+      - control_plane
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  redis-staging:
+    image: redis:8-alpine
+    restart: unless-stopped
+    command: ["redis-server", "--appendonly", "yes"]
+    volumes:
+      - radar_staging_redis:/data
+    networks:
+      - control_plane
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  radar-synthetic-upstream:
+    image: sub2api/radar-worker:staging
+    restart: unless-stopped
+    entrypoint: ["python", "-m", "sub2api_radar.synthetic_upstream"]
+    environment:
+      RADAR_SYNTHETIC_HOST: "0.0.0.0"
+      RADAR_SYNTHETIC_PORT: "8090"
+      RADAR_SYNTHETIC_API_KEY: ${RADAR_SYNTHETIC_UPSTREAM_API_KEY:?RADAR_SYNTHETIC_UPSTREAM_API_KEY must be set to a dedicated staging value}
+    networks:
+      - control_plane
+    read_only: true
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,nodev,size=16m
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8090/health', timeout=2).read()"]
+      interval: 10s
+      timeout: 3s
+      start_period: 5s
+      retries: 5
+
+  radar-runner:
+    extends:
+      file: ../radar-worker/deploy/docker-compose.staging.yml
+      service: radar-runner
+    depends_on:
+      sub2api-staging:
+        condition: service_healthy
+      radar-synthetic-upstream:
+        condition: service_healthy
+    environment:
+      RADAR_WORKER_TOKEN: ${RADAR_RUNNER_WORKER_TOKEN:?RADAR_RUNNER_WORKER_TOKEN must be set to a 32+ character staging token}
+    networks:
+      - radar_worker_internal
+      - control_plane
+
+  radar-grader:
+    extends:
+      file: ../radar-worker/deploy/docker-compose.staging.yml
+      service: radar-grader
+    depends_on:
+      sub2api-staging:
+        condition: service_healthy
+    environment:
+      RADAR_WORKER_TOKEN: ${RADAR_GRADER_WORKER_TOKEN:?RADAR_GRADER_WORKER_TOKEN must be set to a 32+ character staging token}
+    networks:
+      - radar_worker_internal
+      - control_plane
+
+  radar-statistics:
+    extends:
+      file: ../radar-worker/deploy/docker-compose.staging.yml
+      service: radar-statistics
+    depends_on:
+      sub2api-staging:
+        condition: service_healthy
+    environment:
+      RADAR_WORKER_TOKEN: ${RADAR_STATISTICS_WORKER_TOKEN:?RADAR_STATISTICS_WORKER_TOKEN must be set to a 32+ character staging token}
+      RADAR_ANALYSIS_CAPABILITIES: ${RADAR_ANALYSIS_CAPABILITIES:-coding,reasoning,safety,tool_use,protocol}
+    networks:
+      - radar_worker_internal
+      - control_plane
+
+networks:
+  control_plane:
+    name: sub2api-radar-staging-control
+  radar_worker_internal:
+    name: sub2api-radar-staging-internal
+    internal: true
+
+volumes:
+  radar_staging_postgres:
+    name: sub2api-radar-staging-postgres
+  radar_staging_redis:
+    name: sub2api-radar-staging-redis
+  radar_runner_state:
+    name: sub2api-radar-staging-runner
+  radar_grader_state:
+    name: sub2api-radar-staging-grader
+  radar_statistics_state:
+    name: sub2api-radar-staging-statistics

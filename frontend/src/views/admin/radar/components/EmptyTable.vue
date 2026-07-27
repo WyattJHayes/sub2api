@@ -1,0 +1,1 @@
+<template><div class="rounded-lg border border-gray-200 bg-white p-8 text-center dark:border-dark-700 dark:bg-dark-900"><h2 class="font-semibold text-gray-900 dark:text-white">{{ title }}</h2><p class="mt-2 text-sm text-gray-500">{{ description }}</p></div></template><script setup lang="ts">defineProps<{ title: string; description: string }>();</script>

@@ -116,6 +116,57 @@ func RegisterAdminRoutes(
 
 		// 操作审计日志
 		registerAuditLogRoutes(admin, h, stepUpAuth)
+
+		// Quality Radar governance and read projections. The nil guard keeps
+		// lightweight route tests that construct partial handler sets valid.
+		registerRadarGovernanceRoutes(admin, h)
+	}
+}
+
+func registerRadarGovernanceRoutes(admin *gin.RouterGroup, h *handler.Handlers) {
+	if h == nil || h.Admin == nil || h.Admin.RadarGovernance == nil {
+		return
+	}
+	radar := admin.Group("/radar")
+	{
+		radar.GET("/overview", h.Admin.RadarGovernance.Overview)
+		radar.GET("/models", h.Admin.RadarGovernance.EmptyModels)
+		radar.GET("/runs", h.Admin.RadarGovernance.EmptyRuns)
+		radar.GET("/alerts", h.Admin.RadarGovernance.EmptyAlerts)
+		radar.GET("/gates", h.Admin.RadarGovernance.EmptyGates)
+		radar.GET("/workers", h.Admin.RadarGovernance.EmptyWorkers)
+		radar.GET("/datasets", h.Admin.RadarGovernance.EmptyDatasets)
+		radar.POST("/evaluation-keys/:id/enable", h.Admin.RadarGovernance.EnableEvaluationKey)
+		radar.POST("/datasets", h.Admin.RadarGovernance.CreateDataset)
+		radar.POST("/datasets/:id/publish", h.Admin.RadarGovernance.PublishDataset)
+		radar.POST("/plans", h.Admin.RadarGovernance.CreatePlan)
+		radar.POST("/runs", h.Admin.RadarGovernance.StartRun)
+
+		roleBindings := radar.Group("/rbac/role-bindings")
+		roleBindings.GET("", h.Admin.RadarGovernance.ListRoleBindings)
+		roleBindings.POST("", h.Admin.RadarGovernance.CreateRoleBinding)
+		roleBindings.DELETE("/:id", h.Admin.RadarGovernance.DisableRoleBinding)
+
+		baselines := radar.Group("/baselines")
+		baselines.POST("", h.Admin.RadarGovernance.ProposeBaseline)
+		baselines.GET("/:id", h.Admin.RadarGovernance.GetBaseline)
+		baselines.POST("/:id/approve", h.Admin.RadarGovernance.ApproveBaseline)
+		baselines.POST("/:id/activate", h.Admin.RadarGovernance.ActivateBaseline)
+
+		policies := radar.Group("/policies")
+		policies.POST("", h.Admin.RadarGovernance.CreateGatePolicy)
+
+		radar.POST("/gates/evaluate", h.Admin.RadarGovernance.EvaluateGate)
+		gates := radar.Group("/gates")
+		gates.POST("/waivers", h.Admin.RadarGovernance.WaiveGateDecision)
+
+		radar.POST("/alerts/observe", h.Admin.RadarGovernance.ObserveAlert)
+		alerts := radar.Group("/alerts")
+		alerts.GET("/:id", h.Admin.RadarGovernance.GetAlert)
+		alerts.POST("/:id/acknowledge", h.Admin.RadarGovernance.AcknowledgeAlert)
+		alerts.POST("/:id/recovery", h.Admin.RadarGovernance.RecordAlertRecovery)
+		alerts.POST("/:id/resolve", h.Admin.RadarGovernance.ResolveAlert)
+		alerts.POST("/:id/attribution", h.Admin.RadarGovernance.RecordAttribution)
 	}
 }
 

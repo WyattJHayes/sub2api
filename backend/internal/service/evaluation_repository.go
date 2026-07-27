@@ -35,15 +35,85 @@ type EvaluationRun struct {
 }
 
 type AssignmentLease struct {
-	ID                uuid.UUID
-	SampleID          uuid.UUID
-	RunID             uuid.UUID
-	ModelRoute        string
-	ModelConfig       json.RawMessage
-	ModelConfigSHA256 string
-	Attempt           int
-	Token             string
-	ExpiresAt         time.Time
+	ID                     uuid.UUID           `json:"id"`
+	SampleID               uuid.UUID           `json:"sample_id"`
+	RunID                  uuid.UUID           `json:"run_id"`
+	ModelRoute             string              `json:"model_route"`
+	ModelConfig            json.RawMessage     `json:"model_config"`
+	ModelConfigSHA256      string              `json:"model_config_sha256"`
+	Attempt                int                 `json:"attempt"`
+	Token                  string              `json:"token"`
+	ExpiresAt              time.Time           `json:"expires_at"`
+	Case                   *EvaluationCaseSpec `json:"case,omitempty"`
+	RouteConfig            json.RawMessage     `json:"-"`
+	GatewayAPIKeyID        int64               `json:"-"`
+	GatewayAPIKey          string              `json:"gateway_api_key,omitempty"`
+	DatasetVersion         string              `json:"dataset_version,omitempty"`
+	GatewayEvaluationToken string              `json:"gateway_evaluation_token,omitempty"`
+	RouteTraceID           string              `json:"route_trace_id,omitempty"`
+	DatasetVersionID       uuid.UUID           `json:"dataset_version_id,omitempty"`
+	DatasetKey             string              `json:"dataset_key,omitempty"`
+	DatasetManifestSHA256  string              `json:"dataset_manifest_sha256,omitempty"`
+}
+
+type EvaluationCaseSpec struct {
+	CaseID           uuid.UUID       `json:"case_id"`
+	CaseKey          string          `json:"case_key"`
+	CapabilityDomain string          `json:"capability_domain"`
+	Priority         string          `json:"priority"`
+	Weight           decimal.Decimal `json:"weight"`
+	PromptSpec       json.RawMessage `json:"prompt_spec,omitempty"`
+	ExpectedSpec     json.RawMessage `json:"expected_spec,omitempty"`
+	ExecutionSpec    json.RawMessage `json:"execution_spec"`
+	GraderID         string          `json:"grader_id"`
+	GraderVersion    string          `json:"grader_version"`
+	ContentSHA256    string          `json:"content_sha256"`
+	Confidentiality  string          `json:"confidentiality"`
+}
+
+type EvidenceSubmission struct {
+	AssignmentID uuid.UUID       `json:"assignment_id"`
+	SampleID     uuid.UUID       `json:"sample_id"`
+	Evidence     json.RawMessage `json:"evidence"`
+}
+
+type EvidenceReceipt struct {
+	AssignmentID           uuid.UUID `json:"assignment_id"`
+	EvidenceManifestSHA256 string    `json:"evidence_manifest_sha256"`
+	AcceptedAt             time.Time `json:"accepted_at"`
+}
+
+type ArtifactPresignRequest struct {
+	MIMEType string `json:"mime_type"`
+	Bytes    int64  `json:"bytes"`
+	SHA256   string `json:"sha256"`
+}
+
+type ArtifactUpload struct {
+	ID        uuid.UUID `json:"artifact_id"`
+	ObjectKey string    `json:"object_key"`
+	UploadURL string    `json:"upload_url"`
+	SHA256    string    `json:"sha256"`
+	Bytes     int64     `json:"bytes"`
+	MIMEType  string    `json:"mime_type"`
+	ExpiresAt time.Time `json:"expires_at"`
+}
+
+type ArtifactConfirmation struct {
+	ArtifactID uuid.UUID `json:"artifact_id"`
+	ObjectKey  string    `json:"object_key"`
+	SHA256     string    `json:"sha256"`
+	Bytes      int64     `json:"bytes"`
+}
+
+type ArtifactReceipt struct {
+	ID          uuid.UUID `json:"id"`
+	ObjectKey   string    `json:"object_key"`
+	SHA256      string    `json:"sha256"`
+	Bytes       int64     `json:"bytes"`
+	MIMEType    string    `json:"mime_type"`
+	ScanStatus  string    `json:"scan_status"`
+	ConfirmedAt time.Time `json:"confirmed_at,omitempty"`
 }
 
 type AssignmentTransition struct {
@@ -57,4 +127,5 @@ type EvaluationRepository interface {
 	ClaimAssignment(ctx context.Context, workerID uuid.UUID, capabilities []string, leaseTTL time.Duration) (*AssignmentLease, error)
 	RenewLease(ctx context.Context, assignmentID uuid.UUID, leaseToken string, extendBy time.Duration) (time.Time, error)
 	TransitionAssignment(ctx context.Context, input AssignmentTransition) error
+	SubmitEvidence(ctx context.Context, input EvidenceSubmission, leaseToken string) (*EvidenceReceipt, error)
 }

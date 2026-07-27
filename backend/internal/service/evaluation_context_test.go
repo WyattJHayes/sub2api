@@ -13,20 +13,24 @@ import (
 )
 
 const (
-	testEvaluationRunID    = "018f4f20-3d12-7e50-9000-000000000001"
-	testEvaluationSampleID = "018f4f20-3d12-7e50-9000-000000000002"
+	testEvaluationRunID     = "018f4f20-3d12-7e50-9000-000000000001"
+	testEvaluationSampleID  = "018f4f20-3d12-7e50-9000-000000000002"
+	testEvaluationDatasetID = "018f4f20-3d12-7e50-9000-000000000004"
 )
 
 func validEvaluationContext(issuedAt time.Time) EvaluationContext {
 	return EvaluationContext{
-		RunID:                testEvaluationRunID,
-		SampleID:             testEvaluationSampleID,
-		DatasetVersion:       "core-v1",
-		ExpectedModelAlias:   "qwen3-coder",
-		ExpectedRouteProfile: "route-v42",
-		APIKeyID:             41,
-		IssuedAt:             issuedAt,
-		ExpiresAt:            issuedAt.Add(5 * time.Minute),
+		RunID:                 testEvaluationRunID,
+		SampleID:              testEvaluationSampleID,
+		DatasetVersionID:      testEvaluationDatasetID,
+		DatasetKey:            "core-reasoning",
+		DatasetVersion:        "core-v1",
+		DatasetManifestSHA256: strings.Repeat("a", 64),
+		ExpectedModelAlias:    "qwen3-coder",
+		ExpectedRouteProfile:  "route-v42",
+		APIKeyID:              41,
+		IssuedAt:              issuedAt,
+		ExpiresAt:             issuedAt.Add(5 * time.Minute),
 	}
 }
 
@@ -54,16 +58,33 @@ func TestEvaluationContextSignerRoundTrip(t *testing.T) {
 	require.NoError(t, err)
 	got, err := signer.Verify(token, want.APIKeyID, issuedAt.Add(time.Minute))
 	require.NoError(t, err)
-	require.Equal(t, 1, got.Version)
+	require.Equal(t, 2, got.Version)
 	require.Equal(t, want.RunID, got.RunID)
 	require.Equal(t, want.SampleID, got.SampleID)
+	require.Equal(t, want.DatasetVersionID, got.DatasetVersionID)
+	require.Equal(t, want.DatasetKey, got.DatasetKey)
 	require.Equal(t, want.DatasetVersion, got.DatasetVersion)
+	require.Equal(t, want.DatasetManifestSHA256, got.DatasetManifestSHA256)
 	require.Equal(t, want.ExpectedModelAlias, got.ExpectedModelAlias)
 	require.Equal(t, want.ExpectedRouteProfile, got.ExpectedRouteProfile)
 	require.Equal(t, want.APIKeyID, got.APIKeyID)
 	require.Equal(t, want.IssuedAt, got.IssuedAt)
 	require.Equal(t, want.ExpiresAt, got.ExpiresAt)
 	require.Empty(t, got.RouteTraceID)
+}
+
+func TestEvaluationContextSignerBindsServerGeneratedRouteTrace(t *testing.T) {
+	signer, err := NewEvaluationContextSigner([]byte(strings.Repeat("k", 32)), 5*time.Minute)
+	require.NoError(t, err)
+	issuedAt := time.Date(2026, 7, 25, 12, 0, 0, 0, time.UTC)
+	want := validEvaluationContext(issuedAt)
+	want.RouteTraceID = "018f4f20-3d12-7e50-9000-000000000003"
+
+	token, err := signer.Sign(want)
+	require.NoError(t, err)
+	got, err := signer.Verify(token, want.APIKeyID, issuedAt.Add(time.Minute))
+	require.NoError(t, err)
+	require.Equal(t, want.RouteTraceID, got.RouteTraceID)
 }
 
 func TestEvaluationContextSignerRejectsInvalidConstructorInputs(t *testing.T) {
@@ -100,10 +121,13 @@ func TestEvaluationContextSignerRejectsInvalidClaims(t *testing.T) {
 		name   string
 		mutate func(*EvaluationContext)
 	}{
-		{name: "unknown version", mutate: func(c *EvaluationContext) { c.Version = 2 }},
+		{name: "unknown version", mutate: func(c *EvaluationContext) { c.Version = 3 }},
 		{name: "malformed run UUID", mutate: func(c *EvaluationContext) { c.RunID = "not-a-uuid" }},
 		{name: "malformed sample UUID", mutate: func(c *EvaluationContext) { c.SampleID = "not-a-uuid" }},
+		{name: "malformed dataset UUID", mutate: func(c *EvaluationContext) { c.DatasetVersionID = "not-a-uuid" }},
+		{name: "empty dataset key", mutate: func(c *EvaluationContext) { c.DatasetKey = " " }},
 		{name: "empty dataset", mutate: func(c *EvaluationContext) { c.DatasetVersion = " " }},
+		{name: "malformed dataset manifest", mutate: func(c *EvaluationContext) { c.DatasetManifestSHA256 = "short" }},
 		{name: "empty model alias", mutate: func(c *EvaluationContext) { c.ExpectedModelAlias = "" }},
 		{name: "empty route profile", mutate: func(c *EvaluationContext) { c.ExpectedRouteProfile = "" }},
 		{name: "invalid API key", mutate: func(c *EvaluationContext) { c.APIKeyID = 0 }},

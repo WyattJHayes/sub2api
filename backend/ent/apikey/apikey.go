@@ -71,6 +71,8 @@ const (
 	EdgeUsageLogs = "usage_logs"
 	// EdgeEvaluationRouteEvidence holds the string denoting the evaluation_route_evidence edge name in mutations.
 	EdgeEvaluationRouteEvidence = "evaluation_route_evidence"
+	// EdgeEvaluationPlans holds the string denoting the evaluation_plans edge name in mutations.
+	EdgeEvaluationPlans = "evaluation_plans"
 	// EvaluationRouteEvidenceFieldID holds the string denoting the ID field of the EvaluationRouteEvidence.
 	EvaluationRouteEvidenceFieldID = "route_trace_id"
 	// Table holds the table name of the apikey in the database.
@@ -103,6 +105,13 @@ const (
 	EvaluationRouteEvidenceInverseTable = "evaluation_route_evidence"
 	// EvaluationRouteEvidenceColumn is the table column denoting the evaluation_route_evidence relation/edge.
 	EvaluationRouteEvidenceColumn = "api_key_id"
+	// EvaluationPlansTable is the table that holds the evaluation_plans relation/edge.
+	EvaluationPlansTable = "evaluation_plans"
+	// EvaluationPlansInverseTable is the table name for the EvaluationPlan entity.
+	// It exists in this package in order to avoid circular dependency with the "evaluationplan" package.
+	EvaluationPlansInverseTable = "evaluation_plans"
+	// EvaluationPlansColumn is the table column denoting the evaluation_plans relation/edge.
+	EvaluationPlansColumn = "gateway_api_key_id"
 )
 
 // Columns holds all SQL columns for apikey fields.
@@ -345,6 +354,20 @@ func ByEvaluationRouteEvidence(term sql.OrderTerm, terms ...sql.OrderTerm) Order
 		sqlgraph.OrderByNeighborTerms(s, newEvaluationRouteEvidenceStep(), append([]sql.OrderTerm{term}, terms...)...)
 	}
 }
+
+// ByEvaluationPlansCount orders the results by evaluation_plans count.
+func ByEvaluationPlansCount(opts ...sql.OrderTermOption) OrderOption {
+	return func(s *sql.Selector) {
+		sqlgraph.OrderByNeighborsCount(s, newEvaluationPlansStep(), opts...)
+	}
+}
+
+// ByEvaluationPlans orders the results by evaluation_plans terms.
+func ByEvaluationPlans(term sql.OrderTerm, terms ...sql.OrderTerm) OrderOption {
+	return func(s *sql.Selector) {
+		sqlgraph.OrderByNeighborTerms(s, newEvaluationPlansStep(), append([]sql.OrderTerm{term}, terms...)...)
+	}
+}
 func newUserStep() *sqlgraph.Step {
 	return sqlgraph.NewStep(
 		sqlgraph.From(Table, FieldID),
@@ -371,5 +394,12 @@ func newEvaluationRouteEvidenceStep() *sqlgraph.Step {
 		sqlgraph.From(Table, FieldID),
 		sqlgraph.To(EvaluationRouteEvidenceInverseTable, EvaluationRouteEvidenceFieldID),
 		sqlgraph.Edge(sqlgraph.O2M, false, EvaluationRouteEvidenceTable, EvaluationRouteEvidenceColumn),
+	)
+}
+func newEvaluationPlansStep() *sqlgraph.Step {
+	return sqlgraph.NewStep(
+		sqlgraph.From(Table, FieldID),
+		sqlgraph.To(EvaluationPlansInverseTable, FieldID),
+		sqlgraph.Edge(sqlgraph.O2M, false, EvaluationPlansTable, EvaluationPlansColumn),
 	)
 }

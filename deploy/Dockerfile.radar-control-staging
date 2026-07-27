@@ -1,0 +1,6 @@
+FROM sub2api-custom:0.1.151-disable-image-generation.1
+
+COPY radar-control-plane /app/sub2api
+
+USER root
+RUN chown sub2api:sub2api /app/sub2api && chmod 0755 /app/sub2api

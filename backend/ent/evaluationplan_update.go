@@ -12,6 +12,7 @@ import (
 	"entgo.io/ent/dialect/sql/sqlgraph"
 	"entgo.io/ent/dialect/sql/sqljson"
 	"entgo.io/ent/schema/field"
+	"github.com/Wei-Shaw/sub2api/ent/apikey"
 	"github.com/Wei-Shaw/sub2api/ent/evaluationplan"
 	"github.com/Wei-Shaw/sub2api/ent/evaluationrun"
 	"github.com/Wei-Shaw/sub2api/ent/predicate"
@@ -42,6 +43,26 @@ func (_u *EvaluationPlanUpdate) SetNillableName(v *string) *EvaluationPlanUpdate
 	if v != nil {
 		_u.SetName(*v)
 	}
+	return _u
+}
+
+// SetGatewayAPIKeyID sets the "gateway_api_key_id" field.
+func (_u *EvaluationPlanUpdate) SetGatewayAPIKeyID(v int64) *EvaluationPlanUpdate {
+	_u.mutation.SetGatewayAPIKeyID(v)
+	return _u
+}
+
+// SetNillableGatewayAPIKeyID sets the "gateway_api_key_id" field if the given value is not nil.
+func (_u *EvaluationPlanUpdate) SetNillableGatewayAPIKeyID(v *int64) *EvaluationPlanUpdate {
+	if v != nil {
+		_u.SetGatewayAPIKeyID(*v)
+	}
+	return _u
+}
+
+// ClearGatewayAPIKeyID clears the value of the "gateway_api_key_id" field.
+func (_u *EvaluationPlanUpdate) ClearGatewayAPIKeyID() *EvaluationPlanUpdate {
+	_u.mutation.ClearGatewayAPIKeyID()
 	return _u
 }
 
@@ -174,6 +195,11 @@ func (_u *EvaluationPlanUpdate) SetUpdatedAt(v time.Time) *EvaluationPlanUpdate 
 	return _u
 }
 
+// SetGatewayAPIKey sets the "gateway_api_key" edge to the APIKey entity.
+func (_u *EvaluationPlanUpdate) SetGatewayAPIKey(v *APIKey) *EvaluationPlanUpdate {
+	return _u.SetGatewayAPIKeyID(v.ID)
+}
+
 // AddRunIDs adds the "runs" edge to the EvaluationRun entity by IDs.
 func (_u *EvaluationPlanUpdate) AddRunIDs(ids ...uuid.UUID) *EvaluationPlanUpdate {
 	_u.mutation.AddRunIDs(ids...)
@@ -192,6 +218,12 @@ func (_u *EvaluationPlanUpdate) AddRuns(v ...*EvaluationRun) *EvaluationPlanUpda
 // Mutation returns the EvaluationPlanMutation object of the builder.
 func (_u *EvaluationPlanUpdate) Mutation() *EvaluationPlanMutation {
 	return _u.mutation
+}
+
+// ClearGatewayAPIKey clears the "gateway_api_key" edge to the APIKey entity.
+func (_u *EvaluationPlanUpdate) ClearGatewayAPIKey() *EvaluationPlanUpdate {
+	_u.mutation.ClearGatewayAPIKey()
+	return _u
 }
 
 // ClearRuns clears all "runs" edges to the EvaluationRun entity.
@@ -330,6 +362,35 @@ func (_u *EvaluationPlanUpdate) sqlSave(ctx context.Context) (_node int, err err
 	if value, ok := _u.mutation.UpdatedAt(); ok {
 		_spec.SetField(evaluationplan.FieldUpdatedAt, field.TypeTime, value)
 	}
+	if _u.mutation.GatewayAPIKeyCleared() {
+		edge := &sqlgraph.EdgeSpec{
+			Rel:     sqlgraph.M2O,
+			Inverse: true,
+			Table:   evaluationplan.GatewayAPIKeyTable,
+			Columns: []string{evaluationplan.GatewayAPIKeyColumn},
+			Bidi:    false,
+			Target: &sqlgraph.EdgeTarget{
+				IDSpec: sqlgraph.NewFieldSpec(apikey.FieldID, field.TypeInt64),
+			},
+		}
+		_spec.Edges.Clear = append(_spec.Edges.Clear, edge)
+	}
+	if nodes := _u.mutation.GatewayAPIKeyIDs(); len(nodes) > 0 {
+		edge := &sqlgraph.EdgeSpec{
+			Rel:     sqlgraph.M2O,
+			Inverse: true,
+			Table:   evaluationplan.GatewayAPIKeyTable,
+			Columns: []string{evaluationplan.GatewayAPIKeyColumn},
+			Bidi:    false,
+			Target: &sqlgraph.EdgeTarget{
+				IDSpec: sqlgraph.NewFieldSpec(apikey.FieldID, field.TypeInt64),
+			},
+		}
+		for _, k := range nodes {
+			edge.Target.Nodes = append(edge.Target.Nodes, k)
+		}
+		_spec.Edges.Add = append(_spec.Edges.Add, edge)
+	}
 	if _u.mutation.RunsCleared() {
 		edge := &sqlgraph.EdgeSpec{
 			Rel:     sqlgraph.O2M,
@@ -406,6 +467,26 @@ func (_u *EvaluationPlanUpdateOne) SetNillableName(v *string) *EvaluationPlanUpd
 	if v != nil {
 		_u.SetName(*v)
 	}
+	return _u
+}
+
+// SetGatewayAPIKeyID sets the "gateway_api_key_id" field.
+func (_u *EvaluationPlanUpdateOne) SetGatewayAPIKeyID(v int64) *EvaluationPlanUpdateOne {
+	_u.mutation.SetGatewayAPIKeyID(v)
+	return _u
+}
+
+// SetNillableGatewayAPIKeyID sets the "gateway_api_key_id" field if the given value is not nil.
+func (_u *EvaluationPlanUpdateOne) SetNillableGatewayAPIKeyID(v *int64) *EvaluationPlanUpdateOne {
+	if v != nil {
+		_u.SetGatewayAPIKeyID(*v)
+	}
+	return _u
+}
+
+// ClearGatewayAPIKeyID clears the value of the "gateway_api_key_id" field.
+func (_u *EvaluationPlanUpdateOne) ClearGatewayAPIKeyID() *EvaluationPlanUpdateOne {
+	_u.mutation.ClearGatewayAPIKeyID()
 	return _u
 }
 
@@ -538,6 +619,11 @@ func (_u *EvaluationPlanUpdateOne) SetUpdatedAt(v time.Time) *EvaluationPlanUpda
 	return _u
 }
 
+// SetGatewayAPIKey sets the "gateway_api_key" edge to the APIKey entity.
+func (_u *EvaluationPlanUpdateOne) SetGatewayAPIKey(v *APIKey) *EvaluationPlanUpdateOne {
+	return _u.SetGatewayAPIKeyID(v.ID)
+}
+
 // AddRunIDs adds the "runs" edge to the EvaluationRun entity by IDs.
 func (_u *EvaluationPlanUpdateOne) AddRunIDs(ids ...uuid.UUID) *EvaluationPlanUpdateOne {
 	_u.mutation.AddRunIDs(ids...)
@@ -556,6 +642,12 @@ func (_u *EvaluationPlanUpdateOne) AddRuns(v ...*EvaluationRun) *EvaluationPlanU
 // Mutation returns the EvaluationPlanMutation object of the builder.
 func (_u *EvaluationPlanUpdateOne) Mutation() *EvaluationPlanMutation {
 	return _u.mutation
+}
+
+// ClearGatewayAPIKey clears the "gateway_api_key" edge to the APIKey entity.
+func (_u *EvaluationPlanUpdateOne) ClearGatewayAPIKey() *EvaluationPlanUpdateOne {
+	_u.mutation.ClearGatewayAPIKey()
+	return _u
 }
 
 // ClearRuns clears all "runs" edges to the EvaluationRun entity.
@@ -723,6 +815,35 @@ func (_u *EvaluationPlanUpdateOne) sqlSave(ctx context.Context) (_node *Evaluati
 	}
 	if value, ok := _u.mutation.UpdatedAt(); ok {
 		_spec.SetField(evaluationplan.FieldUpdatedAt, field.TypeTime, value)
+	}
+	if _u.mutation.GatewayAPIKeyCleared() {
+		edge := &sqlgraph.EdgeSpec{
+			Rel:     sqlgraph.M2O,
+			Inverse: true,
+			Table:   evaluationplan.GatewayAPIKeyTable,
+			Columns: []string{evaluationplan.GatewayAPIKeyColumn},
+			Bidi:    false,
+			Target: &sqlgraph.EdgeTarget{
+				IDSpec: sqlgraph.NewFieldSpec(apikey.FieldID, field.TypeInt64),
+			},
+		}
+		_spec.Edges.Clear = append(_spec.Edges.Clear, edge)
+	}
+	if nodes := _u.mutation.GatewayAPIKeyIDs(); len(nodes) > 0 {
+		edge := &sqlgraph.EdgeSpec{
+			Rel:     sqlgraph.M2O,
+			Inverse: true,
+			Table:   evaluationplan.GatewayAPIKeyTable,
+			Columns: []string{evaluationplan.GatewayAPIKeyColumn},
+			Bidi:    false,
+			Target: &sqlgraph.EdgeTarget{
+				IDSpec: sqlgraph.NewFieldSpec(apikey.FieldID, field.TypeInt64),
+			},
+		}
+		for _, k := range nodes {
+			edge.Target.Nodes = append(edge.Target.Nodes, k)
+		}
+		_spec.Edges.Add = append(_spec.Edges.Add, edge)
 	}
 	if _u.mutation.RunsCleared() {
 		edge := &sqlgraph.EdgeSpec{

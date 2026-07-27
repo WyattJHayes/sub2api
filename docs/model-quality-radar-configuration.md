@@ -1,6 +1,6 @@
 # Model Quality Radar Configuration
 
-Model Quality Radar uses dedicated evaluation identities. Do not reuse a customer user, group, or API key. Apply database migrations before enabling Radar; migration `190_add_radar_route_evidence.sql` adds the evaluation-key flag and evidence table.
+Model Quality Radar uses dedicated evaluation identities. Do not reuse a customer user, group, or API key. Apply migrations through `196_add_evaluation_key_events.sql` before enabling Radar. Migration `190_add_radar_route_evidence.sql` adds the evaluation-key flag and evidence table, migration `195_bind_evaluation_gateway_api_key.sql` freezes the dedicated key on each plan, and migration `196_add_evaluation_key_events.sql` adds the enablement audit trail.
 
 ## Server configuration
 
@@ -83,40 +83,36 @@ curl -fsS -X POST "$SUB2API_URL/api/v1/keys" \
 
 Record the returned key ID as `RADAR_API_KEY_ID` and the generated key in the evaluator's secret manager. Do not send an inference request yet.
 
-4. The public API intentionally cannot grant evaluation status. Before first use, mark the exact key in PostgreSQL and reassert every isolation limit in one transaction:
+4. Grant the first global `platform_admin` Radar binding while the bootstrap rule is active. Bootstrap access exists only while the database has no enabled global Radar binding. The first binding closes that path automatically.
 
-```sql
-BEGIN;
+`platform_admin` is deliberately limited to role, route, and evaluation-key administration. It does not imply dataset, run, policy, baseline, or gate permissions. A staging administrator that owns dataset creation, plan creation, run execution, key administration, and gate smoke testing needs four global bindings on the same actor:
 
-UPDATE api_keys AS k
-SET is_evaluation = TRUE,
-    group_id = :radar_group_id,
-    quota = 10.00000000,
-    quota_used = 0,
-    rate_limit_5h = 1.00000000,
-    rate_limit_1d = 2.00000000,
-    rate_limit_7d = 5.00000000,
-    usage_5h = 0,
-    usage_1d = 0,
-    usage_7d = 0,
-    updated_at = NOW()
-FROM users AS u, groups AS g
-WHERE k.id = :radar_api_key_id
-  AND k.user_id = :radar_user_id
-  AND u.id = k.user_id
-  AND u.email = 'radar-evaluator@example.invalid'
-  AND u.status = 'active'
-  AND u.concurrency = 1
-  AND g.id = :radar_group_id
-  AND g.is_exclusive = TRUE
-  AND g.status = 'active'
-RETURNING k.id, k.user_id, k.group_id, k.is_evaluation,
-          k.quota, k.rate_limit_5h, k.rate_limit_1d, k.rate_limit_7d;
+- `platform_admin` for role bindings and evaluation-key enablement
+- `quality_admin` for dataset creation, dataset publication, plans, and policies
+- `test_operator` for run start, retry, and worker administration
+- `release_manager` for gate decisions, waivers, and release approval
 
-COMMIT;
+Create each binding with an empty global scope. Create `platform_admin` first, then use its `role_manage` permission for the remaining bindings:
+
+```bash
+curl -fsS -X POST "$SUB2API_URL/api/v1/admin/radar/rbac/role-bindings" \
+  -H "Authorization: Bearer $ADMIN_JWT" \
+  -H 'Content-Type: application/json' \
+  -d "{\"actor_id\":$RADAR_ADMIN_USER_ID,\"role\":\"platform_admin\",\"scope\":{}}"
 ```
 
-The `UPDATE ... RETURNING` must return exactly one row. If it returns none or more than one, roll back and correct the IDs. Because evaluation status is changed directly in SQL, perform this step before the key has ever been authenticated. If an existing key is converted, restart the API servers after the transaction so no authentication cache can retain the old flag.
+Repeat the request for `quality_admin`, `test_operator`, and `release_manager`. Verify all four enabled rows before creating the dataset or plan. A second bootstrap attempt must return `403` unless the caller has `role_manage` through an explicit binding.
+
+The four bindings on one actor do not satisfy baseline separation of duties. A complete baseline promotion test needs a second active administrator with the required Radar binding because the proposer cannot approve the same baseline. Quality approval and release approval must be recorded by eligible actors according to the deployment's separation policy; production uses different users for proposal, quality approval, and release approval.
+
+5. Enable the dedicated key through the audited governance API or the `Enable for Radar` control in the Runs view:
+
+```bash
+curl -fsS -X POST "$SUB2API_URL/api/v1/admin/radar/evaluation-keys/$RADAR_API_KEY_ID/enable" \
+  -H "Authorization: Bearer $ADMIN_JWT"
+```
+
+The operation requires `evaluation_key_manage`. It succeeds only when the key, owning user, and group are active, the key has remaining quota, and the key has not expired. Every successful enable action inserts an immutable `evaluation_key_events` row with the authenticated actor ID. Repeating the operation remains auditable.
 
 Verify the final isolation state:
 
@@ -130,6 +126,73 @@ JOIN users AS u ON u.id = k.user_id
 JOIN groups AS g ON g.id = k.group_id
 WHERE k.id = :radar_api_key_id;
 ```
+
+Verify the audit record separately:
+
+```sql
+SELECT api_key_id, action, actor_id, created_at
+FROM evaluation_key_events
+WHERE api_key_id = :radar_api_key_id
+ORDER BY created_at DESC;
+```
+
+## Paired evaluation plans
+
+Every plan entry carries independent baseline and candidate inference configuration. A shared configuration is rejected because it cannot detect a route or model change.
+
+```json
+[
+  {
+    "route": "deepseek-chat",
+    "baseline": {
+      "route": "deepseek-chat-v1",
+      "temperature": 0,
+      "max_tokens": 256
+    },
+    "candidate": {
+      "route": "deepseek-chat-v2",
+      "temperature": 0,
+      "max_tokens": 256
+    }
+  }
+]
+```
+
+The plan also freezes `gateway_api_key_id`, `max_run_cost`, `daily_cost_limit`, and `max_concurrency`. Run creation reserves the estimated cost under a row lock. Assignment claims recheck plan enablement, key eligibility, and active concurrency before leasing work.
+
+For the deterministic staging acceptance, use the following matrix. The top-level route identifies the comparison while each side freezes the gateway model alias used for inference:
+
+```json
+[
+  {
+    "route": "radar-synthetic-quality",
+    "baseline": {
+      "route": "radar-synthetic-baseline",
+      "temperature": 0
+    },
+    "candidate": {
+      "route": "radar-synthetic-candidate",
+      "temperature": 0
+    }
+  }
+]
+```
+
+Each synthetic case uses an OpenAI chat-completions prompt, a scalar exact-match expectation, and a relative gateway URL:
+
+```json
+{
+  "prompt_spec": {
+    "messages": [{"role": "user", "content": "What is the capital of France?"}]
+  },
+  "expected_spec": "Paris",
+  "execution_spec": {"url": "/v1/chat/completions"},
+  "grader_id": "exact",
+  "grader_version": "v1"
+}
+```
+
+Do not wrap the exact expectation in an object. The exact grader compares the normalized JSON value directly with the extracted response text. Absolute execution URLs are rejected before the evaluation API key can leave the worker.
 
 ## Evaluation requests
 

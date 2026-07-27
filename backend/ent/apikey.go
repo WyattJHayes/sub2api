@@ -84,9 +84,11 @@ type APIKeyEdges struct {
 	UsageLogs []*UsageLog `json:"usage_logs,omitempty"`
 	// EvaluationRouteEvidence holds the value of the evaluation_route_evidence edge.
 	EvaluationRouteEvidence []*EvaluationRouteEvidence `json:"evaluation_route_evidence,omitempty"`
+	// EvaluationPlans holds the value of the evaluation_plans edge.
+	EvaluationPlans []*EvaluationPlan `json:"evaluation_plans,omitempty"`
 	// loadedTypes holds the information for reporting if a
 	// type was loaded (or requested) in eager-loading or not.
-	loadedTypes [4]bool
+	loadedTypes [5]bool
 }
 
 // UserOrErr returns the User value or an error if the edge
@@ -127,6 +129,15 @@ func (e APIKeyEdges) EvaluationRouteEvidenceOrErr() ([]*EvaluationRouteEvidence,
 		return e.EvaluationRouteEvidence, nil
 	}
 	return nil, &NotLoadedError{edge: "evaluation_route_evidence"}
+}
+
+// EvaluationPlansOrErr returns the EvaluationPlans value or an error if the edge
+// was not loaded in eager-loading.
+func (e APIKeyEdges) EvaluationPlansOrErr() ([]*EvaluationPlan, error) {
+	if e.loadedTypes[4] {
+		return e.EvaluationPlans, nil
+	}
+	return nil, &NotLoadedError{edge: "evaluation_plans"}
 }
 
 // scanValues returns the types for scanning values from sql.Rows.
@@ -353,6 +364,11 @@ func (_m *APIKey) QueryUsageLogs() *UsageLogQuery {
 // QueryEvaluationRouteEvidence queries the "evaluation_route_evidence" edge of the APIKey entity.
 func (_m *APIKey) QueryEvaluationRouteEvidence() *EvaluationRouteEvidenceQuery {
 	return NewAPIKeyClient(_m.config).QueryEvaluationRouteEvidence(_m)
+}
+
+// QueryEvaluationPlans queries the "evaluation_plans" edge of the APIKey entity.
+func (_m *APIKey) QueryEvaluationPlans() *EvaluationPlanQuery {
+	return NewAPIKeyClient(_m.config).QueryEvaluationPlans(_m)
 }
 
 // Update returns a builder for updating this APIKey.

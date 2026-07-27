@@ -16,7 +16,7 @@ import (
 )
 
 const (
-	evaluationContextVersion = 1
+	evaluationContextVersion = 2
 	minimumEvaluationKeySize = 32
 
 	MaxEvaluationContextTTL    = 15 * time.Minute
@@ -35,16 +35,19 @@ var (
 )
 
 type EvaluationContext struct {
-	Version              int       `json:"v"`
-	RunID                string    `json:"run_id"`
-	SampleID             string    `json:"sample_id"`
-	DatasetVersion       string    `json:"dataset_version"`
-	ExpectedModelAlias   string    `json:"expected_model_alias"`
-	ExpectedRouteProfile string    `json:"expected_route_profile"`
-	APIKeyID             int64     `json:"api_key_id"`
-	IssuedAt             time.Time `json:"issued_at"`
-	ExpiresAt            time.Time `json:"expires_at"`
-	RouteTraceID         string    `json:"-"`
+	Version               int       `json:"v"`
+	RunID                 string    `json:"run_id"`
+	SampleID              string    `json:"sample_id"`
+	DatasetVersionID      string    `json:"dataset_version_id"`
+	DatasetKey            string    `json:"dataset_key"`
+	DatasetVersion        string    `json:"dataset_version"`
+	DatasetManifestSHA256 string    `json:"dataset_manifest_sha256"`
+	ExpectedModelAlias    string    `json:"expected_model_alias"`
+	ExpectedRouteProfile  string    `json:"expected_route_profile"`
+	APIKeyID              int64     `json:"api_key_id"`
+	IssuedAt              time.Time `json:"issued_at"`
+	ExpiresAt             time.Time `json:"expires_at"`
+	RouteTraceID          string    `json:"route_trace_id,omitempty"`
 }
 
 type EvaluationContextSigner struct {
@@ -129,7 +132,12 @@ func (s *EvaluationContextSigner) validateClaims(claims EvaluationContext) error
 	if _, err := uuid.Parse(claims.SampleID); err != nil {
 		return fmt.Errorf("%w: invalid sample ID", ErrEvaluationContextClaimsInvalid)
 	}
-	if strings.TrimSpace(claims.DatasetVersion) == "" ||
+	if _, err := uuid.Parse(claims.DatasetVersionID); err != nil {
+		return fmt.Errorf("%w: invalid dataset version ID", ErrEvaluationContextClaimsInvalid)
+	}
+	if strings.TrimSpace(claims.DatasetKey) == "" ||
+		strings.TrimSpace(claims.DatasetVersion) == "" ||
+		!lowercaseSHA256(claims.DatasetManifestSHA256) ||
 		strings.TrimSpace(claims.ExpectedModelAlias) == "" ||
 		strings.TrimSpace(claims.ExpectedRouteProfile) == "" {
 		return fmt.Errorf("%w: required identity is empty", ErrEvaluationContextClaimsInvalid)
@@ -137,11 +145,28 @@ func (s *EvaluationContextSigner) validateClaims(claims EvaluationContext) error
 	if claims.APIKeyID <= 0 || claims.IssuedAt.IsZero() || claims.ExpiresAt.IsZero() {
 		return fmt.Errorf("%w: invalid key or time", ErrEvaluationContextClaimsInvalid)
 	}
+	if claims.RouteTraceID != "" {
+		if _, err := uuid.Parse(claims.RouteTraceID); err != nil {
+			return fmt.Errorf("%w: invalid route trace ID", ErrEvaluationContextClaimsInvalid)
+		}
+	}
 	lifetime := claims.ExpiresAt.Sub(claims.IssuedAt)
 	if lifetime <= 0 || lifetime > s.ttl {
 		return fmt.Errorf("%w: invalid lifetime", ErrEvaluationContextClaimsInvalid)
 	}
 	return nil
+}
+
+func lowercaseSHA256(value string) bool {
+	if len(value) != sha256.Size*2 {
+		return false
+	}
+	for _, char := range value {
+		if (char < '0' || char > '9') && (char < 'a' || char > 'f') {
+			return false
+		}
+	}
+	return true
 }
 
 func WithEvaluationContext(ctx context.Context, value EvaluationContext) context.Context {

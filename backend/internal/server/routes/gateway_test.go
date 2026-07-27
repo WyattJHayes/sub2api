@@ -121,14 +121,17 @@ func TestGatewayRoutesRunEvaluationEvidenceAfterAuthenticationForEveryGatewayFam
 	require.NoError(t, err)
 	now := time.Now().UTC()
 	token, err := signer.Sign(service.EvaluationContext{
-		RunID:                "018f4f20-3d12-7e50-9000-000000000601",
-		SampleID:             "018f4f20-3d12-7e50-9000-000000000602",
-		DatasetVersion:       "dataset-v1",
-		ExpectedModelAlias:   "public-coder",
-		ExpectedRouteProfile: "route-v42",
-		APIKeyID:             apiKeyID,
-		IssuedAt:             now.Add(-time.Second),
-		ExpiresAt:            now.Add(2 * time.Minute),
+		RunID:                 "018f4f20-3d12-7e50-9000-000000000601",
+		SampleID:              "018f4f20-3d12-7e50-9000-000000000602",
+		DatasetVersionID:      "018f4f20-3d12-7e50-9000-000000000603",
+		DatasetKey:            "gateway-route-order",
+		DatasetVersion:        "dataset-v1",
+		DatasetManifestSHA256: strings.Repeat("d", 64),
+		ExpectedModelAlias:    "public-coder",
+		ExpectedRouteProfile:  "route-v42",
+		APIKeyID:              apiKeyID,
+		IssuedAt:              now.Add(-time.Second),
+		ExpiresAt:             now.Add(2 * time.Minute),
 	})
 	require.NoError(t, err)
 

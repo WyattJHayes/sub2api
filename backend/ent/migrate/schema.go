@@ -980,6 +980,7 @@ var (
 		{Name: "created_by", Type: field.TypeInt64},
 		{Name: "created_at", Type: field.TypeTime, SchemaType: map[string]string{"postgres": "timestamptz"}},
 		{Name: "updated_at", Type: field.TypeTime, SchemaType: map[string]string{"postgres": "timestamptz"}},
+		{Name: "gateway_api_key_id", Type: field.TypeInt64, Nullable: true},
 		{Name: "dataset_version_id", Type: field.TypeUUID},
 	}
 	// EvaluationPlansTable holds the schema information for the "evaluation_plans" table.
@@ -989,8 +990,14 @@ var (
 		PrimaryKey: []*schema.Column{EvaluationPlansColumns[0]},
 		ForeignKeys: []*schema.ForeignKey{
 			{
-				Symbol:     "evaluation_plans_evaluation_dataset_versions_plans",
+				Symbol:     "evaluation_plans_api_keys_evaluation_plans",
 				Columns:    []*schema.Column{EvaluationPlansColumns[12]},
+				RefColumns: []*schema.Column{APIKeysColumns[0]},
+				OnDelete:   schema.SetNull,
+			},
+			{
+				Symbol:     "evaluation_plans_evaluation_dataset_versions_plans",
+				Columns:    []*schema.Column{EvaluationPlansColumns[13]},
 				RefColumns: []*schema.Column{EvaluationDatasetVersionsColumns[0]},
 				OnDelete:   schema.NoAction,
 			},
@@ -1000,6 +1007,14 @@ var (
 				Name:    "evaluationplan_enabled_trigger_type",
 				Unique:  false,
 				Columns: []*schema.Column{EvaluationPlansColumns[8], EvaluationPlansColumns[2]},
+			},
+			{
+				Name:    "idx_evaluation_plans_gateway_api_key",
+				Unique:  false,
+				Columns: []*schema.Column{EvaluationPlansColumns[12]},
+				Annotation: &entsql.IndexAnnotation{
+					Where: "gateway_api_key_id IS NOT NULL",
+				},
 			},
 		},
 	}
@@ -2390,7 +2405,8 @@ func init() {
 	EvaluationDatasetVersionsTable.Annotation = &entsql.Annotation{
 		Table: "evaluation_dataset_versions",
 	}
-	EvaluationPlansTable.ForeignKeys[0].RefTable = EvaluationDatasetVersionsTable
+	EvaluationPlansTable.ForeignKeys[0].RefTable = APIKeysTable
+	EvaluationPlansTable.ForeignKeys[1].RefTable = EvaluationDatasetVersionsTable
 	EvaluationPlansTable.Annotation = &entsql.Annotation{
 		Table: "evaluation_plans",
 	}

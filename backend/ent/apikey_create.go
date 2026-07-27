@@ -12,10 +12,12 @@ import (
 	"entgo.io/ent/dialect/sql/sqlgraph"
 	"entgo.io/ent/schema/field"
 	"github.com/Wei-Shaw/sub2api/ent/apikey"
+	"github.com/Wei-Shaw/sub2api/ent/evaluationplan"
 	"github.com/Wei-Shaw/sub2api/ent/evaluationrouteevidence"
 	"github.com/Wei-Shaw/sub2api/ent/group"
 	"github.com/Wei-Shaw/sub2api/ent/usagelog"
 	"github.com/Wei-Shaw/sub2api/ent/user"
+	"github.com/google/uuid"
 )
 
 // APIKeyCreate is the builder for creating a APIKey entity.
@@ -362,6 +364,21 @@ func (_c *APIKeyCreate) AddEvaluationRouteEvidence(v ...*EvaluationRouteEvidence
 	return _c.AddEvaluationRouteEvidenceIDs(ids...)
 }
 
+// AddEvaluationPlanIDs adds the "evaluation_plans" edge to the EvaluationPlan entity by IDs.
+func (_c *APIKeyCreate) AddEvaluationPlanIDs(ids ...uuid.UUID) *APIKeyCreate {
+	_c.mutation.AddEvaluationPlanIDs(ids...)
+	return _c
+}
+
+// AddEvaluationPlans adds the "evaluation_plans" edges to the EvaluationPlan entity.
+func (_c *APIKeyCreate) AddEvaluationPlans(v ...*EvaluationPlan) *APIKeyCreate {
+	ids := make([]uuid.UUID, len(v))
+	for i := range v {
+		ids[i] = v[i].ID
+	}
+	return _c.AddEvaluationPlanIDs(ids...)
+}
+
 // Mutation returns the APIKeyMutation object of the builder.
 func (_c *APIKeyCreate) Mutation() *APIKeyMutation {
 	return _c.mutation
@@ -695,6 +712,22 @@ func (_c *APIKeyCreate) createSpec() (*APIKey, *sqlgraph.CreateSpec) {
 			Bidi:    false,
 			Target: &sqlgraph.EdgeTarget{
 				IDSpec: sqlgraph.NewFieldSpec(evaluationrouteevidence.FieldID, field.TypeString),
+			},
+		}
+		for _, k := range nodes {
+			edge.Target.Nodes = append(edge.Target.Nodes, k)
+		}
+		_spec.Edges = append(_spec.Edges, edge)
+	}
+	if nodes := _c.mutation.EvaluationPlansIDs(); len(nodes) > 0 {
+		edge := &sqlgraph.EdgeSpec{
+			Rel:     sqlgraph.O2M,
+			Inverse: false,
+			Table:   apikey.EvaluationPlansTable,
+			Columns: []string{apikey.EvaluationPlansColumn},
+			Bidi:    false,
+			Target: &sqlgraph.EdgeTarget{
+				IDSpec: sqlgraph.NewFieldSpec(evaluationplan.FieldID, field.TypeUUID),
 			},
 		}
 		for _, k := range nodes {

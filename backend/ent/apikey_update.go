@@ -13,11 +13,13 @@ import (
 	"entgo.io/ent/dialect/sql/sqljson"
 	"entgo.io/ent/schema/field"
 	"github.com/Wei-Shaw/sub2api/ent/apikey"
+	"github.com/Wei-Shaw/sub2api/ent/evaluationplan"
 	"github.com/Wei-Shaw/sub2api/ent/evaluationrouteevidence"
 	"github.com/Wei-Shaw/sub2api/ent/group"
 	"github.com/Wei-Shaw/sub2api/ent/predicate"
 	"github.com/Wei-Shaw/sub2api/ent/usagelog"
 	"github.com/Wei-Shaw/sub2api/ent/user"
+	"github.com/google/uuid"
 )
 
 // APIKeyUpdate is the builder for updating APIKey entities.
@@ -493,6 +495,21 @@ func (_u *APIKeyUpdate) AddEvaluationRouteEvidence(v ...*EvaluationRouteEvidence
 	return _u.AddEvaluationRouteEvidenceIDs(ids...)
 }
 
+// AddEvaluationPlanIDs adds the "evaluation_plans" edge to the EvaluationPlan entity by IDs.
+func (_u *APIKeyUpdate) AddEvaluationPlanIDs(ids ...uuid.UUID) *APIKeyUpdate {
+	_u.mutation.AddEvaluationPlanIDs(ids...)
+	return _u
+}
+
+// AddEvaluationPlans adds the "evaluation_plans" edges to the EvaluationPlan entity.
+func (_u *APIKeyUpdate) AddEvaluationPlans(v ...*EvaluationPlan) *APIKeyUpdate {
+	ids := make([]uuid.UUID, len(v))
+	for i := range v {
+		ids[i] = v[i].ID
+	}
+	return _u.AddEvaluationPlanIDs(ids...)
+}
+
 // Mutation returns the APIKeyMutation object of the builder.
 func (_u *APIKeyUpdate) Mutation() *APIKeyMutation {
 	return _u.mutation
@@ -550,6 +567,27 @@ func (_u *APIKeyUpdate) RemoveEvaluationRouteEvidence(v ...*EvaluationRouteEvide
 		ids[i] = v[i].ID
 	}
 	return _u.RemoveEvaluationRouteEvidenceIDs(ids...)
+}
+
+// ClearEvaluationPlans clears all "evaluation_plans" edges to the EvaluationPlan entity.
+func (_u *APIKeyUpdate) ClearEvaluationPlans() *APIKeyUpdate {
+	_u.mutation.ClearEvaluationPlans()
+	return _u
+}
+
+// RemoveEvaluationPlanIDs removes the "evaluation_plans" edge to EvaluationPlan entities by IDs.
+func (_u *APIKeyUpdate) RemoveEvaluationPlanIDs(ids ...uuid.UUID) *APIKeyUpdate {
+	_u.mutation.RemoveEvaluationPlanIDs(ids...)
+	return _u
+}
+
+// RemoveEvaluationPlans removes "evaluation_plans" edges to EvaluationPlan entities.
+func (_u *APIKeyUpdate) RemoveEvaluationPlans(v ...*EvaluationPlan) *APIKeyUpdate {
+	ids := make([]uuid.UUID, len(v))
+	for i := range v {
+		ids[i] = v[i].ID
+	}
+	return _u.RemoveEvaluationPlanIDs(ids...)
 }
 
 // Save executes the query and returns the number of nodes affected by the update operation.
@@ -891,6 +929,51 @@ func (_u *APIKeyUpdate) sqlSave(ctx context.Context) (_node int, err error) {
 			Bidi:    false,
 			Target: &sqlgraph.EdgeTarget{
 				IDSpec: sqlgraph.NewFieldSpec(evaluationrouteevidence.FieldID, field.TypeString),
+			},
+		}
+		for _, k := range nodes {
+			edge.Target.Nodes = append(edge.Target.Nodes, k)
+		}
+		_spec.Edges.Add = append(_spec.Edges.Add, edge)
+	}
+	if _u.mutation.EvaluationPlansCleared() {
+		edge := &sqlgraph.EdgeSpec{
+			Rel:     sqlgraph.O2M,
+			Inverse: false,
+			Table:   apikey.EvaluationPlansTable,
+			Columns: []string{apikey.EvaluationPlansColumn},
+			Bidi:    false,
+			Target: &sqlgraph.EdgeTarget{
+				IDSpec: sqlgraph.NewFieldSpec(evaluationplan.FieldID, field.TypeUUID),
+			},
+		}
+		_spec.Edges.Clear = append(_spec.Edges.Clear, edge)
+	}
+	if nodes := _u.mutation.RemovedEvaluationPlansIDs(); len(nodes) > 0 && !_u.mutation.EvaluationPlansCleared() {
+		edge := &sqlgraph.EdgeSpec{
+			Rel:     sqlgraph.O2M,
+			Inverse: false,
+			Table:   apikey.EvaluationPlansTable,
+			Columns: []string{apikey.EvaluationPlansColumn},
+			Bidi:    false,
+			Target: &sqlgraph.EdgeTarget{
+				IDSpec: sqlgraph.NewFieldSpec(evaluationplan.FieldID, field.TypeUUID),
+			},
+		}
+		for _, k := range nodes {
+			edge.Target.Nodes = append(edge.Target.Nodes, k)
+		}
+		_spec.Edges.Clear = append(_spec.Edges.Clear, edge)
+	}
+	if nodes := _u.mutation.EvaluationPlansIDs(); len(nodes) > 0 {
+		edge := &sqlgraph.EdgeSpec{
+			Rel:     sqlgraph.O2M,
+			Inverse: false,
+			Table:   apikey.EvaluationPlansTable,
+			Columns: []string{apikey.EvaluationPlansColumn},
+			Bidi:    false,
+			Target: &sqlgraph.EdgeTarget{
+				IDSpec: sqlgraph.NewFieldSpec(evaluationplan.FieldID, field.TypeUUID),
 			},
 		}
 		for _, k := range nodes {
@@ -1378,6 +1461,21 @@ func (_u *APIKeyUpdateOne) AddEvaluationRouteEvidence(v ...*EvaluationRouteEvide
 	return _u.AddEvaluationRouteEvidenceIDs(ids...)
 }
 
+// AddEvaluationPlanIDs adds the "evaluation_plans" edge to the EvaluationPlan entity by IDs.
+func (_u *APIKeyUpdateOne) AddEvaluationPlanIDs(ids ...uuid.UUID) *APIKeyUpdateOne {
+	_u.mutation.AddEvaluationPlanIDs(ids...)
+	return _u
+}
+
+// AddEvaluationPlans adds the "evaluation_plans" edges to the EvaluationPlan entity.
+func (_u *APIKeyUpdateOne) AddEvaluationPlans(v ...*EvaluationPlan) *APIKeyUpdateOne {
+	ids := make([]uuid.UUID, len(v))
+	for i := range v {
+		ids[i] = v[i].ID
+	}
+	return _u.AddEvaluationPlanIDs(ids...)
+}
+
 // Mutation returns the APIKeyMutation object of the builder.
 func (_u *APIKeyUpdateOne) Mutation() *APIKeyMutation {
 	return _u.mutation
@@ -1435,6 +1533,27 @@ func (_u *APIKeyUpdateOne) RemoveEvaluationRouteEvidence(v ...*EvaluationRouteEv
 		ids[i] = v[i].ID
 	}
 	return _u.RemoveEvaluationRouteEvidenceIDs(ids...)
+}
+
+// ClearEvaluationPlans clears all "evaluation_plans" edges to the EvaluationPlan entity.
+func (_u *APIKeyUpdateOne) ClearEvaluationPlans() *APIKeyUpdateOne {
+	_u.mutation.ClearEvaluationPlans()
+	return _u
+}
+
+// RemoveEvaluationPlanIDs removes the "evaluation_plans" edge to EvaluationPlan entities by IDs.
+func (_u *APIKeyUpdateOne) RemoveEvaluationPlanIDs(ids ...uuid.UUID) *APIKeyUpdateOne {
+	_u.mutation.RemoveEvaluationPlanIDs(ids...)
+	return _u
+}
+
+// RemoveEvaluationPlans removes "evaluation_plans" edges to EvaluationPlan entities.
+func (_u *APIKeyUpdateOne) RemoveEvaluationPlans(v ...*EvaluationPlan) *APIKeyUpdateOne {
+	ids := make([]uuid.UUID, len(v))
+	for i := range v {
+		ids[i] = v[i].ID
+	}
+	return _u.RemoveEvaluationPlanIDs(ids...)
 }
 
 // Where appends a list predicates to the APIKeyUpdate builder.
@@ -1806,6 +1925,51 @@ func (_u *APIKeyUpdateOne) sqlSave(ctx context.Context) (_node *APIKey, err erro
 			Bidi:    false,
 			Target: &sqlgraph.EdgeTarget{
 				IDSpec: sqlgraph.NewFieldSpec(evaluationrouteevidence.FieldID, field.TypeString),
+			},
+		}
+		for _, k := range nodes {
+			edge.Target.Nodes = append(edge.Target.Nodes, k)
+		}
+		_spec.Edges.Add = append(_spec.Edges.Add, edge)
+	}
+	if _u.mutation.EvaluationPlansCleared() {
+		edge := &sqlgraph.EdgeSpec{
+			Rel:     sqlgraph.O2M,
+			Inverse: false,
+			Table:   apikey.EvaluationPlansTable,
+			Columns: []string{apikey.EvaluationPlansColumn},
+			Bidi:    false,
+			Target: &sqlgraph.EdgeTarget{
+				IDSpec: sqlgraph.NewFieldSpec(evaluationplan.FieldID, field.TypeUUID),
+			},
+		}
+		_spec.Edges.Clear = append(_spec.Edges.Clear, edge)
+	}
+	if nodes := _u.mutation.RemovedEvaluationPlansIDs(); len(nodes) > 0 && !_u.mutation.EvaluationPlansCleared() {
+		edge := &sqlgraph.EdgeSpec{
+			Rel:     sqlgraph.O2M,
+			Inverse: false,
+			Table:   apikey.EvaluationPlansTable,
+			Columns: []string{apikey.EvaluationPlansColumn},
+			Bidi:    false,
+			Target: &sqlgraph.EdgeTarget{
+				IDSpec: sqlgraph.NewFieldSpec(evaluationplan.FieldID, field.TypeUUID),
+			},
+		}
+		for _, k := range nodes {
+			edge.Target.Nodes = append(edge.Target.Nodes, k)
+		}
+		_spec.Edges.Clear = append(_spec.Edges.Clear, edge)
+	}
+	if nodes := _u.mutation.EvaluationPlansIDs(); len(nodes) > 0 {
+		edge := &sqlgraph.EdgeSpec{
+			Rel:     sqlgraph.O2M,
+			Inverse: false,
+			Table:   apikey.EvaluationPlansTable,
+			Columns: []string{apikey.EvaluationPlansColumn},
+			Bidi:    false,
+			Target: &sqlgraph.EdgeTarget{
+				IDSpec: sqlgraph.NewFieldSpec(evaluationplan.FieldID, field.TypeUUID),
 			},
 		}
 		for _, k := range nodes {

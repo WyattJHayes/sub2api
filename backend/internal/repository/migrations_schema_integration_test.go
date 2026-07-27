@@ -82,9 +82,13 @@ func TestMigrationsRunner_IsIdempotent_AndSchemaIsUpToDate(t *testing.T) {
 		"evaluation_artifacts",
 		"evaluation_run_events",
 		"evaluation_budget_ledger",
+		"evaluation_key_events",
 	} {
 		requireTable(t, tx, table)
 	}
+	requireColumn(t, tx, "evaluation_plans", "gateway_api_key_id", "bigint", 0, true)
+	requireForeignKeyOnDelete(t, tx, "evaluation_plans", "gateway_api_key_id", "api_keys", "NO ACTION")
+	requireIndex(t, tx, "evaluation_plans", "idx_evaluation_plans_gateway_api_key")
 
 	// redeem_codes: subscription fields
 	requireColumn(t, tx, "redeem_codes", "group_id", "bigint", 0, true)

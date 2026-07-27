@@ -165,6 +165,9 @@ type APIKeyMutation struct {
 	evaluation_route_evidence        map[string]struct{}
 	removedevaluation_route_evidence map[string]struct{}
 	clearedevaluation_route_evidence bool
+	evaluation_plans                 map[uuid.UUID]struct{}
+	removedevaluation_plans          map[uuid.UUID]struct{}
+	clearedevaluation_plans          bool
 	done                             bool
 	oldValue                         func(context.Context) (*APIKey, error)
 	predicates                       []predicate.APIKey
@@ -1603,6 +1606,60 @@ func (m *APIKeyMutation) ResetEvaluationRouteEvidence() {
 	m.removedevaluation_route_evidence = nil
 }
 
+// AddEvaluationPlanIDs adds the "evaluation_plans" edge to the EvaluationPlan entity by ids.
+func (m *APIKeyMutation) AddEvaluationPlanIDs(ids ...uuid.UUID) {
+	if m.evaluation_plans == nil {
+		m.evaluation_plans = make(map[uuid.UUID]struct{})
+	}
+	for i := range ids {
+		m.evaluation_plans[ids[i]] = struct{}{}
+	}
+}
+
+// ClearEvaluationPlans clears the "evaluation_plans" edge to the EvaluationPlan entity.
+func (m *APIKeyMutation) ClearEvaluationPlans() {
+	m.clearedevaluation_plans = true
+}
+
+// EvaluationPlansCleared reports if the "evaluation_plans" edge to the EvaluationPlan entity was cleared.
+func (m *APIKeyMutation) EvaluationPlansCleared() bool {
+	return m.clearedevaluation_plans
+}
+
+// RemoveEvaluationPlanIDs removes the "evaluation_plans" edge to the EvaluationPlan entity by IDs.
+func (m *APIKeyMutation) RemoveEvaluationPlanIDs(ids ...uuid.UUID) {
+	if m.removedevaluation_plans == nil {
+		m.removedevaluation_plans = make(map[uuid.UUID]struct{})
+	}
+	for i := range ids {
+		delete(m.evaluation_plans, ids[i])
+		m.removedevaluation_plans[ids[i]] = struct{}{}
+	}
+}
+
+// RemovedEvaluationPlans returns the removed IDs of the "evaluation_plans" edge to the EvaluationPlan entity.
+func (m *APIKeyMutation) RemovedEvaluationPlansIDs() (ids []uuid.UUID) {
+	for id := range m.removedevaluation_plans {
+		ids = append(ids, id)
+	}
+	return
+}
+
+// EvaluationPlansIDs returns the "evaluation_plans" edge IDs in the mutation.
+func (m *APIKeyMutation) EvaluationPlansIDs() (ids []uuid.UUID) {
+	for id := range m.evaluation_plans {
+		ids = append(ids, id)
+	}
+	return
+}
+
+// ResetEvaluationPlans resets all changes to the "evaluation_plans" edge.
+func (m *APIKeyMutation) ResetEvaluationPlans() {
+	m.evaluation_plans = nil
+	m.clearedevaluation_plans = false
+	m.removedevaluation_plans = nil
+}
+
 // Where appends a list predicates to the APIKeyMutation builder.
 func (m *APIKeyMutation) Where(ps ...predicate.APIKey) {
 	m.predicates = append(m.predicates, ps...)
@@ -2283,7 +2340,7 @@ func (m *APIKeyMutation) ResetField(name string) error {
 
 // AddedEdges returns all edge names that were set/added in this mutation.
 func (m *APIKeyMutation) AddedEdges() []string {
-	edges := make([]string, 0, 4)
+	edges := make([]string, 0, 5)
 	if m.user != nil {
 		edges = append(edges, apikey.EdgeUser)
 	}
@@ -2295,6 +2352,9 @@ func (m *APIKeyMutation) AddedEdges() []string {
 	}
 	if m.evaluation_route_evidence != nil {
 		edges = append(edges, apikey.EdgeEvaluationRouteEvidence)
+	}
+	if m.evaluation_plans != nil {
+		edges = append(edges, apikey.EdgeEvaluationPlans)
 	}
 	return edges
 }
@@ -2323,18 +2383,27 @@ func (m *APIKeyMutation) AddedIDs(name string) []ent.Value {
 			ids = append(ids, id)
 		}
 		return ids
+	case apikey.EdgeEvaluationPlans:
+		ids := make([]ent.Value, 0, len(m.evaluation_plans))
+		for id := range m.evaluation_plans {
+			ids = append(ids, id)
+		}
+		return ids
 	}
 	return nil
 }
 
 // RemovedEdges returns all edge names that were removed in this mutation.
 func (m *APIKeyMutation) RemovedEdges() []string {
-	edges := make([]string, 0, 4)
+	edges := make([]string, 0, 5)
 	if m.removedusage_logs != nil {
 		edges = append(edges, apikey.EdgeUsageLogs)
 	}
 	if m.removedevaluation_route_evidence != nil {
 		edges = append(edges, apikey.EdgeEvaluationRouteEvidence)
+	}
+	if m.removedevaluation_plans != nil {
+		edges = append(edges, apikey.EdgeEvaluationPlans)
 	}
 	return edges
 }
@@ -2355,13 +2424,19 @@ func (m *APIKeyMutation) RemovedIDs(name string) []ent.Value {
 			ids = append(ids, id)
 		}
 		return ids
+	case apikey.EdgeEvaluationPlans:
+		ids := make([]ent.Value, 0, len(m.removedevaluation_plans))
+		for id := range m.removedevaluation_plans {
+			ids = append(ids, id)
+		}
+		return ids
 	}
 	return nil
 }
 
 // ClearedEdges returns all edge names that were cleared in this mutation.
 func (m *APIKeyMutation) ClearedEdges() []string {
-	edges := make([]string, 0, 4)
+	edges := make([]string, 0, 5)
 	if m.cleareduser {
 		edges = append(edges, apikey.EdgeUser)
 	}
@@ -2373,6 +2448,9 @@ func (m *APIKeyMutation) ClearedEdges() []string {
 	}
 	if m.clearedevaluation_route_evidence {
 		edges = append(edges, apikey.EdgeEvaluationRouteEvidence)
+	}
+	if m.clearedevaluation_plans {
+		edges = append(edges, apikey.EdgeEvaluationPlans)
 	}
 	return edges
 }
@@ -2389,6 +2467,8 @@ func (m *APIKeyMutation) EdgeCleared(name string) bool {
 		return m.clearedusage_logs
 	case apikey.EdgeEvaluationRouteEvidence:
 		return m.clearedevaluation_route_evidence
+	case apikey.EdgeEvaluationPlans:
+		return m.clearedevaluation_plans
 	}
 	return false
 }
@@ -2422,6 +2502,9 @@ func (m *APIKeyMutation) ResetEdge(name string) error {
 		return nil
 	case apikey.EdgeEvaluationRouteEvidence:
 		m.ResetEvaluationRouteEvidence()
+		return nil
+	case apikey.EdgeEvaluationPlans:
+		m.ResetEvaluationPlans()
 		return nil
 	}
 	return fmt.Errorf("unknown APIKey edge %s", name)
@@ -24443,6 +24526,8 @@ type EvaluationPlanMutation struct {
 	clearedFields          map[string]struct{}
 	dataset_version        *uuid.UUID
 	cleareddataset_version bool
+	gateway_api_key        *int64
+	clearedgateway_api_key bool
 	runs                   map[uuid.UUID]struct{}
 	removedruns            map[uuid.UUID]struct{}
 	clearedruns            bool
@@ -24625,6 +24710,55 @@ func (m *EvaluationPlanMutation) OldDatasetVersionID(ctx context.Context) (v uui
 // ResetDatasetVersionID resets all changes to the "dataset_version_id" field.
 func (m *EvaluationPlanMutation) ResetDatasetVersionID() {
 	m.dataset_version = nil
+}
+
+// SetGatewayAPIKeyID sets the "gateway_api_key_id" field.
+func (m *EvaluationPlanMutation) SetGatewayAPIKeyID(i int64) {
+	m.gateway_api_key = &i
+}
+
+// GatewayAPIKeyID returns the value of the "gateway_api_key_id" field in the mutation.
+func (m *EvaluationPlanMutation) GatewayAPIKeyID() (r int64, exists bool) {
+	v := m.gateway_api_key
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldGatewayAPIKeyID returns the old "gateway_api_key_id" field's value of the EvaluationPlan entity.
+// If the EvaluationPlan object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *EvaluationPlanMutation) OldGatewayAPIKeyID(ctx context.Context) (v *int64, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldGatewayAPIKeyID is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldGatewayAPIKeyID requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldGatewayAPIKeyID: %w", err)
+	}
+	return oldValue.GatewayAPIKeyID, nil
+}
+
+// ClearGatewayAPIKeyID clears the value of the "gateway_api_key_id" field.
+func (m *EvaluationPlanMutation) ClearGatewayAPIKeyID() {
+	m.gateway_api_key = nil
+	m.clearedFields[evaluationplan.FieldGatewayAPIKeyID] = struct{}{}
+}
+
+// GatewayAPIKeyIDCleared returns if the "gateway_api_key_id" field was cleared in this mutation.
+func (m *EvaluationPlanMutation) GatewayAPIKeyIDCleared() bool {
+	_, ok := m.clearedFields[evaluationplan.FieldGatewayAPIKeyID]
+	return ok
+}
+
+// ResetGatewayAPIKeyID resets all changes to the "gateway_api_key_id" field.
+func (m *EvaluationPlanMutation) ResetGatewayAPIKeyID() {
+	m.gateway_api_key = nil
+	delete(m.clearedFields, evaluationplan.FieldGatewayAPIKeyID)
 }
 
 // SetTriggerType sets the "trigger_type" field.
@@ -25122,6 +25256,33 @@ func (m *EvaluationPlanMutation) ResetDatasetVersion() {
 	m.cleareddataset_version = false
 }
 
+// ClearGatewayAPIKey clears the "gateway_api_key" edge to the APIKey entity.
+func (m *EvaluationPlanMutation) ClearGatewayAPIKey() {
+	m.clearedgateway_api_key = true
+	m.clearedFields[evaluationplan.FieldGatewayAPIKeyID] = struct{}{}
+}
+
+// GatewayAPIKeyCleared reports if the "gateway_api_key" edge to the APIKey entity was cleared.
+func (m *EvaluationPlanMutation) GatewayAPIKeyCleared() bool {
+	return m.GatewayAPIKeyIDCleared() || m.clearedgateway_api_key
+}
+
+// GatewayAPIKeyIDs returns the "gateway_api_key" edge IDs in the mutation.
+// Note that IDs always returns len(IDs) <= 1 for unique edges, and you should use
+// GatewayAPIKeyID instead. It exists only for internal usage by the builders.
+func (m *EvaluationPlanMutation) GatewayAPIKeyIDs() (ids []int64) {
+	if id := m.gateway_api_key; id != nil {
+		ids = append(ids, *id)
+	}
+	return
+}
+
+// ResetGatewayAPIKey resets all changes to the "gateway_api_key" edge.
+func (m *EvaluationPlanMutation) ResetGatewayAPIKey() {
+	m.gateway_api_key = nil
+	m.clearedgateway_api_key = false
+}
+
 // AddRunIDs adds the "runs" edge to the EvaluationRun entity by ids.
 func (m *EvaluationPlanMutation) AddRunIDs(ids ...uuid.UUID) {
 	if m.runs == nil {
@@ -25210,12 +25371,15 @@ func (m *EvaluationPlanMutation) Type() string {
 // order to get all numeric fields that were incremented/decremented, call
 // AddedFields().
 func (m *EvaluationPlanMutation) Fields() []string {
-	fields := make([]string, 0, 12)
+	fields := make([]string, 0, 13)
 	if m.name != nil {
 		fields = append(fields, evaluationplan.FieldName)
 	}
 	if m.dataset_version != nil {
 		fields = append(fields, evaluationplan.FieldDatasetVersionID)
+	}
+	if m.gateway_api_key != nil {
+		fields = append(fields, evaluationplan.FieldGatewayAPIKeyID)
 	}
 	if m.trigger_type != nil {
 		fields = append(fields, evaluationplan.FieldTriggerType)
@@ -25259,6 +25423,8 @@ func (m *EvaluationPlanMutation) Field(name string) (ent.Value, bool) {
 		return m.Name()
 	case evaluationplan.FieldDatasetVersionID:
 		return m.DatasetVersionID()
+	case evaluationplan.FieldGatewayAPIKeyID:
+		return m.GatewayAPIKeyID()
 	case evaluationplan.FieldTriggerType:
 		return m.TriggerType()
 	case evaluationplan.FieldCronExpression:
@@ -25292,6 +25458,8 @@ func (m *EvaluationPlanMutation) OldField(ctx context.Context, name string) (ent
 		return m.OldName(ctx)
 	case evaluationplan.FieldDatasetVersionID:
 		return m.OldDatasetVersionID(ctx)
+	case evaluationplan.FieldGatewayAPIKeyID:
+		return m.OldGatewayAPIKeyID(ctx)
 	case evaluationplan.FieldTriggerType:
 		return m.OldTriggerType(ctx)
 	case evaluationplan.FieldCronExpression:
@@ -25334,6 +25502,13 @@ func (m *EvaluationPlanMutation) SetField(name string, value ent.Value) error {
 			return fmt.Errorf("unexpected type %T for field %s", value, name)
 		}
 		m.SetDatasetVersionID(v)
+		return nil
+	case evaluationplan.FieldGatewayAPIKeyID:
+		v, ok := value.(int64)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetGatewayAPIKeyID(v)
 		return nil
 	case evaluationplan.FieldTriggerType:
 		v, ok := value.(string)
@@ -25486,6 +25661,9 @@ func (m *EvaluationPlanMutation) AddField(name string, value ent.Value) error {
 // mutation.
 func (m *EvaluationPlanMutation) ClearedFields() []string {
 	var fields []string
+	if m.FieldCleared(evaluationplan.FieldGatewayAPIKeyID) {
+		fields = append(fields, evaluationplan.FieldGatewayAPIKeyID)
+	}
 	if m.FieldCleared(evaluationplan.FieldCronExpression) {
 		fields = append(fields, evaluationplan.FieldCronExpression)
 	}
@@ -25503,6 +25681,9 @@ func (m *EvaluationPlanMutation) FieldCleared(name string) bool {
 // error if the field is not defined in the schema.
 func (m *EvaluationPlanMutation) ClearField(name string) error {
 	switch name {
+	case evaluationplan.FieldGatewayAPIKeyID:
+		m.ClearGatewayAPIKeyID()
+		return nil
 	case evaluationplan.FieldCronExpression:
 		m.ClearCronExpression()
 		return nil
@@ -25519,6 +25700,9 @@ func (m *EvaluationPlanMutation) ResetField(name string) error {
 		return nil
 	case evaluationplan.FieldDatasetVersionID:
 		m.ResetDatasetVersionID()
+		return nil
+	case evaluationplan.FieldGatewayAPIKeyID:
+		m.ResetGatewayAPIKeyID()
 		return nil
 	case evaluationplan.FieldTriggerType:
 		m.ResetTriggerType()
@@ -25556,9 +25740,12 @@ func (m *EvaluationPlanMutation) ResetField(name string) error {
 
 // AddedEdges returns all edge names that were set/added in this mutation.
 func (m *EvaluationPlanMutation) AddedEdges() []string {
-	edges := make([]string, 0, 2)
+	edges := make([]string, 0, 3)
 	if m.dataset_version != nil {
 		edges = append(edges, evaluationplan.EdgeDatasetVersion)
+	}
+	if m.gateway_api_key != nil {
+		edges = append(edges, evaluationplan.EdgeGatewayAPIKey)
 	}
 	if m.runs != nil {
 		edges = append(edges, evaluationplan.EdgeRuns)
@@ -25574,6 +25761,10 @@ func (m *EvaluationPlanMutation) AddedIDs(name string) []ent.Value {
 		if id := m.dataset_version; id != nil {
 			return []ent.Value{*id}
 		}
+	case evaluationplan.EdgeGatewayAPIKey:
+		if id := m.gateway_api_key; id != nil {
+			return []ent.Value{*id}
+		}
 	case evaluationplan.EdgeRuns:
 		ids := make([]ent.Value, 0, len(m.runs))
 		for id := range m.runs {
@@ -25586,7 +25777,7 @@ func (m *EvaluationPlanMutation) AddedIDs(name string) []ent.Value {
 
 // RemovedEdges returns all edge names that were removed in this mutation.
 func (m *EvaluationPlanMutation) RemovedEdges() []string {
-	edges := make([]string, 0, 2)
+	edges := make([]string, 0, 3)
 	if m.removedruns != nil {
 		edges = append(edges, evaluationplan.EdgeRuns)
 	}
@@ -25609,9 +25800,12 @@ func (m *EvaluationPlanMutation) RemovedIDs(name string) []ent.Value {
 
 // ClearedEdges returns all edge names that were cleared in this mutation.
 func (m *EvaluationPlanMutation) ClearedEdges() []string {
-	edges := make([]string, 0, 2)
+	edges := make([]string, 0, 3)
 	if m.cleareddataset_version {
 		edges = append(edges, evaluationplan.EdgeDatasetVersion)
+	}
+	if m.clearedgateway_api_key {
+		edges = append(edges, evaluationplan.EdgeGatewayAPIKey)
 	}
 	if m.clearedruns {
 		edges = append(edges, evaluationplan.EdgeRuns)
@@ -25625,6 +25819,8 @@ func (m *EvaluationPlanMutation) EdgeCleared(name string) bool {
 	switch name {
 	case evaluationplan.EdgeDatasetVersion:
 		return m.cleareddataset_version
+	case evaluationplan.EdgeGatewayAPIKey:
+		return m.clearedgateway_api_key
 	case evaluationplan.EdgeRuns:
 		return m.clearedruns
 	}
@@ -25638,6 +25834,9 @@ func (m *EvaluationPlanMutation) ClearEdge(name string) error {
 	case evaluationplan.EdgeDatasetVersion:
 		m.ClearDatasetVersion()
 		return nil
+	case evaluationplan.EdgeGatewayAPIKey:
+		m.ClearGatewayAPIKey()
+		return nil
 	}
 	return fmt.Errorf("unknown EvaluationPlan unique edge %s", name)
 }
@@ -25648,6 +25847,9 @@ func (m *EvaluationPlanMutation) ResetEdge(name string) error {
 	switch name {
 	case evaluationplan.EdgeDatasetVersion:
 		m.ResetDatasetVersion()
+		return nil
+	case evaluationplan.EdgeGatewayAPIKey:
+		m.ResetGatewayAPIKey()
 		return nil
 	case evaluationplan.EdgeRuns:
 		m.ResetRuns()

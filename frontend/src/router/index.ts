@@ -404,6 +404,20 @@ const routes: RouteRecordRaw[] = [
     }
   },
   {
+    path: '/admin/radar',
+    component: () => import('@/views/admin/radar/RadarShell.vue'),
+    meta: { requiresAuth: true, requiresAdmin: true, title: 'Quality Radar' },
+    children: [
+      { path: '', name: 'AdminRadarOverview', component: () => import('@/views/admin/radar/RadarOverviewView.vue'), meta: { requiresAuth: true, requiresAdmin: true, title: 'Radar Overview' } },
+      { path: 'models', name: 'AdminRadarModels', component: () => import('@/views/admin/radar/RadarModelsView.vue'), meta: { requiresAuth: true, requiresAdmin: true, title: 'Radar Models' } },
+      { path: 'runs', name: 'AdminRadarRuns', component: () => import('@/views/admin/radar/RadarRunsView.vue'), meta: { requiresAuth: true, requiresAdmin: true, title: 'Radar Runs' } },
+      { path: 'alerts', name: 'AdminRadarAlerts', component: () => import('@/views/admin/radar/RadarAlertsView.vue'), meta: { requiresAuth: true, requiresAdmin: true, title: 'Radar Alerts' } },
+      { path: 'gates', name: 'AdminRadarGates', component: () => import('@/views/admin/radar/RadarGatesView.vue'), meta: { requiresAuth: true, requiresAdmin: true, title: 'Radar Gates' } },
+      { path: 'workers', name: 'AdminRadarWorkers', component: () => import('@/views/admin/radar/RadarWorkersView.vue'), meta: { requiresAuth: true, requiresAdmin: true, title: 'Radar Workers' } },
+      { path: 'datasets', name: 'AdminRadarDatasets', component: () => import('@/views/admin/radar/RadarDatasetsView.vue'), meta: { requiresAuth: true, requiresAdmin: true, title: 'Radar Datasets' } }
+    ]
+  },
+  {
     path: '/admin/ops',
     name: 'AdminOps',
     component: () => import('@/views/admin/ops/OpsDashboard.vue'),
@@ -489,6 +503,12 @@ const routes: RouteRecordRaw[] = [
       title: 'Channel Status',
       titleKey: 'nav.channelStatus'
     }
+  },
+  {
+    path: '/model-health',
+    name: 'ModelHealth',
+    component: () => import('@/views/user/ModelHealthView.vue'),
+    meta: { requiresAuth: true, requiresAdmin: false, title: 'Model Health' }
   },
   {
     path: '/admin/subscriptions',

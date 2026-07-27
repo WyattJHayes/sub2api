@@ -10,6 +10,7 @@ import (
 
 	"entgo.io/ent"
 	"entgo.io/ent/dialect/sql"
+	"github.com/Wei-Shaw/sub2api/ent/apikey"
 	"github.com/Wei-Shaw/sub2api/ent/evaluationdatasetversion"
 	"github.com/Wei-Shaw/sub2api/ent/evaluationplan"
 	"github.com/google/uuid"
@@ -24,6 +25,8 @@ type EvaluationPlan struct {
 	Name string `json:"name,omitempty"`
 	// DatasetVersionID holds the value of the "dataset_version_id" field.
 	DatasetVersionID uuid.UUID `json:"dataset_version_id,omitempty"`
+	// GatewayAPIKeyID holds the value of the "gateway_api_key_id" field.
+	GatewayAPIKeyID *int64 `json:"gateway_api_key_id,omitempty"`
 	// TriggerType holds the value of the "trigger_type" field.
 	TriggerType string `json:"trigger_type,omitempty"`
 	// CronExpression holds the value of the "cron_expression" field.
@@ -54,11 +57,13 @@ type EvaluationPlan struct {
 type EvaluationPlanEdges struct {
 	// DatasetVersion holds the value of the dataset_version edge.
 	DatasetVersion *EvaluationDatasetVersion `json:"dataset_version,omitempty"`
+	// GatewayAPIKey holds the value of the gateway_api_key edge.
+	GatewayAPIKey *APIKey `json:"gateway_api_key,omitempty"`
 	// Runs holds the value of the runs edge.
 	Runs []*EvaluationRun `json:"runs,omitempty"`
 	// loadedTypes holds the information for reporting if a
 	// type was loaded (or requested) in eager-loading or not.
-	loadedTypes [2]bool
+	loadedTypes [3]bool
 }
 
 // DatasetVersionOrErr returns the DatasetVersion value or an error if the edge
@@ -72,10 +77,21 @@ func (e EvaluationPlanEdges) DatasetVersionOrErr() (*EvaluationDatasetVersion, e
 	return nil, &NotLoadedError{edge: "dataset_version"}
 }
 
+// GatewayAPIKeyOrErr returns the GatewayAPIKey value or an error if the edge
+// was not loaded in eager-loading, or loaded but was not found.
+func (e EvaluationPlanEdges) GatewayAPIKeyOrErr() (*APIKey, error) {
+	if e.GatewayAPIKey != nil {
+		return e.GatewayAPIKey, nil
+	} else if e.loadedTypes[1] {
+		return nil, &NotFoundError{label: apikey.Label}
+	}
+	return nil, &NotLoadedError{edge: "gateway_api_key"}
+}
+
 // RunsOrErr returns the Runs value or an error if the edge
 // was not loaded in eager-loading.
 func (e EvaluationPlanEdges) RunsOrErr() ([]*EvaluationRun, error) {
-	if e.loadedTypes[1] {
+	if e.loadedTypes[2] {
 		return e.Runs, nil
 	}
 	return nil, &NotLoadedError{edge: "runs"}
@@ -92,7 +108,7 @@ func (*EvaluationPlan) scanValues(columns []string) ([]any, error) {
 			values[i] = new(sql.NullBool)
 		case evaluationplan.FieldMaxRunCost, evaluationplan.FieldDailyCostLimit:
 			values[i] = new(sql.NullFloat64)
-		case evaluationplan.FieldMaxConcurrency, evaluationplan.FieldCreatedBy:
+		case evaluationplan.FieldGatewayAPIKeyID, evaluationplan.FieldMaxConcurrency, evaluationplan.FieldCreatedBy:
 			values[i] = new(sql.NullInt64)
 		case evaluationplan.FieldName, evaluationplan.FieldTriggerType, evaluationplan.FieldCronExpression:
 			values[i] = new(sql.NullString)
@@ -132,6 +148,13 @@ func (_m *EvaluationPlan) assignValues(columns []string, values []any) error {
 				return fmt.Errorf("unexpected type %T for field dataset_version_id", values[i])
 			} else if value != nil {
 				_m.DatasetVersionID = *value
+			}
+		case evaluationplan.FieldGatewayAPIKeyID:
+			if value, ok := values[i].(*sql.NullInt64); !ok {
+				return fmt.Errorf("unexpected type %T for field gateway_api_key_id", values[i])
+			} else if value.Valid {
+				_m.GatewayAPIKeyID = new(int64)
+				*_m.GatewayAPIKeyID = value.Int64
 			}
 		case evaluationplan.FieldTriggerType:
 			if value, ok := values[i].(*sql.NullString); !ok {
@@ -214,6 +237,11 @@ func (_m *EvaluationPlan) QueryDatasetVersion() *EvaluationDatasetVersionQuery {
 	return NewEvaluationPlanClient(_m.config).QueryDatasetVersion(_m)
 }
 
+// QueryGatewayAPIKey queries the "gateway_api_key" edge of the EvaluationPlan entity.
+func (_m *EvaluationPlan) QueryGatewayAPIKey() *APIKeyQuery {
+	return NewEvaluationPlanClient(_m.config).QueryGatewayAPIKey(_m)
+}
+
 // QueryRuns queries the "runs" edge of the EvaluationPlan entity.
 func (_m *EvaluationPlan) QueryRuns() *EvaluationRunQuery {
 	return NewEvaluationPlanClient(_m.config).QueryRuns(_m)
@@ -247,6 +275,11 @@ func (_m *EvaluationPlan) String() string {
 	builder.WriteString(", ")
 	builder.WriteString("dataset_version_id=")
 	builder.WriteString(fmt.Sprintf("%v", _m.DatasetVersionID))
+	builder.WriteString(", ")
+	if v := _m.GatewayAPIKeyID; v != nil {
+		builder.WriteString("gateway_api_key_id=")
+		builder.WriteString(fmt.Sprintf("%v", *v))
+	}
 	builder.WriteString(", ")
 	builder.WriteString("trigger_type=")
 	builder.WriteString(_m.TriggerType)

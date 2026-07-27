@@ -28,6 +28,10 @@ func NewEvaluationRepository(db *sql.DB) service.EvaluationRepository {
 	return &evaluationRepository{db: db}
 }
 
+func (r *evaluationRepository) SubmitEvidence(ctx context.Context, input service.EvidenceSubmission, leaseToken string) (*service.EvidenceReceipt, error) {
+	return (&evaluationGradingRepository{db: r.db}).SubmitEvidence(ctx, input, leaseToken)
+}
+
 func (r *evaluationRepository) CreateRunWithMatrix(ctx context.Context, input service.CreateRunInput) (*service.EvaluationRun, error) {
 	if r == nil || r.db == nil {
 		return nil, errors.New("nil evaluation repository")
@@ -49,13 +53,33 @@ func (r *evaluationRepository) CreateRunWithMatrix(ctx context.Context, input se
 		datasetStatus string
 		matrixJSON    []byte
 		budgetLimit   decimal.Decimal
+		planState     evaluationPlanControlState
 	)
 	err = tx.QueryRowContext(ctx, `
-		SELECT d.status, p.model_matrix, p.max_run_cost
+		SELECT d.status, p.model_matrix, p.max_run_cost, p.enabled, p.daily_cost_limit,
+		       EXISTS (
+		         SELECT 1 FROM api_keys k
+		         JOIN users u ON u.id = k.user_id
+		         LEFT JOIN groups g ON g.id = k.group_id
+		         WHERE k.id = p.gateway_api_key_id
+		           AND k.is_evaluation = TRUE AND k.status = 'active' AND k.deleted_at IS NULL
+		           AND (k.expires_at IS NULL OR k.expires_at > NOW())
+		           AND (k.quota = 0 OR k.quota_used < k.quota)
+		           AND u.status = 'active' AND u.deleted_at IS NULL
+		           AND (g.id IS NULL OR (g.status = 'active' AND g.deleted_at IS NULL))
+		       ),
+		       COALESCE((
+		         SELECT SUM(existing.reserved_cost) FROM evaluation_runs existing
+		         WHERE existing.plan_id = p.id
+		           AND existing.created_at >= date_trunc('day', NOW())
+		       ), 0)
 		FROM evaluation_plans p
 		JOIN evaluation_dataset_versions d ON d.id = p.dataset_version_id
 		WHERE p.id = $1
-		FOR UPDATE OF p`, input.PlanID).Scan(&datasetStatus, &matrixJSON, &budgetLimit)
+		FOR UPDATE OF p`, input.PlanID).Scan(
+		&datasetStatus, &matrixJSON, &budgetLimit, &planState.enabled,
+		&planState.dailyCostLimit, &planState.keyUsable, &planState.dailyReservedCost,
+	)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, fmt.Errorf("evaluation plan %s not found", input.PlanID)
 	}
@@ -85,6 +109,16 @@ func (r *evaluationRepository) CreateRunWithMatrix(ctx context.Context, input se
 	}
 	if totalReservation.GreaterThan(budgetLimit) {
 		return nil, fmt.Errorf("%w: reservation %s exceeds budget %s", service.ErrBudgetExceeded, totalReservation, budgetLimit)
+	}
+	if !runCreationEligible(planState, totalReservation) {
+		if !planState.enabled {
+			return nil, errors.New("evaluation plan is disabled")
+		}
+		if !planState.keyUsable {
+			return nil, errors.New("evaluation plan has no usable dedicated gateway API key")
+		}
+		return nil, fmt.Errorf("%w: daily reservation %s plus run reservation %s exceeds daily limit %s",
+			service.ErrBudgetExceeded, planState.dailyReservedCost, totalReservation, planState.dailyCostLimit)
 	}
 
 	baselineRef, err := marshalJSONObject(input.BaselineRef)
@@ -121,9 +155,11 @@ func (r *evaluationRepository) CreateRunWithMatrix(ctx context.Context, input se
 		for _, matrixEntry := range matrix {
 			for _, side := range []string{"baseline", "candidate"} {
 				modelRoute := side + ":" + matrixEntry.route
+				modelConfig, modelConfigSHA256 := matrixEntry.configForSide(side)
 				for sampleIndex := 0; sampleIndex < evaluationCase.sampleCount; sampleIndex++ {
 					if err := insertEvaluationSampleAndAssignment(
-						ctx, tx, run.ID, evaluationCase, modelRoute, matrixEntry, sampleIndex,
+						ctx, tx, run.ID, evaluationCase, modelRoute,
+						modelConfig, modelConfigSHA256, sampleIndex,
 					); err != nil {
 						return nil, err
 					}
@@ -236,6 +272,9 @@ func (r *evaluationRepository) ClaimAssignment(ctx context.Context, workerID uui
 		Attempt:           candidate.attempt,
 		Token:             token,
 	}
+	if err := loadAssignmentExecutionContract(ctx, tx, candidate, lease); err != nil {
+		return nil, err
+	}
 	err = tx.QueryRowContext(ctx, `
 		UPDATE evaluation_assignments
 		SET status = 'leased', lease_token_hash = $2, leased_by = $3,
@@ -250,8 +289,9 @@ func (r *evaluationRepository) ClaimAssignment(ctx context.Context, workerID uui
 		return nil, fmt.Errorf("lease evaluation assignment: %w", err)
 	}
 	if _, err := tx.ExecContext(ctx, `
-		UPDATE evaluation_samples SET status = 'leased', updated_at = NOW()
-		WHERE id = $1`, lease.SampleID); err != nil {
+		UPDATE evaluation_samples
+		SET status = 'leased', route_trace_id = $2, updated_at = NOW()
+		WHERE id = $1`, lease.SampleID, lease.RouteTraceID); err != nil {
 		return nil, fmt.Errorf("mark evaluation sample leased: %w", err)
 	}
 	if _, err := tx.ExecContext(ctx, `
@@ -263,6 +303,53 @@ func (r *evaluationRepository) ClaimAssignment(ctx context.Context, workerID uui
 		return nil, fmt.Errorf("commit evaluation assignment claim: %w", err)
 	}
 	return lease, nil
+}
+
+func loadAssignmentExecutionContract(
+	ctx context.Context,
+	tx *sql.Tx,
+	candidate assignmentCandidate,
+	lease *service.AssignmentLease,
+) error {
+	lease.Case = &service.EvaluationCaseSpec{}
+	lease.RouteConfig = append(json.RawMessage(nil), lease.ModelConfig...)
+	lease.RouteTraceID = uuid.NewString()
+	err := tx.QueryRowContext(ctx, `
+		SELECT c.id, c.case_key, c.capability_domain, c.priority, c.weight,
+		       c.prompt_spec, c.expected_spec, c.execution_spec,
+		       c.grader_id, c.grader_version, c.content_sha256, c.confidentiality,
+		       d.id, d.dataset_key, d.version, d.manifest_sha256, k.id, k.key
+		FROM evaluation_cases c
+		JOIN evaluation_dataset_versions d ON d.id = c.dataset_version_id
+		JOIN evaluation_runs r ON r.id = $1
+		JOIN evaluation_plans p ON p.id = r.plan_id AND p.dataset_version_id = d.id
+		JOIN api_keys k ON k.id = p.gateway_api_key_id
+		JOIN users u ON u.id = k.user_id
+		LEFT JOIN groups g ON g.id = k.group_id
+		WHERE c.id = $2
+		  AND d.status = 'published'
+		  AND k.is_evaluation = TRUE
+		  AND k.status = 'active' AND k.deleted_at IS NULL
+		  AND (k.expires_at IS NULL OR k.expires_at > NOW())
+		  AND (k.quota = 0 OR k.quota_used < k.quota)
+		  AND u.status = 'active' AND u.deleted_at IS NULL
+		  AND (g.id IS NULL OR (g.status = 'active' AND g.deleted_at IS NULL))`,
+		candidate.runID, candidate.caseID).Scan(
+		&lease.Case.CaseID, &lease.Case.CaseKey, &lease.Case.CapabilityDomain,
+		&lease.Case.Priority, &lease.Case.Weight, &lease.Case.PromptSpec,
+		&lease.Case.ExpectedSpec, &lease.Case.ExecutionSpec, &lease.Case.GraderID,
+		&lease.Case.GraderVersion, &lease.Case.ContentSHA256,
+		&lease.Case.Confidentiality, &lease.DatasetVersionID, &lease.DatasetKey,
+		&lease.DatasetVersion, &lease.DatasetManifestSHA256,
+		&lease.GatewayAPIKeyID, &lease.GatewayAPIKey,
+	)
+	if errors.Is(err, sql.ErrNoRows) {
+		return errors.New("evaluation plan has no usable dedicated gateway API key")
+	}
+	if err != nil {
+		return fmt.Errorf("load evaluation assignment execution contract: %w", err)
+	}
+	return nil
 }
 
 func (r *evaluationRepository) RenewLease(ctx context.Context, assignmentID uuid.UUID, leaseToken string, extendBy time.Duration) (time.Time, error) {
@@ -372,7 +459,8 @@ func insertEvaluationSampleAndAssignment(
 	runID uuid.UUID,
 	evaluationCase evaluationCaseForRun,
 	modelRoute string,
-	matrixEntry evaluationMatrixEntry,
+	modelConfig []byte,
+	modelConfigSHA256 string,
 	sampleIndex int,
 ) error {
 	sampleID := uuid.New()
@@ -381,8 +469,8 @@ func insertEvaluationSampleAndAssignment(
 			id, run_id, case_id, model_route, model_config, model_config_sha256,
 			sample_index, priority, status, estimated_cost
 		) VALUES ($1, $2, $3, $4, $5::jsonb, $6, $7, $8, 'pending', $9)`,
-		sampleID, runID, evaluationCase.id, modelRoute, matrixEntry.config,
-		matrixEntry.configSHA256, sampleIndex, evaluationCase.priority, evaluationCase.estimatedCost); err != nil {
+		sampleID, runID, evaluationCase.id, modelRoute, modelConfig,
+		modelConfigSHA256, sampleIndex, evaluationCase.priority, evaluationCase.estimatedCost); err != nil {
 		return fmt.Errorf("insert evaluation sample: %w", err)
 	}
 	assignmentID := uuid.New()
@@ -423,8 +511,23 @@ func reclaimExpiredAssignment(ctx context.Context, tx *sql.Tx, capabilities []st
 		JOIN evaluation_samples s ON s.id = a.sample_id
 		JOIN evaluation_cases c ON c.id = s.case_id
 		JOIN evaluation_runs r ON r.id = s.run_id
+		JOIN evaluation_plans p ON p.id = r.plan_id
+		JOIN api_keys k ON k.id = p.gateway_api_key_id
+		JOIN users u ON u.id = k.user_id
+		LEFT JOIN groups g ON g.id = k.group_id
 		WHERE a.status IN ('leased', 'running') AND a.lease_expires_at <= NOW()
 			AND c.capability_domain = ANY($1::text[])
+			AND p.enabled = TRUE
+			AND k.is_evaluation = TRUE AND k.status = 'active' AND k.deleted_at IS NULL
+			AND (k.expires_at IS NULL OR k.expires_at > NOW())
+			AND (k.quota = 0 OR k.quota_used < k.quota)
+			AND u.status = 'active' AND u.deleted_at IS NULL
+			AND (g.id IS NULL OR (g.status = 'active' AND g.deleted_at IS NULL))
+			AND (SELECT COUNT(*) FROM evaluation_assignments active
+			     JOIN evaluation_samples active_sample ON active_sample.id = active.sample_id
+			     JOIN evaluation_runs active_run ON active_run.id = active_sample.run_id
+			     WHERE active_run.plan_id = p.id AND active.status IN ('leased', 'running')
+			       AND active.lease_expires_at > NOW()) < p.max_concurrency
 			AND (
 				(r.status IN ('pending', 'running') AND r.reserved_cost < r.budget_limit)
 				OR (r.status IN ('pending', 'running', 'budget_paused')
@@ -480,8 +583,23 @@ func selectPendingAssignment(ctx context.Context, tx *sql.Tx, capabilities []str
 		JOIN evaluation_samples s ON s.id = a.sample_id
 		JOIN evaluation_cases c ON c.id = s.case_id
 		JOIN evaluation_runs r ON r.id = s.run_id
+		JOIN evaluation_plans p ON p.id = r.plan_id
+		JOIN api_keys k ON k.id = p.gateway_api_key_id
+		JOIN users u ON u.id = k.user_id
+		LEFT JOIN groups g ON g.id = k.group_id
 		WHERE a.status = 'pending'
 			AND c.capability_domain = ANY($1::text[])
+			AND p.enabled = TRUE
+			AND k.is_evaluation = TRUE AND k.status = 'active' AND k.deleted_at IS NULL
+			AND (k.expires_at IS NULL OR k.expires_at > NOW())
+			AND (k.quota = 0 OR k.quota_used < k.quota)
+			AND u.status = 'active' AND u.deleted_at IS NULL
+			AND (g.id IS NULL OR (g.status = 'active' AND g.deleted_at IS NULL))
+			AND (SELECT COUNT(*) FROM evaluation_assignments active
+			     JOIN evaluation_samples active_sample ON active_sample.id = active.sample_id
+			     JOIN evaluation_runs active_run ON active_run.id = active_sample.run_id
+			     WHERE active_run.plan_id = p.id AND active.status IN ('leased', 'running')
+			       AND active.lease_expires_at > NOW()) < p.max_concurrency
 			AND (
 				(r.status IN ('pending', 'running') AND r.reserved_cost < r.budget_limit)
 				OR (r.status IN ('pending', 'running', 'budget_paused')
@@ -500,9 +618,18 @@ func selectPendingAssignment(ctx context.Context, tx *sql.Tx, capabilities []str
 }
 
 type evaluationMatrixEntry struct {
-	route        string
-	config       []byte
-	configSHA256 string
+	route                 string
+	baselineConfig        []byte
+	baselineConfigSHA256  string
+	candidateConfig       []byte
+	candidateConfigSHA256 string
+}
+
+func (entry evaluationMatrixEntry) configForSide(side string) ([]byte, string) {
+	if side == "baseline" {
+		return entry.baselineConfig, entry.baselineConfigSHA256
+	}
+	return entry.candidateConfig, entry.candidateConfigSHA256
 }
 
 func evaluationMatrixEntries(matrixJSON []byte) ([]evaluationMatrixEntry, error) {
@@ -529,22 +656,59 @@ func evaluationMatrixEntries(matrixJSON []byte) ([]evaluationMatrixEntry, error)
 			return nil, fmt.Errorf("evaluation model matrix duplicates route %q", route)
 		}
 		seen[route] = struct{}{}
-		config, err := json.Marshal(entry)
+		baseline, err := evaluationMatrixSideConfig(entry, "baseline", route)
 		if err != nil {
-			return nil, fmt.Errorf("canonicalize evaluation model matrix entry %q: %w", route, err)
+			return nil, err
 		}
-		config, err = canonicalizeModelConfig(config)
+		candidate, err := evaluationMatrixSideConfig(entry, "candidate", route)
 		if err != nil {
-			return nil, fmt.Errorf("canonicalize evaluation model matrix entry %q: %w", route, err)
+			return nil, err
+		}
+		baselineHash := hashString(string(baseline))
+		candidateHash := hashString(string(candidate))
+		if baselineHash == candidateHash {
+			return nil, fmt.Errorf("evaluation model matrix entry %q has identical baseline and candidate configurations", route)
 		}
 		entries = append(entries, evaluationMatrixEntry{
-			route: route, config: config, configSHA256: hashString(string(config)),
+			route:          route,
+			baselineConfig: baseline, baselineConfigSHA256: baselineHash,
+			candidateConfig: candidate, candidateConfigSHA256: candidateHash,
 		})
 	}
 	if len(entries) == 0 {
 		return nil, errors.New("evaluation model matrix is empty")
 	}
 	return entries, nil
+}
+
+func evaluationMatrixSideConfig(entry map[string]any, side, pairRoute string) ([]byte, error) {
+	value, ok := entry[side]
+	if !ok {
+		return nil, fmt.Errorf("evaluation model matrix entry %q has no %s configuration", pairRoute, side)
+	}
+	configMap, ok := value.(map[string]any)
+	if !ok || len(configMap) == 0 {
+		return nil, fmt.Errorf("evaluation model matrix entry %q has invalid %s configuration", pairRoute, side)
+	}
+	modelRoute := ""
+	for _, key := range []string{"route", "model_route", "model", "id"} {
+		if route, ok := configMap[key].(string); ok && strings.TrimSpace(route) != "" {
+			modelRoute = strings.TrimSpace(route)
+			break
+		}
+	}
+	if modelRoute == "" {
+		return nil, fmt.Errorf("evaluation model matrix entry %q %s configuration has no route", pairRoute, side)
+	}
+	raw, err := json.Marshal(configMap)
+	if err != nil {
+		return nil, fmt.Errorf("marshal evaluation model matrix entry %q %s configuration: %w", pairRoute, side, err)
+	}
+	config, err := canonicalizeModelConfig(raw)
+	if err != nil {
+		return nil, fmt.Errorf("canonicalize evaluation model matrix entry %q %s configuration: %w", pairRoute, side, err)
+	}
+	return config, nil
 }
 
 func canonicalizeModelConfig(raw []byte) ([]byte, error) {
@@ -590,16 +754,66 @@ func intersectCapabilities(requested, registered []string) []string {
 func lockRunLeaseEligibility(ctx context.Context, tx *sql.Tx, runID uuid.UUID, priority string) (bool, error) {
 	var status service.RunStatus
 	var reservedCost, budgetLimit decimal.Decimal
+	var planID uuid.UUID
+	state := evaluationPlanControlState{}
 	if err := tx.QueryRowContext(ctx, `
-		SELECT status, reserved_cost, budget_limit
-		FROM evaluation_runs WHERE id = $1 FOR UPDATE`, runID).Scan(&status, &reservedCost, &budgetLimit); err != nil {
+		SELECT r.status, r.reserved_cost, r.budget_limit, p.id, p.enabled, p.max_concurrency,
+		       TRUE
+		FROM evaluation_runs r
+		JOIN evaluation_plans p ON p.id = r.plan_id
+		JOIN api_keys k ON k.id = p.gateway_api_key_id
+		JOIN users u ON u.id = k.user_id
+		LEFT JOIN groups g ON g.id = k.group_id
+		WHERE r.id = $1
+		  AND k.is_evaluation = TRUE AND k.status = 'active' AND k.deleted_at IS NULL
+		  AND (k.expires_at IS NULL OR k.expires_at > NOW())
+		  AND (k.quota = 0 OR k.quota_used < k.quota)
+		  AND u.status = 'active' AND u.deleted_at IS NULL
+		  AND (g.id IS NULL OR (g.status = 'active' AND g.deleted_at IS NULL))
+		FOR UPDATE OF r, p`, runID).Scan(
+		&status, &reservedCost, &budgetLimit, &planID, &state.enabled,
+		&state.maxConcurrency, &state.keyUsable,
+	); errors.Is(err, sql.ErrNoRows) {
+		return false, nil
+	} else if err != nil {
 		return false, fmt.Errorf("lock evaluation run budget: %w", err)
+	}
+	if err := tx.QueryRowContext(ctx, `
+		SELECT COUNT(*)
+		FROM evaluation_assignments a
+		JOIN evaluation_samples s ON s.id = a.sample_id
+		JOIN evaluation_runs r ON r.id = s.run_id
+		WHERE r.plan_id = $1 AND a.status IN ('leased', 'running')
+		  AND a.lease_expires_at > NOW()`, planID).Scan(&state.activeLeases); err != nil {
+		return false, fmt.Errorf("count active evaluation plan leases: %w", err)
+	}
+	if !assignmentLeaseEligible(state) {
+		return false, nil
 	}
 	if (status == service.RunStatusPending || status == service.RunStatusRunning) && reservedCost.LessThan(budgetLimit) {
 		return true, nil
 	}
 	return priority == string(service.CasePriorityP0) && reservedCost.Equal(budgetLimit) &&
 		(status == service.RunStatusPending || status == service.RunStatusRunning || status == service.RunStatusBudgetPaused), nil
+}
+
+type evaluationPlanControlState struct {
+	enabled           bool
+	keyUsable         bool
+	dailyCostLimit    decimal.Decimal
+	dailyReservedCost decimal.Decimal
+	maxConcurrency    int
+	activeLeases      int
+}
+
+func runCreationEligible(state evaluationPlanControlState, reservation decimal.Decimal) bool {
+	return state.enabled && state.keyUsable && state.dailyCostLimit.GreaterThan(decimal.Zero) &&
+		state.dailyReservedCost.Add(reservation).LessThanOrEqual(state.dailyCostLimit)
+}
+
+func assignmentLeaseEligible(state evaluationPlanControlState) bool {
+	return state.enabled && state.keyUsable && state.maxConcurrency > 0 &&
+		state.activeLeases < state.maxConcurrency
 }
 
 func insertEvaluationBudgetWarning(

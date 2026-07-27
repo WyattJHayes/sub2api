@@ -1232,6 +1232,29 @@ func HasEvaluationRouteEvidenceWith(preds ...predicate.EvaluationRouteEvidence) 
 	})
 }
 
+// HasEvaluationPlans applies the HasEdge predicate on the "evaluation_plans" edge.
+func HasEvaluationPlans() predicate.APIKey {
+	return predicate.APIKey(func(s *sql.Selector) {
+		step := sqlgraph.NewStep(
+			sqlgraph.From(Table, FieldID),
+			sqlgraph.Edge(sqlgraph.O2M, false, EvaluationPlansTable, EvaluationPlansColumn),
+		)
+		sqlgraph.HasNeighbors(s, step)
+	})
+}
+
+// HasEvaluationPlansWith applies the HasEdge predicate on the "evaluation_plans" edge with a given conditions (other predicates).
+func HasEvaluationPlansWith(preds ...predicate.EvaluationPlan) predicate.APIKey {
+	return predicate.APIKey(func(s *sql.Selector) {
+		step := newEvaluationPlansStep()
+		sqlgraph.HasNeighborsWith(s, step, func(s *sql.Selector) {
+			for _, p := range preds {
+				p(s)
+			}
+		})
+	})
+}
+
 // And groups predicates with the AND operator between them.
 func And(predicates ...predicate.APIKey) predicate.APIKey {
 	return predicate.APIKey(sql.AndPredicates(predicates...))

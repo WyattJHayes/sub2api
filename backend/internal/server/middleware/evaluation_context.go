@@ -66,7 +66,9 @@ func bindEvaluationContext(c *gin.Context, apiKey *service.APIKey, signer *servi
 	if err != nil {
 		return &evaluationContextBindingError{code: "EVALUATION_CONTEXT_INVALID", message: "Evaluation context is invalid"}
 	}
-	verified.RouteTraceID = uuid.NewString()
+	if verified.RouteTraceID == "" {
+		verified.RouteTraceID = uuid.NewString()
+	}
 	ctx := service.WithEvaluationContext(c.Request.Context(), verified)
 	c.Request = c.Request.WithContext(service.WithRouteTrace(ctx, service.NewRouteTrace(verified, traceConfig)))
 	return nil

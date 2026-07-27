@@ -3,6 +3,7 @@ package handler
 import (
 	"github.com/Wei-Shaw/sub2api/internal/config"
 	"github.com/Wei-Shaw/sub2api/internal/handler/admin"
+	radarhandler "github.com/Wei-Shaw/sub2api/internal/handler/internal"
 	"github.com/Wei-Shaw/sub2api/internal/securityaudit"
 	"github.com/Wei-Shaw/sub2api/internal/service"
 
@@ -45,6 +46,7 @@ func ProvideAdminHandlers(
 	affiliateHandler *admin.AffiliateHandler,
 	complianceHandler *admin.ComplianceHandler,
 	auditLogHandler *admin.AuditLogHandler,
+	radarGovernanceHandler *admin.RadarGovernanceHandler,
 	upstreamBillingProbe *service.UpstreamBillingProbeService,
 	ollamaCloudUsage *service.OllamaCloudUsageService,
 ) *AdminHandlers {
@@ -85,6 +87,7 @@ func ProvideAdminHandlers(
 		Affiliate:              affiliateHandler,
 		Compliance:             complianceHandler,
 		AuditLog:               auditLogHandler,
+		RadarGovernance:        radarGovernanceHandler,
 	}
 }
 
@@ -144,6 +147,10 @@ func ProvideBatchImageHandler(
 	return h
 }
 
+func ProvideRadarWorkerHandler(repo service.EvaluationGradingRepository, cfg *config.Config) RadarWorkerHandler {
+	return radarhandler.ProvideRadarGraderHandler(repo, cfg)
+}
+
 // ProvideSystemHandler creates admin.SystemHandler with UpdateService
 func ProvideSystemHandler(updateService *service.UpdateService, lockService *service.SystemOperationLockService) *admin.SystemHandler {
 	return admin.NewSystemHandler(updateService, lockService)
@@ -184,6 +191,7 @@ func ProvideHandlers(
 	availableChannelHandler *AvailableChannelHandler,
 	asyncImageHandler *AsyncImageHandler,
 	batchImageHandler *BatchImageHandler,
+	radarWorkerHandler RadarWorkerHandler,
 	_ *service.IdempotencyCoordinator,
 	_ *service.IdempotencyCleanupService,
 ) *Handlers {
@@ -206,6 +214,7 @@ func ProvideHandlers(
 		AvailableChannel: availableChannelHandler,
 		AsyncImage:       asyncImageHandler,
 		BatchImage:       batchImageHandler,
+		RadarWorker:      radarWorkerHandler,
 	}
 }
 
@@ -229,6 +238,7 @@ var ProviderSet = wire.NewSet(
 	NewAvailableChannelHandler,
 	NewAsyncImageHandler,
 	ProvideBatchImageHandler,
+	ProvideRadarWorkerHandler,
 
 	// Admin handlers
 	admin.NewDashboardHandler,
@@ -264,6 +274,7 @@ var ProviderSet = wire.NewSet(
 	admin.NewAffiliateHandler,
 	admin.NewComplianceHandler,
 	admin.NewAuditLogHandler,
+	admin.NewRadarGovernanceHandler,
 
 	// AdminHandlers and Handlers constructors
 	ProvideAdminHandlers,

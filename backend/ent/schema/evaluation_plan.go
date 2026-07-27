@@ -26,6 +26,8 @@ func (EvaluationPlan) Fields() []ent.Field {
 		field.UUID("id", uuid.UUID{}).Default(uuid.New).Immutable(),
 		field.String("name").MaxLen(120),
 		field.UUID("dataset_version_id", uuid.UUID{}).Immutable(),
+		// Nullable for plans created before migration 195. New plans require it.
+		field.Int64("gateway_api_key_id").Optional().Nillable(),
 		field.String("trigger_type").MaxLen(20),
 		field.String("cron_expression").MaxLen(100).Optional().Nillable(),
 		field.JSON("model_matrix", []map[string]any{}).SchemaType(map[string]string{dialect.Postgres: "jsonb"}),
@@ -43,10 +45,18 @@ func (EvaluationPlan) Edges() []ent.Edge {
 	return []ent.Edge{
 		edge.From("dataset_version", EvaluationDatasetVersion.Type).
 			Ref("plans").Field("dataset_version_id").Unique().Required().Immutable(),
+		edge.From("gateway_api_key", APIKey.Type).
+			Ref("evaluation_plans").Field("gateway_api_key_id").Unique().
+			Annotations(entsql.OnDelete(entsql.NoAction)),
 		edge.To("runs", EvaluationRun.Type),
 	}
 }
 
 func (EvaluationPlan) Indexes() []ent.Index {
-	return []ent.Index{index.Fields("enabled", "trigger_type")}
+	return []ent.Index{
+		index.Fields("enabled", "trigger_type"),
+		index.Fields("gateway_api_key_id").
+			StorageKey("idx_evaluation_plans_gateway_api_key").
+			Annotations(entsql.IndexWhere("gateway_api_key_id IS NOT NULL")),
+	}
 }

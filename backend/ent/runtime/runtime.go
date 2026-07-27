@@ -1091,23 +1091,23 @@ func init() {
 	// evaluationplan.NameValidator is a validator for the "name" field. It is called by the builders before save.
 	evaluationplan.NameValidator = evaluationplanDescName.Validators[0].(func(string) error)
 	// evaluationplanDescTriggerType is the schema descriptor for trigger_type field.
-	evaluationplanDescTriggerType := evaluationplanFields[3].Descriptor()
+	evaluationplanDescTriggerType := evaluationplanFields[4].Descriptor()
 	// evaluationplan.TriggerTypeValidator is a validator for the "trigger_type" field. It is called by the builders before save.
 	evaluationplan.TriggerTypeValidator = evaluationplanDescTriggerType.Validators[0].(func(string) error)
 	// evaluationplanDescCronExpression is the schema descriptor for cron_expression field.
-	evaluationplanDescCronExpression := evaluationplanFields[4].Descriptor()
+	evaluationplanDescCronExpression := evaluationplanFields[5].Descriptor()
 	// evaluationplan.CronExpressionValidator is a validator for the "cron_expression" field. It is called by the builders before save.
 	evaluationplan.CronExpressionValidator = evaluationplanDescCronExpression.Validators[0].(func(string) error)
 	// evaluationplanDescEnabled is the schema descriptor for enabled field.
-	evaluationplanDescEnabled := evaluationplanFields[9].Descriptor()
+	evaluationplanDescEnabled := evaluationplanFields[10].Descriptor()
 	// evaluationplan.DefaultEnabled holds the default value on creation for the enabled field.
 	evaluationplan.DefaultEnabled = evaluationplanDescEnabled.Default.(bool)
 	// evaluationplanDescCreatedAt is the schema descriptor for created_at field.
-	evaluationplanDescCreatedAt := evaluationplanFields[11].Descriptor()
+	evaluationplanDescCreatedAt := evaluationplanFields[12].Descriptor()
 	// evaluationplan.DefaultCreatedAt holds the default value on creation for the created_at field.
 	evaluationplan.DefaultCreatedAt = evaluationplanDescCreatedAt.Default.(func() time.Time)
 	// evaluationplanDescUpdatedAt is the schema descriptor for updated_at field.
-	evaluationplanDescUpdatedAt := evaluationplanFields[12].Descriptor()
+	evaluationplanDescUpdatedAt := evaluationplanFields[13].Descriptor()
 	// evaluationplan.DefaultUpdatedAt holds the default value on creation for the updated_at field.
 	evaluationplan.DefaultUpdatedAt = evaluationplanDescUpdatedAt.Default.(func() time.Time)
 	// evaluationplan.UpdateDefaultUpdatedAt holds the default value on update for the updated_at field.

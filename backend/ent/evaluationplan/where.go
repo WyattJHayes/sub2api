@@ -66,6 +66,11 @@ func DatasetVersionID(v uuid.UUID) predicate.EvaluationPlan {
 	return predicate.EvaluationPlan(sql.FieldEQ(FieldDatasetVersionID, v))
 }
 
+// GatewayAPIKeyID applies equality check predicate on the "gateway_api_key_id" field. It's identical to GatewayAPIKeyIDEQ.
+func GatewayAPIKeyID(v int64) predicate.EvaluationPlan {
+	return predicate.EvaluationPlan(sql.FieldEQ(FieldGatewayAPIKeyID, v))
+}
+
 // TriggerType applies equality check predicate on the "trigger_type" field. It's identical to TriggerTypeEQ.
 func TriggerType(v string) predicate.EvaluationPlan {
 	return predicate.EvaluationPlan(sql.FieldEQ(FieldTriggerType, v))
@@ -194,6 +199,36 @@ func DatasetVersionIDIn(vs ...uuid.UUID) predicate.EvaluationPlan {
 // DatasetVersionIDNotIn applies the NotIn predicate on the "dataset_version_id" field.
 func DatasetVersionIDNotIn(vs ...uuid.UUID) predicate.EvaluationPlan {
 	return predicate.EvaluationPlan(sql.FieldNotIn(FieldDatasetVersionID, vs...))
+}
+
+// GatewayAPIKeyIDEQ applies the EQ predicate on the "gateway_api_key_id" field.
+func GatewayAPIKeyIDEQ(v int64) predicate.EvaluationPlan {
+	return predicate.EvaluationPlan(sql.FieldEQ(FieldGatewayAPIKeyID, v))
+}
+
+// GatewayAPIKeyIDNEQ applies the NEQ predicate on the "gateway_api_key_id" field.
+func GatewayAPIKeyIDNEQ(v int64) predicate.EvaluationPlan {
+	return predicate.EvaluationPlan(sql.FieldNEQ(FieldGatewayAPIKeyID, v))
+}
+
+// GatewayAPIKeyIDIn applies the In predicate on the "gateway_api_key_id" field.
+func GatewayAPIKeyIDIn(vs ...int64) predicate.EvaluationPlan {
+	return predicate.EvaluationPlan(sql.FieldIn(FieldGatewayAPIKeyID, vs...))
+}
+
+// GatewayAPIKeyIDNotIn applies the NotIn predicate on the "gateway_api_key_id" field.
+func GatewayAPIKeyIDNotIn(vs ...int64) predicate.EvaluationPlan {
+	return predicate.EvaluationPlan(sql.FieldNotIn(FieldGatewayAPIKeyID, vs...))
+}
+
+// GatewayAPIKeyIDIsNil applies the IsNil predicate on the "gateway_api_key_id" field.
+func GatewayAPIKeyIDIsNil() predicate.EvaluationPlan {
+	return predicate.EvaluationPlan(sql.FieldIsNull(FieldGatewayAPIKeyID))
+}
+
+// GatewayAPIKeyIDNotNil applies the NotNil predicate on the "gateway_api_key_id" field.
+func GatewayAPIKeyIDNotNil() predicate.EvaluationPlan {
+	return predicate.EvaluationPlan(sql.FieldNotNull(FieldGatewayAPIKeyID))
 }
 
 // TriggerTypeEQ applies the EQ predicate on the "trigger_type" field.
@@ -601,6 +636,29 @@ func HasDatasetVersion() predicate.EvaluationPlan {
 func HasDatasetVersionWith(preds ...predicate.EvaluationDatasetVersion) predicate.EvaluationPlan {
 	return predicate.EvaluationPlan(func(s *sql.Selector) {
 		step := newDatasetVersionStep()
+		sqlgraph.HasNeighborsWith(s, step, func(s *sql.Selector) {
+			for _, p := range preds {
+				p(s)
+			}
+		})
+	})
+}
+
+// HasGatewayAPIKey applies the HasEdge predicate on the "gateway_api_key" edge.
+func HasGatewayAPIKey() predicate.EvaluationPlan {
+	return predicate.EvaluationPlan(func(s *sql.Selector) {
+		step := sqlgraph.NewStep(
+			sqlgraph.From(Table, FieldID),
+			sqlgraph.Edge(sqlgraph.M2O, true, GatewayAPIKeyTable, GatewayAPIKeyColumn),
+		)
+		sqlgraph.HasNeighbors(s, step)
+	})
+}
+
+// HasGatewayAPIKeyWith applies the HasEdge predicate on the "gateway_api_key" edge with a given conditions (other predicates).
+func HasGatewayAPIKeyWith(preds ...predicate.APIKey) predicate.EvaluationPlan {
+	return predicate.EvaluationPlan(func(s *sql.Selector) {
+		step := newGatewayAPIKeyStep()
 		sqlgraph.HasNeighborsWith(s, step, func(s *sql.Selector) {
 			for _, p := range preds {
 				p(s)

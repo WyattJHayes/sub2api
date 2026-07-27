@@ -748,6 +748,22 @@ func (c *APIKeyClient) QueryEvaluationRouteEvidence(_m *APIKey) *EvaluationRoute
 	return query
 }
 
+// QueryEvaluationPlans queries the evaluation_plans edge of a APIKey.
+func (c *APIKeyClient) QueryEvaluationPlans(_m *APIKey) *EvaluationPlanQuery {
+	query := (&EvaluationPlanClient{config: c.config}).Query()
+	query.path = func(context.Context) (fromV *sql.Selector, _ error) {
+		id := _m.ID
+		step := sqlgraph.NewStep(
+			sqlgraph.From(apikey.Table, apikey.FieldID, id),
+			sqlgraph.To(evaluationplan.Table, evaluationplan.FieldID),
+			sqlgraph.Edge(sqlgraph.O2M, false, apikey.EvaluationPlansTable, apikey.EvaluationPlansColumn),
+		)
+		fromV = sqlgraph.Neighbors(_m.driver.Dialect(), step)
+		return fromV, nil
+	}
+	return query
+}
+
 // Hooks returns the client hooks.
 func (c *APIKeyClient) Hooks() []Hook {
 	hooks := c.hooks.APIKey
@@ -3508,6 +3524,22 @@ func (c *EvaluationPlanClient) QueryDatasetVersion(_m *EvaluationPlan) *Evaluati
 			sqlgraph.From(evaluationplan.Table, evaluationplan.FieldID, id),
 			sqlgraph.To(evaluationdatasetversion.Table, evaluationdatasetversion.FieldID),
 			sqlgraph.Edge(sqlgraph.M2O, true, evaluationplan.DatasetVersionTable, evaluationplan.DatasetVersionColumn),
+		)
+		fromV = sqlgraph.Neighbors(_m.driver.Dialect(), step)
+		return fromV, nil
+	}
+	return query
+}
+
+// QueryGatewayAPIKey queries the gateway_api_key edge of a EvaluationPlan.
+func (c *EvaluationPlanClient) QueryGatewayAPIKey(_m *EvaluationPlan) *APIKeyQuery {
+	query := (&APIKeyClient{config: c.config}).Query()
+	query.path = func(context.Context) (fromV *sql.Selector, _ error) {
+		id := _m.ID
+		step := sqlgraph.NewStep(
+			sqlgraph.From(evaluationplan.Table, evaluationplan.FieldID, id),
+			sqlgraph.To(apikey.Table, apikey.FieldID),
+			sqlgraph.Edge(sqlgraph.M2O, true, evaluationplan.GatewayAPIKeyTable, evaluationplan.GatewayAPIKeyColumn),
 		)
 		fromV = sqlgraph.Neighbors(_m.driver.Dialect(), step)
 		return fromV, nil

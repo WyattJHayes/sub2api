@@ -82,6 +82,8 @@ var ProviderSet = wire.NewSet(
 	NewUsageLogRepository,
 	NewUsageBillingRepository,
 	NewEvaluationRouteEvidenceRepository,
+	NewEvaluationGradingRepository,
+	NewRadarGovernanceRepository,
 	NewBatchImageRepository,
 	NewIdempotencyRepository,
 	NewUsageCleanupRepository,

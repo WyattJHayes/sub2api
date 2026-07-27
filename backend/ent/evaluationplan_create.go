@@ -12,6 +12,7 @@ import (
 	"entgo.io/ent/dialect/sql"
 	"entgo.io/ent/dialect/sql/sqlgraph"
 	"entgo.io/ent/schema/field"
+	"github.com/Wei-Shaw/sub2api/ent/apikey"
 	"github.com/Wei-Shaw/sub2api/ent/evaluationdatasetversion"
 	"github.com/Wei-Shaw/sub2api/ent/evaluationplan"
 	"github.com/Wei-Shaw/sub2api/ent/evaluationrun"
@@ -35,6 +36,20 @@ func (_c *EvaluationPlanCreate) SetName(v string) *EvaluationPlanCreate {
 // SetDatasetVersionID sets the "dataset_version_id" field.
 func (_c *EvaluationPlanCreate) SetDatasetVersionID(v uuid.UUID) *EvaluationPlanCreate {
 	_c.mutation.SetDatasetVersionID(v)
+	return _c
+}
+
+// SetGatewayAPIKeyID sets the "gateway_api_key_id" field.
+func (_c *EvaluationPlanCreate) SetGatewayAPIKeyID(v int64) *EvaluationPlanCreate {
+	_c.mutation.SetGatewayAPIKeyID(v)
+	return _c
+}
+
+// SetNillableGatewayAPIKeyID sets the "gateway_api_key_id" field if the given value is not nil.
+func (_c *EvaluationPlanCreate) SetNillableGatewayAPIKeyID(v *int64) *EvaluationPlanCreate {
+	if v != nil {
+		_c.SetGatewayAPIKeyID(*v)
+	}
 	return _c
 }
 
@@ -147,6 +162,11 @@ func (_c *EvaluationPlanCreate) SetNillableID(v *uuid.UUID) *EvaluationPlanCreat
 // SetDatasetVersion sets the "dataset_version" edge to the EvaluationDatasetVersion entity.
 func (_c *EvaluationPlanCreate) SetDatasetVersion(v *EvaluationDatasetVersion) *EvaluationPlanCreate {
 	return _c.SetDatasetVersionID(v.ID)
+}
+
+// SetGatewayAPIKey sets the "gateway_api_key" edge to the APIKey entity.
+func (_c *EvaluationPlanCreate) SetGatewayAPIKey(v *APIKey) *EvaluationPlanCreate {
+	return _c.SetGatewayAPIKeyID(v.ID)
 }
 
 // AddRunIDs adds the "runs" edge to the EvaluationRun entity by IDs.
@@ -367,6 +387,23 @@ func (_c *EvaluationPlanCreate) createSpec() (*EvaluationPlan, *sqlgraph.CreateS
 		_node.DatasetVersionID = nodes[0]
 		_spec.Edges = append(_spec.Edges, edge)
 	}
+	if nodes := _c.mutation.GatewayAPIKeyIDs(); len(nodes) > 0 {
+		edge := &sqlgraph.EdgeSpec{
+			Rel:     sqlgraph.M2O,
+			Inverse: true,
+			Table:   evaluationplan.GatewayAPIKeyTable,
+			Columns: []string{evaluationplan.GatewayAPIKeyColumn},
+			Bidi:    false,
+			Target: &sqlgraph.EdgeTarget{
+				IDSpec: sqlgraph.NewFieldSpec(apikey.FieldID, field.TypeInt64),
+			},
+		}
+		for _, k := range nodes {
+			edge.Target.Nodes = append(edge.Target.Nodes, k)
+		}
+		_node.GatewayAPIKeyID = &nodes[0]
+		_spec.Edges = append(_spec.Edges, edge)
+	}
 	if nodes := _c.mutation.RunsIDs(); len(nodes) > 0 {
 		edge := &sqlgraph.EdgeSpec{
 			Rel:     sqlgraph.O2M,
@@ -444,6 +481,24 @@ func (u *EvaluationPlanUpsert) SetName(v string) *EvaluationPlanUpsert {
 // UpdateName sets the "name" field to the value that was provided on create.
 func (u *EvaluationPlanUpsert) UpdateName() *EvaluationPlanUpsert {
 	u.SetExcluded(evaluationplan.FieldName)
+	return u
+}
+
+// SetGatewayAPIKeyID sets the "gateway_api_key_id" field.
+func (u *EvaluationPlanUpsert) SetGatewayAPIKeyID(v int64) *EvaluationPlanUpsert {
+	u.Set(evaluationplan.FieldGatewayAPIKeyID, v)
+	return u
+}
+
+// UpdateGatewayAPIKeyID sets the "gateway_api_key_id" field to the value that was provided on create.
+func (u *EvaluationPlanUpsert) UpdateGatewayAPIKeyID() *EvaluationPlanUpsert {
+	u.SetExcluded(evaluationplan.FieldGatewayAPIKeyID)
+	return u
+}
+
+// ClearGatewayAPIKeyID clears the value of the "gateway_api_key_id" field.
+func (u *EvaluationPlanUpsert) ClearGatewayAPIKeyID() *EvaluationPlanUpsert {
+	u.SetNull(evaluationplan.FieldGatewayAPIKeyID)
 	return u
 }
 
@@ -635,6 +690,27 @@ func (u *EvaluationPlanUpsertOne) SetName(v string) *EvaluationPlanUpsertOne {
 func (u *EvaluationPlanUpsertOne) UpdateName() *EvaluationPlanUpsertOne {
 	return u.Update(func(s *EvaluationPlanUpsert) {
 		s.UpdateName()
+	})
+}
+
+// SetGatewayAPIKeyID sets the "gateway_api_key_id" field.
+func (u *EvaluationPlanUpsertOne) SetGatewayAPIKeyID(v int64) *EvaluationPlanUpsertOne {
+	return u.Update(func(s *EvaluationPlanUpsert) {
+		s.SetGatewayAPIKeyID(v)
+	})
+}
+
+// UpdateGatewayAPIKeyID sets the "gateway_api_key_id" field to the value that was provided on create.
+func (u *EvaluationPlanUpsertOne) UpdateGatewayAPIKeyID() *EvaluationPlanUpsertOne {
+	return u.Update(func(s *EvaluationPlanUpsert) {
+		s.UpdateGatewayAPIKeyID()
+	})
+}
+
+// ClearGatewayAPIKeyID clears the value of the "gateway_api_key_id" field.
+func (u *EvaluationPlanUpsertOne) ClearGatewayAPIKeyID() *EvaluationPlanUpsertOne {
+	return u.Update(func(s *EvaluationPlanUpsert) {
+		s.ClearGatewayAPIKeyID()
 	})
 }
 
@@ -1013,6 +1089,27 @@ func (u *EvaluationPlanUpsertBulk) SetName(v string) *EvaluationPlanUpsertBulk {
 func (u *EvaluationPlanUpsertBulk) UpdateName() *EvaluationPlanUpsertBulk {
 	return u.Update(func(s *EvaluationPlanUpsert) {
 		s.UpdateName()
+	})
+}
+
+// SetGatewayAPIKeyID sets the "gateway_api_key_id" field.
+func (u *EvaluationPlanUpsertBulk) SetGatewayAPIKeyID(v int64) *EvaluationPlanUpsertBulk {
+	return u.Update(func(s *EvaluationPlanUpsert) {
+		s.SetGatewayAPIKeyID(v)
+	})
+}
+
+// UpdateGatewayAPIKeyID sets the "gateway_api_key_id" field to the value that was provided on create.
+func (u *EvaluationPlanUpsertBulk) UpdateGatewayAPIKeyID() *EvaluationPlanUpsertBulk {
+	return u.Update(func(s *EvaluationPlanUpsert) {
+		s.UpdateGatewayAPIKeyID()
+	})
+}
+
+// ClearGatewayAPIKeyID clears the value of the "gateway_api_key_id" field.
+func (u *EvaluationPlanUpsertBulk) ClearGatewayAPIKeyID() *EvaluationPlanUpsertBulk {
+	return u.Update(func(s *EvaluationPlanUpsert) {
+		s.ClearGatewayAPIKeyID()
 	})
 }
 

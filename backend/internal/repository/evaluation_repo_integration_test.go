@@ -224,13 +224,104 @@ func TestEvaluationRepository_FreezesModelConfigurationInLease(t *testing.T) {
 	lease, err := repo.ClaimAssignment(ctx, fixture.workerIDs[0], []string{"coding"}, time.Minute)
 	require.NoError(t, err)
 	require.NotNil(t, lease)
-	require.JSONEq(t, `{"max_tokens":64,"route":"route-a","temperature":0.2}`, string(lease.ModelConfig))
+	require.Equal(t, "baseline:route-a", lease.ModelRoute)
+	require.JSONEq(t, `{"max_tokens":64,"route":"route-a-baseline","temperature":0.2}`, string(lease.ModelConfig))
 	returnedHash := sha256.Sum256(lease.ModelConfig)
 	require.Equal(t, fmt.Sprintf("%x", returnedHash), lease.ModelConfigSHA256)
 
 	_, err = integrationDB.ExecContext(ctx, `
 		UPDATE evaluation_samples SET model_config = '{}'::jsonb WHERE run_id = $1`, run.ID)
 	require.Error(t, err)
+}
+
+func TestEvaluationRepository_ClaimReturnsCompleteExecutionContract(t *testing.T) {
+	ctx := context.Background()
+	fixture := createEvaluationRepositoryFixtureWithCases(t, []evaluationCaseFixtureSpec{
+		{capability: "coding", priority: "P0", sampleCount: 1, estimatedCost: decimal.RequireFromString("0.01")},
+	}, []map[string]any{{
+		"route": "route-a", "temperature": 0, "max_tokens": 32,
+	}}, decimal.RequireFromString("100"))
+	repo := NewEvaluationRepository(integrationDB)
+	_, err := repo.CreateRunWithMatrix(ctx, service.CreateRunInput{
+		PlanID: fixture.planID, TriggerSource: "manual", CreatedBy: fixture.userID,
+	})
+	require.NoError(t, err)
+
+	lease, err := repo.ClaimAssignment(ctx, fixture.workerIDs[0], []string{"coding"}, time.Minute)
+	require.NoError(t, err)
+	require.NotNil(t, lease)
+	require.NotNil(t, lease.Case)
+	require.Equal(t, "case-0", lease.Case.CaseKey)
+	require.Equal(t, "coding", lease.Case.CapabilityDomain)
+	require.JSONEq(t, `{"input":"ping"}`, string(lease.Case.PromptSpec))
+	require.JSONEq(t, `{"output":"pong"}`, string(lease.Case.ExpectedSpec))
+	require.JSONEq(t, `{"url":"/v1/responses"}`, string(lease.Case.ExecutionSpec))
+	require.Equal(t, fixture.apiKeyID, lease.GatewayAPIKeyID)
+	require.Equal(t, fixture.apiKey, lease.GatewayAPIKey)
+	require.Equal(t, fixture.datasetID, lease.DatasetVersionID)
+	require.Contains(t, lease.DatasetKey, "evaluation-repository-")
+	require.Equal(t, "v1", lease.DatasetVersion)
+	require.Equal(t, fmt.Sprintf("%064d", 1), lease.DatasetManifestSHA256)
+	require.NotEmpty(t, lease.RouteTraceID)
+	_, err = uuid.Parse(lease.RouteTraceID)
+	require.NoError(t, err)
+
+	var persistedTrace string
+	require.NoError(t, integrationDB.QueryRowContext(ctx,
+		`SELECT route_trace_id FROM evaluation_samples WHERE id = $1`, lease.SampleID).Scan(&persistedTrace))
+	require.Equal(t, lease.RouteTraceID, persistedTrace)
+}
+
+func TestEvaluationRepository_RejectsDisabledPlanAndUnusableKeyAtRunCreation(t *testing.T) {
+	ctx := context.Background()
+	fixture := createEvaluationRepositoryFixture(t, 1, []string{"route-a"}, 1)
+	repo := NewEvaluationRepository(integrationDB)
+
+	_, err := integrationDB.ExecContext(ctx, `UPDATE evaluation_plans SET enabled = FALSE WHERE id = $1`, fixture.planID)
+	require.NoError(t, err)
+	_, err = repo.CreateRunWithMatrix(ctx, service.CreateRunInput{PlanID: fixture.planID, TriggerSource: "manual", CreatedBy: fixture.userID})
+	require.ErrorContains(t, err, "disabled")
+
+	_, err = integrationDB.ExecContext(ctx, `UPDATE evaluation_plans SET enabled = TRUE WHERE id = $1`, fixture.planID)
+	require.NoError(t, err)
+	_, err = integrationDB.ExecContext(ctx, `UPDATE api_keys SET status = 'disabled' WHERE id = $1`, fixture.apiKeyID)
+	require.NoError(t, err)
+	_, err = repo.CreateRunWithMatrix(ctx, service.CreateRunInput{PlanID: fixture.planID, TriggerSource: "manual", CreatedBy: fixture.userID})
+	require.ErrorContains(t, err, "no usable dedicated gateway API key")
+}
+
+func TestEvaluationRepository_EnforcesDailyPlanBudgetAcrossRuns(t *testing.T) {
+	ctx := context.Background()
+	fixture := createEvaluationRepositoryFixtureWithCases(t, []evaluationCaseFixtureSpec{{
+		capability: "coding", priority: "P1", sampleCount: 1, estimatedCost: decimal.RequireFromString("1"),
+	}}, []map[string]any{{"route": "route-a"}}, decimal.RequireFromString("100"))
+	repo := NewEvaluationRepository(integrationDB)
+	_, err := integrationDB.ExecContext(ctx, `UPDATE evaluation_plans SET daily_cost_limit = 3 WHERE id = $1`, fixture.planID)
+	require.NoError(t, err)
+
+	_, err = repo.CreateRunWithMatrix(ctx, service.CreateRunInput{PlanID: fixture.planID, TriggerSource: "manual", CreatedBy: fixture.userID})
+	require.NoError(t, err)
+	_, err = repo.CreateRunWithMatrix(ctx, service.CreateRunInput{PlanID: fixture.planID, TriggerSource: "manual", CreatedBy: fixture.userID})
+	require.ErrorIs(t, err, service.ErrBudgetExceeded)
+}
+
+func TestEvaluationRepository_EnforcesPlanMaxConcurrencyAcrossWorkers(t *testing.T) {
+	ctx := context.Background()
+	fixture := createEvaluationRepositoryFixtureWithCases(t, []evaluationCaseFixtureSpec{{
+		capability: "coding", priority: "P1", sampleCount: 1, estimatedCost: decimal.RequireFromString("0.01"),
+	}}, []map[string]any{{"route": "route-a"}}, decimal.RequireFromString("100"))
+	repo := NewEvaluationRepository(integrationDB)
+	_, err := integrationDB.ExecContext(ctx, `UPDATE evaluation_plans SET max_concurrency = 1 WHERE id = $1`, fixture.planID)
+	require.NoError(t, err)
+	_, err = repo.CreateRunWithMatrix(ctx, service.CreateRunInput{PlanID: fixture.planID, TriggerSource: "manual", CreatedBy: fixture.userID})
+	require.NoError(t, err)
+
+	first, err := repo.ClaimAssignment(ctx, fixture.workerIDs[0], []string{"coding"}, time.Minute)
+	require.NoError(t, err)
+	require.NotNil(t, first)
+	second, err := repo.ClaimAssignment(ctx, fixture.workerIDs[1], []string{"coding"}, time.Minute)
+	require.NoError(t, err)
+	require.Nil(t, second)
 }
 
 func TestEvaluationRepository_FreezesLosslessNumericModelConfiguration(t *testing.T) {
@@ -482,6 +573,8 @@ type evaluationRepositoryFixture struct {
 	userID    int64
 	datasetID uuid.UUID
 	planID    uuid.UUID
+	apiKeyID  int64
+	apiKey    string
 	workerIDs []uuid.UUID
 }
 
@@ -519,6 +612,12 @@ func createEvaluationRepositoryFixtureWithCases(
 	user := mustCreateUser(t, integrationEntClient, &service.User{Email: "evaluation-repository-" + uuid.NewString() + "@example.com"})
 	datasetID := uuid.New()
 	planID := uuid.New()
+	apiKey := "sk-radar-" + uuid.NewString()
+	var apiKeyID int64
+	require.NoError(t, integrationDB.QueryRowContext(ctx, `
+		INSERT INTO api_keys (user_id, key, name, status, is_evaluation)
+		VALUES ($1, $2, $3, 'active', TRUE)
+		RETURNING id`, user.ID, apiKey, "evaluation-key-"+uuid.NewString()).Scan(&apiKeyID))
 
 	_, err := integrationDB.ExecContext(ctx, `
 		INSERT INTO evaluation_dataset_versions (
@@ -534,7 +633,8 @@ func createEvaluationRepositoryFixtureWithCases(
 				content_sha256, confidentiality, estimated_cost
 			) VALUES (
 					$1, $2, $3, $4, $5, 1, $6,
-					'{}'::jsonb, '{}'::jsonb, '{}'::jsonb, 'grader', 'v1',
+					'{"input":"ping"}'::jsonb, '{"output":"pong"}'::jsonb,
+					'{"url":"/v1/responses"}'::jsonb, 'grader', 'v1',
 					$7, 'synthetic', $8
 				)`, uuid.New(), datasetID, fmt.Sprintf("case-%d", i), evaluationCase.capability,
 			evaluationCase.priority, evaluationCase.sampleCount, fmt.Sprintf("%064d", i+10), evaluationCase.estimatedCost)
@@ -543,14 +643,33 @@ func createEvaluationRepositoryFixtureWithCases(
 	_, err = integrationDB.ExecContext(ctx, `
 		UPDATE evaluation_dataset_versions SET status = 'published', published_at = NOW() WHERE id = $1`, datasetID)
 	require.NoError(t, err)
-	matrixJSON, err := json.Marshal(matrix)
+	pairedMatrix := make([]map[string]any, 0, len(matrix))
+	for _, entry := range matrix {
+		if _, paired := entry["baseline"]; paired {
+			pairedMatrix = append(pairedMatrix, entry)
+			continue
+		}
+		label, _ := entry["route"].(string)
+		baseline := make(map[string]any, len(entry))
+		candidate := make(map[string]any, len(entry))
+		for key, value := range entry {
+			baseline[key] = value
+			candidate[key] = value
+		}
+		baseline["route"] = label + "-baseline"
+		candidate["route"] = label + "-candidate"
+		pairedMatrix = append(pairedMatrix, map[string]any{
+			"route": label, "baseline": baseline, "candidate": candidate,
+		})
+	}
+	matrixJSON, err := json.Marshal(pairedMatrix)
 	require.NoError(t, err)
 	_, err = integrationDB.ExecContext(ctx, `
 		INSERT INTO evaluation_plans (
-			id, name, dataset_version_id, trigger_type, model_matrix,
+			id, name, dataset_version_id, gateway_api_key_id, trigger_type, model_matrix,
 			max_run_cost, daily_cost_limit, max_concurrency, created_by
-		) VALUES ($1, $2, $3, 'manual', $4::jsonb, $5, $6, 10, $7)`,
-		planID, "evaluation-plan-"+uuid.NewString(), datasetID, matrixJSON,
+		) VALUES ($1, $2, $3, $4, 'manual', $5::jsonb, $6, $7, 10, $8)`,
+		planID, "evaluation-plan-"+uuid.NewString(), datasetID, apiKeyID, matrixJSON,
 		budgetLimit, budgetLimit, user.ID)
 	require.NoError(t, err)
 
@@ -565,7 +684,8 @@ func createEvaluationRepositoryFixtureWithCases(
 		require.NoError(t, err)
 	}
 	fixture := evaluationRepositoryFixture{
-		userID: user.ID, datasetID: datasetID, planID: planID, workerIDs: workers,
+		userID: user.ID, datasetID: datasetID, planID: planID,
+		apiKeyID: apiKeyID, apiKey: apiKey, workerIDs: workers,
 	}
 	t.Cleanup(func() {
 		cleanupEvaluationRepositoryFixture(t, fixture)
@@ -601,6 +721,8 @@ func cleanupEvaluationRepositoryFixture(t *testing.T, fixture evaluationReposito
 	_, err = tx.ExecContext(ctx, `DELETE FROM evaluation_cases WHERE dataset_version_id = $1`, fixture.datasetID)
 	require.NoError(t, err)
 	_, err = tx.ExecContext(ctx, `DELETE FROM evaluation_dataset_versions WHERE id = $1`, fixture.datasetID)
+	require.NoError(t, err)
+	_, err = tx.ExecContext(ctx, `DELETE FROM api_keys WHERE id = $1`, fixture.apiKeyID)
 	require.NoError(t, err)
 	for _, workerID := range fixture.workerIDs {
 		_, err = tx.ExecContext(ctx, `DELETE FROM evaluation_workers WHERE id = $1`, workerID)
