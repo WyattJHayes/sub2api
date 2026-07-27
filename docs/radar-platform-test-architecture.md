@@ -4,7 +4,7 @@
 
 本文是 Sub2API Model Quality Radar 的总设计，覆盖推理网关、精调训练、自动化评测、企业控制台、Worker 控制面和生产运维。它定义测试对象、证据链、统计判定、发布门禁和故障演练方式。
 
-已有的配置细节见 [model-quality-radar-configuration.md](model-quality-radar-configuration.md)，生产部署与恢复步骤见 [radar-production-runbook.md](radar-production-runbook.md)。
+已有的配置细节见 [model-quality-radar-configuration.md](model-quality-radar-configuration.md)，生产部署与恢复步骤见 [radar-production-runbook.md](radar-production-runbook.md)。可信执行核心的可执行合同见 [Radar 可信执行核心 G1 合同设计](superpowers/specs/2026-07-27-radar-trusted-execution-contracts-design.md)，本总设计与该补丁冲突时以补丁为准。
 
 目标有四个：
 
@@ -97,16 +97,24 @@ analysis_version
 ```mermaid
 stateDiagram-v2
     [*] --> pending
-    pending --> running
+    [*] --> budget_paused: exact_p0_drain
+    pending --> running: first claim
+    pending --> paused
+    pending --> failed
+    pending --> cancelled
+    budget_paused --> running: all P0 completed
+    budget_paused --> paused
+    budget_paused --> failed
+    budget_paused --> cancelled
     running --> paused
-    running --> budget_paused
     running --> completed
     running --> failed
     running --> cancelled
+    paused --> pending
+    paused --> budget_paused
     paused --> running
-    budget_paused --> running
+    paused --> failed
     paused --> cancelled
-    running --> [*]
     completed --> [*]
     failed --> [*]
     cancelled --> [*]
@@ -184,7 +192,7 @@ Delta = sum(weight_i * d_i) / sum(weight_i)
 
 ### 6.4 退化判定
 
-Gate 使用六个持久化状态：`insufficient_evidence`、`recorded`、`blocked`、`review_required`、`passed` 和 `waived`。一次评估只能命中一个状态，按下列优先级从上到下短路：
+Gate Decision 使用五个持久化状态：`insufficient_evidence`、`recorded`、`blocked`、`review_required` 和 `passed`。`waived` 是由有效 Waiver 产生的查询投影。一次评估只能命中一个持久化状态，按下列优先级从上到下短路：
 
 | 优先级 | 条件 | 状态 | 发布效果 |
 | --- | --- | --- | --- |
@@ -197,7 +205,7 @@ Gate 使用六个持久化状态：`insufficient_evidence`、`recorded`、`block
 | 7 | Judge 分歧、点估计下降但证据未达到阻断条件，或趋势检测触发 | `review_required` | 进入人工复核或追加样本 |
 | 8 | 以上条件均未命中 | `passed` | 允许进入下一发布阶段 |
 
-`waived` 只能由一个已有的 `blocked` 或 `review_required` 决策经独立豁免流程产生。豁免保存业务理由、风险负责人、缓解措施、复测计划和过期时间，不覆盖原始决策。
+`waived` 投影只能由一个已有的 `blocked` 或 `review_required` 决策经独立豁免流程产生。豁免保存业务理由、风险负责人、缓解措施、复测计划和过期时间，不覆盖原始决策。
 
 14 天 record-only 仅适用于统计质量阈值。P0 协议与安全失败、路由错配、可靠性 SLO 越界和证据缺失在观察期内仍按上表处置。观察期结束需要 `quality_admin` 与 `release_manager` 两个不同主体确认样本覆盖、误报复盘、告警路由和回滚演练证据，随后创建新版本 Gate Policy 并进入 enforcement。
 
