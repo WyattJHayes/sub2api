@@ -1,6 +1,6 @@
 # Radar 可信执行核心 G1 合同设计
 
-- 状态：设计补丁，等待用户书面复核
+- 状态：用户已于 2026-07-28 书面确认，进入实施计划阶段
 - 日期：2026-07-27
 - 继承规格：[sub2api 模型质量雷达设计规格](2026-07-25-sub2api-model-quality-radar-design.md)
 - 适用阶段：G1 合同就绪、G2 staging 证明、G3 record-only
