@@ -9,6 +9,7 @@ import pytest
 from pydantic import SecretStr
 
 from sub2api_radar.config import Settings
+from sub2api_radar.control_plane import LeaseFencedError
 from sub2api_radar.grader import GraderWorker
 from sub2api_radar.models import (
     AnalysisLease,
@@ -127,6 +128,12 @@ class RunnerClientStub:
 
     async def heartbeat(self, assignment_id, token, lease_epoch=0):
         return ""
+
+
+class FencedRunnerClientStub(RunnerClientStub):
+    async def submit_evidence(self, assignment_id, token, item, lease_epoch=0):
+        self.evidence_submissions.append((assignment_id, token, item, lease_epoch))
+        raise LeaseFencedError(409, "lease fenced")
 
 
 class RunnerExecutorStub:
@@ -259,6 +266,81 @@ async def test_runner_recovery_forwards_persisted_lease_epoch(tmp_path) -> None:
     await worker.recover_pending(asyncio.Event())
 
     assert client.evidence_submissions[0][3] == 7
+
+
+@pytest.mark.asyncio
+async def test_runner_recovery_quarantines_fenced_evidence_without_retry(tmp_path) -> None:
+    assignment_id = uuid4()
+    sample_id = uuid4()
+    item = evidence(sample_id, assignment_id)
+    store = AtomicStateStore(tmp_path)
+    store.save(
+        StateRecord(
+            assignment_id,
+            LocalState.EVIDENCE_READY,
+            "idem",
+            item.model_dump(mode="json"),
+            "lease-token-123456",
+            7,
+        )
+    )
+    client = FencedRunnerClientStub()
+    worker = Runner(
+        settings("runner").model_copy(update={"state_dir": str(tmp_path)}),
+        client,
+        RunnerExecutorStub(item),
+        capabilities=["reasoning"],
+        state_store=store,
+    )
+
+    await worker.recover_pending(asyncio.Event())
+    await worker.recover_pending(asyncio.Event())
+
+    record = store.load(assignment_id)
+    assert record is not None
+    assert record.state is LocalState.TERMINAL
+    assert record.evidence == item.model_dump(mode="json")
+    assert len(client.evidence_submissions) == 1
+
+
+@pytest.mark.asyncio
+async def test_runner_execution_quarantines_fenced_evidence_without_recovery_retry(
+    tmp_path,
+) -> None:
+    assignment_id = uuid4()
+    sample_id = uuid4()
+    item = evidence(sample_id, assignment_id)
+    lease = AssignmentLease(
+        id=assignment_id,
+        sample_id=sample_id,
+        run_id=uuid4(),
+        case=case(),
+        model_route="route-a",
+        attempt=1,
+        lease_token="lease-token-123456",
+        lease_expires_at=datetime.now(UTC) + timedelta(minutes=1),
+        lease_epoch=7,
+        gateway_evaluation_token="gateway-token",
+        route_trace_id="trace",
+    )
+    store = AtomicStateStore(tmp_path)
+    client = FencedRunnerClientStub()
+    worker = Runner(
+        settings("runner").model_copy(update={"state_dir": str(tmp_path)}),
+        client,
+        RunnerExecutorStub(item),
+        capabilities=["reasoning"],
+        state_store=store,
+    )
+
+    await worker.execute_lease(lease)
+    await worker.recover_pending(asyncio.Event())
+
+    record = store.load(assignment_id)
+    assert record is not None
+    assert record.state is LocalState.TERMINAL
+    assert record.evidence == item.model_dump(mode="json")
+    assert len(client.evidence_submissions) == 1
 
 
 def test_runner_executor_mode_fails_fast_without_executor(monkeypatch) -> None:

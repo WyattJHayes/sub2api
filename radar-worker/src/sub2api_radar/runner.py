@@ -95,6 +95,16 @@ class Runner:
                 )
                 self.state_store.delete(record.assignment_id)
             except LeaseFencedError:
+                self.state_store.save(
+                    StateRecord(
+                        record.assignment_id,
+                        LocalState.TERMINAL,
+                        record.idempotency_key,
+                        record.evidence,
+                        record.lease_token,
+                        record.lease_epoch,
+                    )
+                )
                 log.warning("recovery lease %s was fenced", record.assignment_id)
             except Exception:
                 log.exception("failed to recover evidence for %s", record.assignment_id)
@@ -156,6 +166,16 @@ class Runner:
         except LeaseFencedError:
             execution_task.cancel()
             await asyncio.gather(execution_task, return_exceptions=True)
+            self.state_store.save(
+                StateRecord(
+                    lease.id,
+                    LocalState.TERMINAL,
+                    key,
+                    evidence.model_dump(mode="json"),
+                    lease.lease_token,
+                    lease.lease_epoch,
+                )
+            )
             log.warning("lease %s was fenced; local evidence retained", lease.id)
         except HeartbeatLost:
             execution_task.cancel()
