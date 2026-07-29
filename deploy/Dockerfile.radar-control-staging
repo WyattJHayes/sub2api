@@ -1,6 +1,53 @@
-FROM sub2api-custom:0.1.151-disable-image-generation.1
+ARG NODE_IMAGE=node:24-alpine
+ARG GOLANG_IMAGE=golang:1.26.5-alpine
+ARG RUNTIME_IMAGE=sub2api-custom:0.1.151-disable-image-generation.1
+ARG GOPROXY=https://goproxy.cn,direct
+ARG GOSUMDB=sum.golang.google.cn
 
-COPY radar-control-plane /app/sub2api
+FROM ${NODE_IMAGE} AS frontend-builder
+
+WORKDIR /app/frontend
+ENV NODE_OPTIONS=--max-old-space-size=1536
+
+RUN corepack enable && corepack prepare pnpm@11.5.2 --activate
+
+COPY frontend/package.json frontend/pnpm-lock.yaml frontend/pnpm-workspace.yaml ./
+RUN pnpm install --frozen-lockfile
+
+COPY frontend/ ./
+COPY docs/legal/ /app/docs/legal/
+RUN pnpm run build
+
+FROM ${GOLANG_IMAGE} AS backend-builder
+
+ARG VERSION
+ARG COMMIT
+ARG DATE
+ARG GOPROXY
+ARG GOSUMDB
+
+ENV GOPROXY=${GOPROXY}
+ENV GOSUMDB=${GOSUMDB}
+
+RUN apk add --no-cache git ca-certificates tzdata
+
+WORKDIR /app/backend
+COPY backend/go.mod backend/go.sum ./
+RUN go mod download
+
+COPY backend/ ./
+COPY --from=frontend-builder /app/backend/internal/web/dist ./internal/web/dist
+
+RUN CGO_ENABLED=0 GOOS=linux go build \
+    -tags embed \
+    -trimpath \
+    -ldflags="-s -w -X main.Version=${VERSION} -X main.Commit=${COMMIT} -X main.Date=${DATE} -X main.BuildType=release" \
+    -o /app/sub2api \
+    ./cmd/server
+
+FROM ${RUNTIME_IMAGE}
+
+COPY --from=backend-builder /app/sub2api /app/sub2api
 
 USER root
 RUN chown sub2api:sub2api /app/sub2api && chmod 0755 /app/sub2api

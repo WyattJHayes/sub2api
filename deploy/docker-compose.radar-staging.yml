@@ -5,6 +5,10 @@ services:
     build:
       context: ..
       dockerfile: deploy/Dockerfile.radar-control-staging
+      args:
+        VERSION: ${RADAR_RELEASE_VERSION:?RADAR_RELEASE_VERSION is required}
+        COMMIT: ${RADAR_RELEASE_COMMIT:?RADAR_RELEASE_COMMIT is required}
+        DATE: ${RADAR_RELEASE_DATE:?RADAR_RELEASE_DATE is required}
     image: sub2api/radar-control-plane:staging
     restart: unless-stopped
     ports:
