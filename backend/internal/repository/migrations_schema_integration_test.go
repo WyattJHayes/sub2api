@@ -191,6 +191,46 @@ func TestMigrationsRunner_IsIdempotent_AndSchemaIsUpToDate(t *testing.T) {
 	requireColumn(t, tx, "user_allowed_groups", "created_at", "timestamp with time zone", 0, false)
 }
 
+func TestMigration197TrustedLifecycleSchema(t *testing.T) {
+	tx := testTx(t)
+
+	for _, table := range []string{
+		"evaluation_request_manifests",
+		"evaluation_pair_specs",
+		"evaluation_side_specs",
+		"evaluation_pair_bindings",
+		"evaluation_schema_cutovers",
+		"evaluation_writer_sessions",
+		"evaluation_worker_events",
+	} {
+		requireTable(t, tx, table)
+	}
+
+	requireColumn(t, tx, "evaluation_runs", "budget_mode", "character varying", 20, false)
+	requireColumn(t, tx, "evaluation_runs", "control_epoch", "bigint", 0, false)
+	requireColumn(t, tx, "evaluation_runs", "state_version", "bigint", 0, false)
+	requireColumn(t, tx, "evaluation_runs", "route_profile_version", "character varying", 100, false)
+	for _, table := range []string{
+		"evaluation_assignments",
+		"evaluation_grading_jobs",
+		"evaluation_analysis_jobs",
+	} {
+		requireColumn(t, tx, table, "lease_epoch", "bigint", 0, false)
+		requireColumn(t, tx, table, "worker_image_digest", "character varying", 200, false)
+		requireColumn(t, tx, table, "work_origin", "character varying", 20, false)
+	}
+	requireColumn(t, tx, "evaluation_score_heads", "score_created_at", "timestamp with time zone", 0, false)
+	requireColumn(t, tx, "evaluation_run_events", "transition_version", "bigint", 0, true)
+	requireColumn(t, tx, "evaluation_run_events", "from_status", "character varying", 24, true)
+	requireColumn(t, tx, "evaluation_run_events", "to_status", "character varying", 24, true)
+	requireColumn(t, tx, "evaluation_run_events", "control_epoch", "bigint", 0, false)
+	requireColumn(t, tx, "evaluation_run_events", "idempotency_key", "character", 64, true)
+	requireIndex(t, tx, "evaluation_request_manifests", "evaluation_request_manifests_manifest_sha256_key")
+	requireIndex(t, tx, "evaluation_pair_specs", "evaluation_pair_specs_run_case_sample_repeat_key")
+	requireIndex(t, tx, "evaluation_side_specs", "evaluation_side_specs_pair_side_key")
+	requireIndex(t, tx, "evaluation_pair_bindings", "evaluation_pair_bindings_pair_spec_key")
+}
+
 func TestRadarControlPlaneConstraints(t *testing.T) {
 	t.Run("published dataset content cannot be updated", func(t *testing.T) {
 		tx := testTx(t)
