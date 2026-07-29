@@ -4,6 +4,7 @@
 - 日期：2026-07-29
 - 目标平台：`sub2api`
 - 依赖：G1 可信执行合同、全平台模型质量雷达设计总包
+- 实施计划：[Agent、插件与 Coding Plan 评测实施计划](../plans/2026-07-29-radar-agent-plugin-evaluation.md)
 
 ## 1. 设计目标
 
@@ -252,7 +253,9 @@ Gate 求值顺序：
 5. 注入 Worker 崩溃，确认 lease 回收、Tool Evidence 不重复和账本可对账。
 6. 对通过的任务运行代码测试和 Gate，保存可复算的 manifest、Evidence、Score 和 Decision。
 
-## 15. 默认决策
+## 15. 已接受的实施基线
+
+以下决策于 2026-07-29 获得项目方接受。任何调整都需要表中角色批准并创建新的工具、任务或 Policy 版本。
 
 | 项目 | 默认值 | 变更要求 |
 | --- | --- | --- |

@@ -440,11 +440,11 @@ release_subject_hash + decision_id + source_watermark + actor_id + expires_at
 | 训练接入 | 训练平台、质量 | Release Subject、Run API | 训练产物回归 |
 | Agent/插件 | 应用平台、安全 | Request Semantics、Tool Evidence | P0 越权验收 |
 
-## 13. 未决项与默认决策
+## 13. 已接受的实施基线
 
-以下事项在实现前必须由对应负责人确认，未确认时使用默认值：
+以下决策于 2026-07-29 获得项目方接受，作为实施计划和验收的当前基线。后续变更必须由对应角色批准并创建新版本 Policy 或规格修订记录。
 
-| 项目 | 默认决策 | 需要确认的角色 |
+| 项目 | 已接受决策 | 后续变更批准角色 |
 | --- | --- | --- |
 | 观察期长度 | 14 个完整日 | Quality Admin、SRE |
 | 能力域最低样本量 | 按 domain policy 配置，P0 单独计数 | Quality Admin |
@@ -469,6 +469,6 @@ release_subject_hash + decision_id + source_watermark + actor_id + expires_at
 
 | 工作包 | 配套规格 | 主要出口 |
 | --- | --- | --- |
-| 性能、可靠性、混沌与容灾 | [独立规格](2026-07-29-radar-performance-reliability-design.md) | Load Plan、Reliability Snapshot、Fault Experiment、RPO/RTO 报告 |
-| 精调训练集成 | [独立规格](2026-07-29-radar-finetune-integration-design.md) | Dataset、Training、Checkpoint、Model Artifact、自动 Radar Run |
-| Agent、插件与 Coding Plan | [独立规格](2026-07-29-radar-agent-plugin-evaluation-design.md) | Tool Manifest、Sandbox Attestation、Tool Evidence、可执行评分 |
+| 性能、可靠性、混沌与容灾 | [规格](2026-07-29-radar-performance-reliability-design.md)、[计划](../plans/2026-07-29-radar-performance-reliability.md) | Load Plan、Reliability Snapshot、Fault Experiment、RPO/RTO 报告 |
+| 精调训练集成 | [规格](2026-07-29-radar-finetune-integration-design.md)、[计划](../plans/2026-07-29-radar-finetune-integration.md) | Dataset、Training、Checkpoint、Model Artifact、自动 Radar Run |
+| Agent、插件与 Coding Plan | [规格](2026-07-29-radar-agent-plugin-evaluation-design.md)、[计划](../plans/2026-07-29-radar-agent-plugin-evaluation.md) | Tool Manifest、Sandbox Attestation、Tool Evidence、可执行评分 |
