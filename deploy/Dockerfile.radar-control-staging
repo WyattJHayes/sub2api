@@ -25,9 +25,6 @@ RUN pnpm run build
 
 FROM ${GOLANG_IMAGE} AS backend-builder
 
-ARG VERSION
-ARG COMMIT
-ARG DATE
 ARG GOPROXY
 ARG GOSUMDB
 
@@ -38,12 +35,27 @@ RUN apk add --no-cache git ca-certificates tzdata
 
 WORKDIR /app/backend
 COPY backend/go.mod backend/go.sum ./
-RUN go mod download
+RUN --mount=type=cache,id=sub2api-radar-gomod,target=/go/pkg/mod \
+    set -eu; \
+    attempt=1; \
+    until go mod download; do \
+      if [ "$attempt" -ge 4 ]; then \
+        exit 1; \
+      fi; \
+      sleep $((attempt * 2)); \
+      attempt=$((attempt + 1)); \
+    done
 
 COPY backend/ ./
 COPY --from=frontend-builder /app/backend/internal/web/dist ./internal/web/dist
 
-RUN CGO_ENABLED=0 GOOS=linux go build \
+ARG VERSION
+ARG COMMIT
+ARG DATE
+
+RUN --mount=type=cache,id=sub2api-radar-gomod,target=/go/pkg/mod \
+    --mount=type=cache,id=sub2api-radar-gobuild,target=/root/.cache/go-build \
+    CGO_ENABLED=0 GOOS=linux go build \
     -tags embed \
     -trimpath \
     -ldflags="-s -w -X main.Version=${VERSION} -X main.Commit=${COMMIT} -X main.Date=${DATE} -X main.BuildType=release" \
