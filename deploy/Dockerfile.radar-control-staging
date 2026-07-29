@@ -1,3 +1,5 @@
+# syntax=docker/dockerfile:1.7
+
 ARG NODE_IMAGE=node:24-alpine
 ARG GOLANG_IMAGE=golang:1.26.5-alpine
 ARG ALPINE_IMAGE=alpine:3.20
@@ -12,7 +14,10 @@ ENV NODE_OPTIONS=--max-old-space-size=1536
 RUN corepack enable && corepack prepare pnpm@11.5.2 --activate
 
 COPY frontend/package.json frontend/pnpm-lock.yaml frontend/pnpm-workspace.yaml ./
-RUN pnpm install --frozen-lockfile
+RUN --mount=type=cache,id=sub2api-radar-pnpm-v11,target=/root/.local/share/pnpm/store \
+    pnpm install --frozen-lockfile --prefer-offline \
+      --fetch-retries=4 \
+      --fetch-timeout=120000
 
 COPY frontend/ ./
 COPY docs/legal/ /app/docs/legal/

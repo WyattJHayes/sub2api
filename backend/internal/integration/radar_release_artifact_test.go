@@ -16,11 +16,15 @@ func TestRadarStagingDockerfileBuildsReleaseArtifactFromSource(t *testing.T) {
 	dockerfile := string(contents)
 
 	required := []string{
+		"# syntax=docker/dockerfile:1.7",
 		"ARG ALPINE_IMAGE=alpine:3.20",
 		"AS frontend-builder",
 		"corepack prepare pnpm@11.5.2 --activate",
 		"COPY frontend/package.json frontend/pnpm-lock.yaml frontend/pnpm-workspace.yaml ./",
-		"pnpm install --frozen-lockfile",
+		"--mount=type=cache,id=sub2api-radar-pnpm-v11,target=/root/.local/share/pnpm/store",
+		"pnpm install --frozen-lockfile --prefer-offline",
+		"--fetch-retries=4",
+		"--fetch-timeout=120000",
 		"AS backend-builder",
 		"COPY --from=frontend-builder /app/backend/internal/web/dist ./internal/web/dist",
 		"go build",
