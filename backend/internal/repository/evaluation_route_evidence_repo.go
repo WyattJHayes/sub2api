@@ -18,6 +18,15 @@ func NewEvaluationRouteEvidenceRepository(db *sql.DB) service.EvaluationEvidence
 }
 
 func (r *evaluationRouteEvidenceRepository) UpsertTransport(ctx context.Context, evidence service.RouteEvidence) error {
+	if db, ok := r.sql.(*sql.DB); ok {
+		return WithEvaluationWriterTx(ctx, db, defaultEvaluationWriterIdentity("gateway"), func(tx *sql.Tx) error {
+			return (&evaluationRouteEvidenceRepository{sql: tx}).upsertTransport(ctx, evidence)
+		})
+	}
+	return r.upsertTransport(ctx, evidence)
+}
+
+func (r *evaluationRouteEvidenceRepository) upsertTransport(ctx context.Context, evidence service.RouteEvidence) error {
 	fallbackEntries := evidence.FallbackChain
 	if fallbackEntries == nil {
 		fallbackEntries = []service.RouteFallbackEntry{}
@@ -84,6 +93,15 @@ func (r *evaluationRouteEvidenceRepository) UpsertTransport(ctx context.Context,
 }
 
 func (r *evaluationRouteEvidenceRepository) AttachBilling(ctx context.Context, traceID string, usage service.RouteUsageEvidence) error {
+	if db, ok := r.sql.(*sql.DB); ok {
+		return WithEvaluationWriterTx(ctx, db, defaultEvaluationWriterIdentity("gateway"), func(tx *sql.Tx) error {
+			return (&evaluationRouteEvidenceRepository{sql: tx}).attachBilling(ctx, traceID, usage)
+		})
+	}
+	return r.attachBilling(ctx, traceID, usage)
+}
+
+func (r *evaluationRouteEvidenceRepository) attachBilling(ctx context.Context, traceID string, usage service.RouteUsageEvidence) error {
 	evaluation, ok := service.EvaluationContextFromContext(ctx)
 	if !ok {
 		return fmt.Errorf("attach route billing evidence: evaluation context missing")

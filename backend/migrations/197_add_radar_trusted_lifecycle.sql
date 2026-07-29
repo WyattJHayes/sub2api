@@ -238,6 +238,106 @@ CREATE TABLE IF NOT EXISTS evaluation_writer_sessions (
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
+CREATE TABLE IF NOT EXISTS evaluation_writer_audit_events (
+    id UUID PRIMARY KEY DEFAULT (md5(random()::text || clock_timestamp()::text)::uuid),
+    instance_id VARCHAR(200),
+    writer_kind VARCHAR(32),
+    protocol_version BIGINT,
+    event_type VARCHAR(80) NOT NULL,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_evaluation_writer_audit_events_created
+    ON evaluation_writer_audit_events (created_at DESC);
+
+-- Every protected Radar write must carry transaction-local writer identity.
+-- The default migration state is audit/open so existing deployments can be
+-- observed before protocol enforcement is enabled by the cutover procedure.
+CREATE OR REPLACE FUNCTION assert_evaluation_writer_protocol()
+RETURNS TRIGGER AS $$
+DECLARE
+    protocol_text TEXT := current_setting('app.evaluation_writer_protocol', true);
+    instance_text TEXT := current_setting('app.evaluation_writer_instance_id', true);
+    writer_protocol_version BIGINT;
+    write_mode_value VARCHAR(20);
+    guard_mode_value VARCHAR(20);
+    minimum_version BIGINT;
+    session_exists BOOLEAN;
+    session_kind VARCHAR(32);
+BEGIN
+    SELECT write_mode, guard_mode, minimum_protocol_version
+    INTO write_mode_value, guard_mode_value, minimum_version
+    FROM evaluation_schema_cutovers
+    WHERE id = 1;
+
+    IF protocol_text ~ '^[0-9]+$' THEN
+        writer_protocol_version := protocol_text::BIGINT;
+    ELSE
+        writer_protocol_version := -1;
+    END IF;
+
+    SELECT EXISTS (
+        SELECT 1 FROM evaluation_writer_sessions
+        WHERE instance_id = NULLIF(instance_text, '')
+          AND evaluation_writer_sessions.protocol_version = writer_protocol_version
+          AND heartbeat_expires_at > NOW()
+    ), MAX(writer_kind) FILTER (WHERE instance_id = NULLIF(instance_text, '')
+        AND evaluation_writer_sessions.protocol_version = writer_protocol_version
+        AND heartbeat_expires_at > NOW())
+    INTO session_exists, session_kind
+    FROM evaluation_writer_sessions;
+
+    IF write_mode_value IN ('draining', 'closed') AND current_user <> 'migration_owner' THEN
+        RAISE EXCEPTION USING ERRCODE = 'P0001', MESSAGE = 'radar_cutover_active: write mode ' || write_mode_value;
+    END IF;
+    IF guard_mode_value = 'enforce' AND (writer_protocol_version < minimum_version OR NOT session_exists)
+       AND current_user <> 'migration_owner' THEN
+        RAISE EXCEPTION USING ERRCODE = 'P0001', MESSAGE = 'radar_cutover_active: writer protocol rejected';
+    END IF;
+    IF guard_mode_value = 'audit' AND (writer_protocol_version < minimum_version OR NOT session_exists) THEN
+        INSERT INTO evaluation_writer_audit_events (instance_id, writer_kind, protocol_version, event_type)
+        SELECT NULLIF(instance_text, ''), session_kind,
+               CASE WHEN protocol_text ~ '^[0-9]+$' THEN writer_protocol_version ELSE NULL END,
+               CASE WHEN session_exists THEN 'old_protocol' ELSE 'missing_session' END
+        WHERE protocol_text IS NULL OR protocol_text !~ '^[0-9]+$' OR writer_protocol_version < minimum_version OR NOT session_exists;
+    END IF;
+
+    IF TG_OP = 'DELETE' THEN
+        RETURN OLD;
+    END IF;
+    RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+DO $$
+DECLARE
+    table_name TEXT;
+BEGIN
+    FOREACH table_name IN ARRAY ARRAY[
+        'evaluation_dataset_versions', 'evaluation_cases', 'evaluation_plans',
+        'evaluation_runs', 'evaluation_workers', 'evaluation_samples',
+        'evaluation_assignments', 'evaluation_artifacts', 'evaluation_run_events',
+        'evaluation_budget_ledger', 'evaluation_route_evidence',
+        'evaluation_grading_jobs', 'evaluation_scores', 'evaluation_score_heads',
+        'evaluation_analysis_jobs', 'evaluation_aggregate_snapshots',
+        'evaluation_request_manifests', 'evaluation_pair_specs',
+        'evaluation_side_specs', 'evaluation_pair_bindings',
+        'evaluation_manual_reviews', 'evaluation_role_bindings',
+        'evaluation_baselines', 'evaluation_baseline_approvals',
+        'evaluation_gate_policies', 'evaluation_gate_decisions',
+        'evaluation_gate_waivers', 'evaluation_alerts', 'evaluation_alert_events',
+        'evaluation_attributions', 'evaluation_key_events'
+    ] LOOP
+        IF to_regclass(table_name) IS NOT NULL THEN
+            EXECUTE format('DROP TRIGGER IF EXISTS trg_%s_writer_protocol ON %I', table_name, table_name);
+            EXECUTE format(
+                'CREATE TRIGGER trg_%s_writer_protocol BEFORE INSERT OR UPDATE OR DELETE ON %I FOR EACH ROW EXECUTE FUNCTION assert_evaluation_writer_protocol()',
+                table_name, table_name
+            );
+        END IF;
+    END LOOP;
+END $$;
+
 CREATE TABLE IF NOT EXISTS evaluation_worker_events (
     id UUID PRIMARY KEY,
     worker_id UUID NOT NULL REFERENCES evaluation_workers(id),
@@ -247,6 +347,11 @@ CREATE TABLE IF NOT EXISTS evaluation_worker_events (
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     CONSTRAINT evaluation_worker_events_idempotency_key_key UNIQUE (idempotency_key)
 );
+
+DROP TRIGGER IF EXISTS trg_evaluation_worker_events_writer_protocol ON evaluation_worker_events;
+CREATE TRIGGER trg_evaluation_worker_events_writer_protocol
+    BEFORE INSERT OR UPDATE OR DELETE ON evaluation_worker_events
+    FOR EACH ROW EXECUTE FUNCTION assert_evaluation_writer_protocol();
 
 CREATE INDEX IF NOT EXISTS idx_evaluation_pair_specs_run ON evaluation_pair_specs (run_id, created_at);
 CREATE INDEX IF NOT EXISTS idx_evaluation_side_specs_pair ON evaluation_side_specs (pair_spec_id, side);

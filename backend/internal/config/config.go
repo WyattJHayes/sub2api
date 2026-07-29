@@ -102,12 +102,15 @@ type Config struct {
 }
 
 type RadarConfig struct {
-	Enabled              bool   `mapstructure:"enabled"`
-	SigningSecret        string `mapstructure:"signing_secret"`
-	HashingSecret        string `mapstructure:"hashing_secret"`
-	MaxContextTTLSeconds int    `mapstructure:"max_context_ttl_seconds"`
-	Region               string `mapstructure:"region"`
-	RouteProfileVersion  string `mapstructure:"route_profile_version"`
+	Enabled               bool   `mapstructure:"enabled"`
+	SigningSecret         string `mapstructure:"signing_secret"`
+	HashingSecret         string `mapstructure:"hashing_secret"`
+	MaxContextTTLSeconds  int    `mapstructure:"max_context_ttl_seconds"`
+	Region                string `mapstructure:"region"`
+	RouteProfileVersion   string `mapstructure:"route_profile_version"`
+	WriterInstanceID      string `mapstructure:"writer_instance_id"`
+	WriterKind            string `mapstructure:"writer_kind"`
+	WriterProtocolVersion int64  `mapstructure:"writer_protocol_version"`
 }
 
 type LogConfig struct {
@@ -1784,6 +1787,8 @@ func load(allowMissingJWTSecret bool) (*Config, error) {
 	cfg.Radar.HashingSecret = strings.TrimSpace(cfg.Radar.HashingSecret)
 	cfg.Radar.Region = strings.TrimSpace(cfg.Radar.Region)
 	cfg.Radar.RouteProfileVersion = strings.TrimSpace(cfg.Radar.RouteProfileVersion)
+	cfg.Radar.WriterInstanceID = strings.TrimSpace(cfg.Radar.WriterInstanceID)
+	cfg.Radar.WriterKind = strings.TrimSpace(cfg.Radar.WriterKind)
 	if cfg.Gateway.ForcedCodexInstructionsTemplateFile != "" {
 		content, err := os.ReadFile(cfg.Gateway.ForcedCodexInstructionsTemplateFile)
 		if err != nil {
@@ -1862,6 +1867,9 @@ func setDefaults() {
 	viper.SetDefault("radar.max_context_ttl_seconds", 900)
 	viper.SetDefault("radar.region", "")
 	viper.SetDefault("radar.route_profile_version", "")
+	viper.SetDefault("radar.writer_instance_id", "")
+	viper.SetDefault("radar.writer_kind", "control")
+	viper.SetDefault("radar.writer_protocol_version", int64(1))
 
 	// Server
 	viper.SetDefault("server.host", "0.0.0.0")
@@ -2542,6 +2550,9 @@ func (c *Config) Validate() error {
 	}
 	if c.Radar.MaxContextTTLSeconds <= 0 || c.Radar.MaxContextTTLSeconds > 900 {
 		return fmt.Errorf("radar.max_context_ttl_seconds must be between 1 and 900")
+	}
+	if c.Radar.WriterProtocolVersion < 0 {
+		return fmt.Errorf("radar.writer_protocol_version must be non-negative")
 	}
 	if c.Radar.Enabled {
 		if len([]byte(strings.TrimSpace(c.Radar.SigningSecret))) < 32 {

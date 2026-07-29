@@ -109,7 +109,7 @@ func (r *radarGovernanceRepository) EnableEvaluationKey(ctx context.Context, key
 	if keyID <= 0 || actorID <= 0 {
 		return nil, errors.New("evaluation API key and actor are required")
 	}
-	tx, err := r.db.BeginTx(ctx, nil)
+	tx, err := beginEvaluationWriterTx(ctx, r.db, defaultEvaluationWriterIdentity("control"))
 	if err != nil {
 		return nil, fmt.Errorf("begin evaluation API key enablement: %w", err)
 	}
@@ -177,12 +177,14 @@ func (r *radarGovernanceRepository) CreateRoleBinding(ctx context.Context, input
 	id := uuid.New()
 	var out service.RadarRoleBinding
 	var createdBy sql.NullInt64
-	err := r.db.QueryRowContext(ctx, `
+	err := WithEvaluationWriterTx(ctx, r.db, defaultEvaluationWriterIdentity("control"), func(tx *sql.Tx) error {
+		return tx.QueryRowContext(ctx, `
 		INSERT INTO evaluation_role_bindings (id, actor_id, role, scope, created_by)
 		VALUES ($1, $2, $3, $4::jsonb, $5)
 		ON CONFLICT (actor_id, role, md5(scope::text)) WHERE enabled DO UPDATE SET enabled = TRUE
 		RETURNING id, actor_id, role, scope, enabled, created_by, created_at, disabled_at`, id, input.ActorID, input.Role, string(input.Scope), input.CreatedBy).
-		Scan(&out.ID, &out.ActorID, &out.Role, &out.Scope, &out.Enabled, &createdBy, &out.CreatedAt, &out.DisabledAt)
+			Scan(&out.ID, &out.ActorID, &out.Role, &out.Scope, &out.Enabled, &createdBy, &out.CreatedAt, &out.DisabledAt)
+	})
 	if err != nil {
 		return nil, fmt.Errorf("create radar role binding: %w", err)
 	}
@@ -196,7 +198,12 @@ func (r *radarGovernanceRepository) DisableRoleBinding(ctx context.Context, id u
 	if err := r.valid(); err != nil {
 		return err
 	}
-	result, err := r.db.ExecContext(ctx, `UPDATE evaluation_role_bindings SET enabled = FALSE, disabled_at = COALESCE(disabled_at, NOW()) WHERE id = $1 AND enabled = TRUE`, id)
+	var result sql.Result
+	err := WithEvaluationWriterTx(ctx, r.db, defaultEvaluationWriterIdentity("control"), func(tx *sql.Tx) error {
+		var err error
+		result, err = tx.ExecContext(ctx, `UPDATE evaluation_role_bindings SET enabled = FALSE, disabled_at = COALESCE(disabled_at, NOW()) WHERE id = $1 AND enabled = TRUE`, id)
+		return err
+	})
 	if err != nil {
 		return fmt.Errorf("disable radar role binding: %w", err)
 	}
@@ -247,7 +254,9 @@ func (r *radarGovernanceRepository) ProposeBaseline(ctx context.Context, input s
 	}
 	id := uuid.New()
 	var b service.RadarBaseline
-	err := r.db.QueryRowContext(ctx, `INSERT INTO evaluation_baselines (id, model_route, run_id, dataset_manifest_sha256, evidence_hash, route_profile_version, policy_version, proposed_by) VALUES ($1,$2,$3,$4,$5,$6,$7,$8) RETURNING id,model_route,run_id,dataset_manifest_sha256,evidence_hash,route_profile_version,policy_version,status,proposed_by,proposed_at,activated_at,retired_at`, id, input.ModelRoute, input.RunID, input.DatasetManifestSHA256, input.EvidenceHash, input.RouteProfileVersion, input.PolicyVersion, input.ProposedBy).Scan(&b.ID, &b.ModelRoute, &b.RunID, &b.DatasetManifestSHA256, &b.EvidenceHash, &b.RouteProfileVersion, &b.PolicyVersion, &b.Status, &b.ProposedBy, &b.ProposedAt, &b.ActivatedAt, &b.RetiredAt)
+	err := WithEvaluationWriterTx(ctx, r.db, defaultEvaluationWriterIdentity("control"), func(tx *sql.Tx) error {
+		return tx.QueryRowContext(ctx, `INSERT INTO evaluation_baselines (id, model_route, run_id, dataset_manifest_sha256, evidence_hash, route_profile_version, policy_version, proposed_by) VALUES ($1,$2,$3,$4,$5,$6,$7,$8) RETURNING id,model_route,run_id,dataset_manifest_sha256,evidence_hash,route_profile_version,policy_version,status,proposed_by,proposed_at,activated_at,retired_at`, id, input.ModelRoute, input.RunID, input.DatasetManifestSHA256, input.EvidenceHash, input.RouteProfileVersion, input.PolicyVersion, input.ProposedBy).Scan(&b.ID, &b.ModelRoute, &b.RunID, &b.DatasetManifestSHA256, &b.EvidenceHash, &b.RouteProfileVersion, &b.PolicyVersion, &b.Status, &b.ProposedBy, &b.ProposedAt, &b.ActivatedAt, &b.RetiredAt)
+	})
 	if err != nil {
 		return nil, fmt.Errorf("propose radar baseline: %w", err)
 	}
@@ -272,7 +281,9 @@ func (r *radarGovernanceRepository) ApproveBaseline(ctx context.Context, input s
 	}
 	id := uuid.New()
 	var a service.RadarBaselineApproval
-	err := r.db.QueryRowContext(ctx, `INSERT INTO evaluation_baseline_approvals (id,baseline_id,approver_id,role,evidence_hash) VALUES ($1,$2,$3,$4,$5) ON CONFLICT (baseline_id,approver_id,role) DO UPDATE SET evidence_hash=EXCLUDED.evidence_hash RETURNING id,baseline_id,approver_id,role,evidence_hash,created_at`, id, input.BaselineID, input.ApproverID, input.Role, input.EvidenceHash).Scan(&a.ID, &a.BaselineID, &a.ApproverID, &a.Role, &a.EvidenceHash, &a.CreatedAt)
+	err := WithEvaluationWriterTx(ctx, r.db, defaultEvaluationWriterIdentity("control"), func(tx *sql.Tx) error {
+		return tx.QueryRowContext(ctx, `INSERT INTO evaluation_baseline_approvals (id,baseline_id,approver_id,role,evidence_hash) VALUES ($1,$2,$3,$4,$5) ON CONFLICT (baseline_id,approver_id,role) DO UPDATE SET evidence_hash=EXCLUDED.evidence_hash RETURNING id,baseline_id,approver_id,role,evidence_hash,created_at`, id, input.BaselineID, input.ApproverID, input.Role, input.EvidenceHash).Scan(&a.ID, &a.BaselineID, &a.ApproverID, &a.Role, &a.EvidenceHash, &a.CreatedAt)
+	})
 	if err != nil {
 		return nil, fmt.Errorf("approve radar baseline: %w", err)
 	}
@@ -283,7 +294,7 @@ func (r *radarGovernanceRepository) ActivateBaseline(ctx context.Context, baseli
 	if err := r.valid(); err != nil {
 		return nil, err
 	}
-	tx, err := r.db.BeginTx(ctx, nil)
+	tx, err := beginEvaluationWriterTx(ctx, r.db, defaultEvaluationWriterIdentity("control"))
 	if err != nil {
 		return nil, err
 	}
@@ -320,7 +331,9 @@ func (r *radarGovernanceRepository) CreateGatePolicy(ctx context.Context, input 
 	}
 	id := uuid.New()
 	var p service.RadarGatePolicyRecord
-	err := r.db.QueryRowContext(ctx, `INSERT INTO evaluation_gate_policies (id,version,policy,policy_hash,enforcement_starts_at,created_by) VALUES ($1,$2,$3::jsonb,$4,$5,$6) ON CONFLICT (version) DO UPDATE SET policy=EXCLUDED.policy,policy_hash=EXCLUDED.policy_hash RETURNING id,version,policy,policy_hash,enforcement_starts_at,created_by,created_at,retired_at`, id, input.Version, string(input.Policy), input.PolicyHash, input.EnforcementStartsAt, input.CreatedBy).Scan(&p.ID, &p.Version, &p.Policy, &p.PolicyHash, &p.EnforcementStartsAt, &p.CreatedBy, &p.CreatedAt, &p.RetiredAt)
+	err := WithEvaluationWriterTx(ctx, r.db, defaultEvaluationWriterIdentity("control"), func(tx *sql.Tx) error {
+		return tx.QueryRowContext(ctx, `INSERT INTO evaluation_gate_policies (id,version,policy,policy_hash,enforcement_starts_at,created_by) VALUES ($1,$2,$3::jsonb,$4,$5,$6) ON CONFLICT (version) DO UPDATE SET policy=EXCLUDED.policy,policy_hash=EXCLUDED.policy_hash RETURNING id,version,policy,policy_hash,enforcement_starts_at,created_by,created_at,retired_at`, id, input.Version, string(input.Policy), input.PolicyHash, input.EnforcementStartsAt, input.CreatedBy).Scan(&p.ID, &p.Version, &p.Policy, &p.PolicyHash, &p.EnforcementStartsAt, &p.CreatedBy, &p.CreatedAt, &p.RetiredAt)
+	})
 	if err != nil {
 		return nil, fmt.Errorf("create radar gate policy: %w", err)
 	}
@@ -333,7 +346,9 @@ func (r *radarGovernanceRepository) RecordGateDecision(ctx context.Context, inpu
 	}
 	id := uuid.New()
 	var d service.RadarGateDecisionRecord
-	err := r.db.QueryRowContext(ctx, `INSERT INTO evaluation_gate_decisions (id,run_id,baseline_id,policy_id,status,rule_ids,evidence,evidence_hash) VALUES ($1,$2,$3,$4,$5,$6,$7::jsonb,$8) ON CONFLICT (run_id,policy_id) DO UPDATE SET status=EXCLUDED.status,rule_ids=EXCLUDED.rule_ids,evidence=EXCLUDED.evidence,evidence_hash=EXCLUDED.evidence_hash RETURNING id,run_id,baseline_id,policy_id,status,rule_ids,evidence,evidence_hash,created_at`, id, input.RunID, input.BaselineID, input.PolicyID, input.Status, pq.Array(input.RuleIDs), string(input.Evidence), input.EvidenceHash).Scan(&d.ID, &d.RunID, &d.BaselineID, &d.PolicyID, &d.Status, &pqStringArray{&d.RuleIDs}, &d.Evidence, &d.EvidenceHash, &d.CreatedAt)
+	err := WithEvaluationWriterTx(ctx, r.db, defaultEvaluationWriterIdentity("control"), func(tx *sql.Tx) error {
+		return tx.QueryRowContext(ctx, `INSERT INTO evaluation_gate_decisions (id,run_id,baseline_id,policy_id,status,rule_ids,evidence,evidence_hash) VALUES ($1,$2,$3,$4,$5,$6,$7::jsonb,$8) ON CONFLICT (run_id,policy_id) DO UPDATE SET status=EXCLUDED.status,rule_ids=EXCLUDED.rule_ids,evidence=EXCLUDED.evidence,evidence_hash=EXCLUDED.evidence_hash RETURNING id,run_id,baseline_id,policy_id,status,rule_ids,evidence,evidence_hash,created_at`, id, input.RunID, input.BaselineID, input.PolicyID, input.Status, pq.Array(input.RuleIDs), string(input.Evidence), input.EvidenceHash).Scan(&d.ID, &d.RunID, &d.BaselineID, &d.PolicyID, &d.Status, &pqStringArray{&d.RuleIDs}, &d.Evidence, &d.EvidenceHash, &d.CreatedAt)
+	})
 	if err != nil {
 		return nil, fmt.Errorf("record radar gate decision: %w", err)
 	}
@@ -356,7 +371,7 @@ func (r *radarGovernanceRepository) WaiveGateDecision(ctx context.Context, input
 	if err := r.valid(); err != nil {
 		return nil, err
 	}
-	tx, err := r.db.BeginTx(ctx, nil)
+	tx, err := beginEvaluationWriterTx(ctx, r.db, defaultEvaluationWriterIdentity("control"))
 	if err != nil {
 		return nil, err
 	}
@@ -380,7 +395,7 @@ func (r *radarGovernanceRepository) ObserveAlert(ctx context.Context, input serv
 	if err := r.valid(); err != nil {
 		return nil, err
 	}
-	tx, err := r.db.BeginTx(ctx, nil)
+	tx, err := beginEvaluationWriterTx(ctx, r.db, defaultEvaluationWriterIdentity("control"))
 	if err != nil {
 		return nil, err
 	}
@@ -411,7 +426,7 @@ func (r *radarGovernanceRepository) transitionAlert(ctx context.Context, id uuid
 	if err := r.valid(); err != nil {
 		return err
 	}
-	tx, err := r.db.BeginTx(ctx, nil)
+	tx, err := beginEvaluationWriterTx(ctx, r.db, defaultEvaluationWriterIdentity("control"))
 	if err != nil {
 		return err
 	}
@@ -433,7 +448,7 @@ func (r *radarGovernanceRepository) RecordAlertRecovery(ctx context.Context, id,
 	if err := r.valid(); err != nil {
 		return err
 	}
-	tx, err := r.db.BeginTx(ctx, nil)
+	tx, err := beginEvaluationWriterTx(ctx, r.db, defaultEvaluationWriterIdentity("control"))
 	if err != nil {
 		return err
 	}
@@ -460,7 +475,9 @@ func (r *radarGovernanceRepository) RecordAttribution(ctx context.Context, input
 	}
 	id := uuid.New()
 	var a service.RadarAttributionRecord
-	err := r.db.QueryRowContext(ctx, `INSERT INTO evaluation_attributions (id,alert_id,cause,confidence,route_slices,evidence_hash) VALUES ($1,$2,$3,$4,$5::jsonb,$6) RETURNING id,alert_id,cause,confidence,route_slices,evidence_hash,created_at`, id, input.AlertID, input.Cause, input.Confidence, string(input.RouteSlices), input.EvidenceHash).Scan(&a.ID, &a.AlertID, &a.Cause, &a.Confidence, &a.RouteSlices, &a.EvidenceHash, &a.CreatedAt)
+	err := WithEvaluationWriterTx(ctx, r.db, defaultEvaluationWriterIdentity("control"), func(tx *sql.Tx) error {
+		return tx.QueryRowContext(ctx, `INSERT INTO evaluation_attributions (id,alert_id,cause,confidence,route_slices,evidence_hash) VALUES ($1,$2,$3,$4,$5::jsonb,$6) RETURNING id,alert_id,cause,confidence,route_slices,evidence_hash,created_at`, id, input.AlertID, input.Cause, input.Confidence, string(input.RouteSlices), input.EvidenceHash).Scan(&a.ID, &a.AlertID, &a.Cause, &a.Confidence, &a.RouteSlices, &a.EvidenceHash, &a.CreatedAt)
+	})
 	if err != nil {
 		return nil, err
 	}

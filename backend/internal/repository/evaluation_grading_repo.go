@@ -45,7 +45,7 @@ func (r *evaluationGradingRepository) SubmitEvidence(ctx context.Context, input 
 	}
 	digest := sha256.Sum256(bytes.TrimSpace(input.Evidence))
 	digestHex := hex.EncodeToString(digest[:])
-	tx, err := r.db.BeginTx(ctx, nil)
+	tx, err := beginEvaluationWriterTx(ctx, r.db, defaultEvaluationWriterIdentity("runner"))
 	if err != nil {
 		return nil, fmt.Errorf("begin evidence submission: %w", err)
 	}
@@ -98,7 +98,7 @@ func (r *evaluationGradingRepository) PresignArtifact(ctx context.Context, assig
 	}
 	input.MIMEType = strings.TrimSpace(input.MIMEType)
 	input.SHA256 = strings.TrimSpace(input.SHA256)
-	tx, err := r.db.BeginTx(ctx, nil)
+	tx, err := beginEvaluationWriterTx(ctx, r.db, defaultEvaluationWriterIdentity("runner"))
 	if err != nil {
 		return nil, fmt.Errorf("begin artifact presign: %w", err)
 	}
@@ -155,7 +155,7 @@ func (r *evaluationGradingRepository) ConfirmArtifact(ctx context.Context, assig
 	}
 	input.ObjectKey = strings.TrimSpace(input.ObjectKey)
 	input.SHA256 = strings.TrimSpace(input.SHA256)
-	tx, err := r.db.BeginTx(ctx, nil)
+	tx, err := beginEvaluationWriterTx(ctx, r.db, defaultEvaluationWriterIdentity("runner"))
 	if err != nil {
 		return nil, fmt.Errorf("begin artifact confirmation: %w", err)
 	}
@@ -227,7 +227,10 @@ func (r *evaluationGradingRepository) EnsureNextGradingPartitions(ctx context.Co
 		return errors.New("nil evaluation grading repository")
 	}
 	month := now.UTC().AddDate(0, 1, 0).Format("2006-01-02")
-	_, err := r.db.ExecContext(ctx, `SELECT ensure_evaluation_grading_partitions($1::date)`, month)
+	err := WithEvaluationWriterTx(ctx, r.db, defaultEvaluationWriterIdentity("migration"), func(tx *sql.Tx) error {
+		_, err := tx.ExecContext(ctx, `SELECT ensure_evaluation_grading_partitions($1::date)`, month)
+		return err
+	})
 	if err != nil {
 		return fmt.Errorf("ensure evaluation grading partitions: %w", err)
 	}
@@ -270,7 +273,7 @@ func (r *evaluationGradingRepository) ClaimGradingLease(ctx context.Context, wor
 	if workerID == uuid.Nil || leaseTTL <= 0 {
 		return nil, errors.New("grader worker and positive lease ttl are required")
 	}
-	tx, err := r.db.BeginTx(ctx, nil)
+	tx, err := beginEvaluationWriterTx(ctx, r.db, defaultEvaluationWriterIdentity("grader"))
 	if err != nil {
 		return nil, fmt.Errorf("begin grading lease claim: %w", err)
 	}
@@ -400,11 +403,13 @@ func (r *evaluationGradingRepository) HeartbeatGradingLease(ctx context.Context,
 		return time.Time{}, service.ErrLeaseFenced
 	}
 	var expires time.Time
-	err := r.db.QueryRowContext(ctx, `
+	err := WithEvaluationWriterTx(ctx, r.db, defaultEvaluationWriterIdentity("grader"), func(tx *sql.Tx) error {
+		return tx.QueryRowContext(ctx, `
 		UPDATE evaluation_grading_jobs
 		SET lease_expires_at = NOW() + $3::interval, heartbeat_at = NOW(), updated_at = NOW()
 		WHERE id = $1 AND status = 'leased' AND lease_token_hash = $2 AND lease_expires_at > NOW()
 		RETURNING lease_expires_at`, leaseID, hashToken(leaseToken), postgresInterval(extendBy)).Scan(&expires)
+	})
 	if errors.Is(err, sql.ErrNoRows) {
 		return time.Time{}, service.ErrLeaseFenced
 	}
@@ -438,7 +443,7 @@ func (r *evaluationGradingRepository) SubmitScore(ctx context.Context, leaseID u
 		return existing, nil
 	}
 
-	tx, err := r.db.BeginTx(ctx, nil)
+	tx, err := beginEvaluationWriterTx(ctx, r.db, defaultEvaluationWriterIdentity("grader"))
 	if err != nil {
 		return nil, fmt.Errorf("begin score submission: %w", err)
 	}
@@ -525,10 +530,10 @@ func (r *evaluationGradingRepository) SubmitScore(ctx context.Context, leaseID u
 		return nil, fmt.Errorf("record score idempotency: %w", err)
 	}
 	if _, err := tx.ExecContext(ctx, `
-		INSERT INTO evaluation_score_heads (sample_id, grader_id, score_id, version, manual_review_required)
-		VALUES ($1, $2, $3, $4, $5)
-		ON CONFLICT (sample_id, grader_id) DO UPDATE SET score_id = EXCLUDED.score_id, version = EXCLUDED.version,
-			manual_review_required = EXCLUDED.manual_review_required, updated_at = NOW()`, job.sampleID, submission.GraderID, scoreID, version, manualReview); err != nil {
+		INSERT INTO evaluation_score_heads (sample_id, grader_id, score_id, score_created_at, version, manual_review_required)
+		VALUES ($1, $2, $3, $4, $5, $6)
+		ON CONFLICT (sample_id, grader_id) DO UPDATE SET score_id = EXCLUDED.score_id, score_created_at = EXCLUDED.score_created_at, version = EXCLUDED.version,
+			manual_review_required = EXCLUDED.manual_review_required, updated_at = NOW()`, job.sampleID, submission.GraderID, scoreID, createdAt, version, manualReview); err != nil {
 		return nil, fmt.Errorf("update score head: %w", err)
 	}
 	if manualReview {
@@ -581,7 +586,7 @@ func (r *evaluationGradingRepository) FailGradingLease(ctx context.Context, leas
 	if leaseID == uuid.Nil || strings.TrimSpace(leaseToken) == "" {
 		return service.ErrLeaseFenced
 	}
-	tx, err := r.db.BeginTx(ctx, nil)
+	tx, err := beginEvaluationWriterTx(ctx, r.db, defaultEvaluationWriterIdentity("grader"))
 	if err != nil {
 		return fmt.Errorf("begin fail grading lease: %w", err)
 	}
@@ -618,7 +623,7 @@ func (r *evaluationGradingRepository) ClaimAnalysisJob(ctx context.Context, work
 	if workerID == uuid.Nil || leaseTTL <= 0 {
 		return nil, errors.New("statistics worker and positive lease ttl are required")
 	}
-	tx, err := r.db.BeginTx(ctx, nil)
+	tx, err := beginEvaluationWriterTx(ctx, r.db, defaultEvaluationWriterIdentity("statistics"))
 	if err != nil {
 		return nil, fmt.Errorf("begin analysis lease claim: %w", err)
 	}
@@ -777,7 +782,7 @@ func (r *evaluationGradingRepository) CompleteAnalysisJob(ctx context.Context, j
 	if jobID == uuid.Nil || strings.TrimSpace(leaseToken) == "" {
 		return nil, service.ErrAnalysisJobFenced
 	}
-	tx, err := r.db.BeginTx(ctx, nil)
+	tx, err := beginEvaluationWriterTx(ctx, r.db, defaultEvaluationWriterIdentity("statistics"))
 	if err != nil {
 		return nil, fmt.Errorf("begin analysis completion: %w", err)
 	}

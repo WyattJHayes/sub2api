@@ -11,8 +11,9 @@ import (
 )
 
 var (
-	ErrLeaseFenced    = errors.New("evaluation assignment lease fenced")
-	ErrBudgetExceeded = errors.New("evaluation run budget exceeded")
+	ErrLeaseFenced        = errors.New("evaluation assignment lease fenced")
+	ErrBudgetExceeded     = errors.New("evaluation run budget exceeded")
+	ErrRadarCutoverActive = errors.New("radar cutover active")
 )
 
 const AssignmentCompleted = AssignmentStatusCompleted

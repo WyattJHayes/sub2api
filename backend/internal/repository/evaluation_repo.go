@@ -43,7 +43,7 @@ func (r *evaluationRepository) CreateRunWithMatrix(ctx context.Context, input se
 		return nil, fmt.Errorf("invalid evaluation trigger source %q", input.TriggerSource)
 	}
 
-	tx, err := r.db.BeginTx(ctx, nil)
+	tx, err := beginEvaluationWriterTx(ctx, r.db, defaultEvaluationWriterIdentity("control"))
 	if err != nil {
 		return nil, fmt.Errorf("begin evaluation run transaction: %w", err)
 	}
@@ -196,7 +196,7 @@ func (r *evaluationRepository) ClaimAssignment(ctx context.Context, workerID uui
 	if leaseTTL <= 0 {
 		return nil, errors.New("evaluation lease ttl must be positive")
 	}
-	tx, err := r.db.BeginTx(ctx, nil)
+	tx, err := beginEvaluationWriterTx(ctx, r.db, defaultEvaluationWriterIdentity("runner"))
 	if err != nil {
 		return nil, fmt.Errorf("begin evaluation assignment claim: %w", err)
 	}
@@ -360,12 +360,14 @@ func (r *evaluationRepository) RenewLease(ctx context.Context, assignmentID uuid
 		return time.Time{}, errors.New("evaluation lease extension must be positive")
 	}
 	var expiresAt time.Time
-	err := r.db.QueryRowContext(ctx, `
+	err := WithEvaluationWriterTx(ctx, r.db, defaultEvaluationWriterIdentity("runner"), func(tx *sql.Tx) error {
+		return tx.QueryRowContext(ctx, `
 		UPDATE evaluation_assignments
 		SET lease_expires_at = NOW() + $3::interval, heartbeat_at = NOW(), updated_at = NOW()
 		WHERE id = $1 AND lease_token_hash = $2 AND lease_expires_at > NOW()
 			AND status IN ('leased', 'running')
 		RETURNING lease_expires_at`, assignmentID, hashToken(leaseToken), postgresInterval(extendBy)).Scan(&expiresAt)
+	})
 	if errors.Is(err, sql.ErrNoRows) {
 		return time.Time{}, service.ErrLeaseFenced
 	}
@@ -382,7 +384,7 @@ func (r *evaluationRepository) TransitionAssignment(ctx context.Context, input s
 	if input.AssignmentID == uuid.Nil || input.LeaseToken == "" || !input.To.Valid() {
 		return errors.New("invalid evaluation assignment transition")
 	}
-	tx, err := r.db.BeginTx(ctx, nil)
+	tx, err := beginEvaluationWriterTx(ctx, r.db, defaultEvaluationWriterIdentity("runner"))
 	if err != nil {
 		return fmt.Errorf("begin evaluation assignment transition: %w", err)
 	}

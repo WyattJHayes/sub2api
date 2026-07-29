@@ -201,6 +201,7 @@ func TestMigration197TrustedLifecycleSchema(t *testing.T) {
 		"evaluation_pair_bindings",
 		"evaluation_schema_cutovers",
 		"evaluation_writer_sessions",
+		"evaluation_writer_audit_events",
 		"evaluation_worker_events",
 	} {
 		requireTable(t, tx, table)
