@@ -34,7 +34,7 @@ func TestRadarStagingDockerfileRejectsIdentityArgumentsBeforeModuleDownload(t *t
 	}
 }
 
-func TestRadarStagingDockerfileRejectsDetachedModuleDownloadCacheAndRetry(t *testing.T) {
+func TestRadarStagingDockerfileRejectsDetachedModuleDownloadProtections(t *testing.T) {
 	dockerfile := readRadarStagingDockerfile(t)
 	moduleDownloadRun := `RUN --mount=type=cache,id=sub2api-radar-gomod,target=/go/pkg/mod \
     set -eu; \
@@ -46,15 +46,32 @@ func TestRadarStagingDockerfileRejectsDetachedModuleDownloadCacheAndRetry(t *tes
       sleep $((attempt * 2)); \
       attempt=$((attempt + 1)); \
     done`
-	mutated := strings.Replace(dockerfile, moduleDownloadRun, `RUN --mount=type=cache,id=sub2api-radar-gomod,target=/go/pkg/mod true
-RUN printf '%s\n' 'until go mod download; do' 'if [ "$attempt" -ge 4 ]'
-RUN go mod download`, 1)
-	if mutated == dockerfile {
-		t.Fatal("test mutation must replace the module download instruction")
+	mutations := map[string]string{
+		"cache mount": `RUN set -eu; \
+    attempt=1; \
+    until go mod download; do \
+      if [ "$attempt" -ge 4 ]; then \
+        exit 1; \
+      fi; \
+      sleep $((attempt * 2)); \
+      attempt=$((attempt + 1)); \
+    done
+RUN --mount=type=cache,id=sub2api-radar-gomod,target=/go/pkg/mod true`,
+		"retry loop": `RUN --mount=type=cache,id=sub2api-radar-gomod,target=/go/pkg/mod go mod download
+RUN printf '%s\n' 'until go mod download; do' 'if [ "$attempt" -ge 4 ]'`,
 	}
 
-	if len(validateRadarStagingDockerfile(mutated)) == 0 {
-		t.Fatal("detaching the module cache and retry loop from go mod download must be rejected")
+	for protection, replacement := range mutations {
+		t.Run(protection, func(t *testing.T) {
+			mutated := strings.Replace(dockerfile, moduleDownloadRun, replacement, 1)
+			if mutated == dockerfile {
+				t.Fatal("test mutation must replace the module download instruction")
+			}
+
+			if len(validateRadarStagingDockerfile(mutated)) == 0 {
+				t.Fatalf("detaching the module download %s must be rejected", protection)
+			}
+		})
 	}
 }
 
