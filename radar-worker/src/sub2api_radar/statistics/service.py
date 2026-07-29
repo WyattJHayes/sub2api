@@ -151,7 +151,10 @@ class StatisticsWorker:
             if asyncio.iscoroutine(result):
                 result = await result
             await self.client.complete_analysis(
-                lease.id, lease.lease_token, aggregate_submission(lease, result)
+                lease.id,
+                lease.lease_token,
+                aggregate_submission(lease, result),
+                lease.lease_epoch,
             )
         except LeaseFencedError:
             log.warning("analysis lease %s fenced", lease.id)

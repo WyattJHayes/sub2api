@@ -82,7 +82,7 @@ class Runner:
             try:
                 evidence = ExecutionEvidence.model_validate(record.evidence)
                 receipt = await self.client.submit_evidence(
-                    record.assignment_id, record.lease_token, evidence
+                    record.assignment_id, record.lease_token, evidence, record.lease_epoch
                 )
                 self.state_store.save(
                     StateRecord(
@@ -91,6 +91,7 @@ class Runner:
                         record.idempotency_key,
                         receipt.model_dump(mode="json"),
                         record.lease_token,
+                        record.lease_epoch,
                     )
                 )
                 self.state_store.delete(record.assignment_id)
@@ -102,14 +103,26 @@ class Runner:
     async def execute_lease(self, lease: AssignmentLease) -> None:
         key = hashlib.sha256(f"{lease.id}:evidence".encode()).hexdigest()
         self.state_store.save(
-            StateRecord(lease.id, LocalState.CLAIMED, key, lease_token=lease.lease_token)
+            StateRecord(
+                lease.id,
+                LocalState.CLAIMED,
+                key,
+                lease_token=lease.lease_token,
+                lease_epoch=lease.lease_epoch,
+            )
         )
         heartbeat_failed = asyncio.Event()
         heartbeat_task = asyncio.create_task(self._heartbeat(lease, heartbeat_failed))
         execution_task = asyncio.create_task(self.executor.execute(lease))
         try:
             self.state_store.save(
-                StateRecord(lease.id, LocalState.EXECUTING, key, lease_token=lease.lease_token)
+                StateRecord(
+                    lease.id,
+                    LocalState.EXECUTING,
+                    key,
+                    lease_token=lease.lease_token,
+                    lease_epoch=lease.lease_epoch,
+                )
             )
             evidence = await self._race_execution(execution_task, heartbeat_failed)
             self.state_store.save(
@@ -119,9 +132,12 @@ class Runner:
                     key,
                     evidence.model_dump(mode="json"),
                     lease.lease_token,
+                    lease.lease_epoch,
                 )
             )
-            receipt = await self.client.submit_evidence(lease.id, lease.lease_token, evidence)
+            receipt = await self.client.submit_evidence(
+                lease.id, lease.lease_token, evidence, lease.lease_epoch
+            )
             self.state_store.save(
                 StateRecord(
                     lease.id,
@@ -129,6 +145,7 @@ class Runner:
                     key,
                     receipt.model_dump(mode="json"),
                     lease.lease_token,
+                    lease.lease_epoch,
                 )
             )
             # Evidence upload advances the assignment to evidence_uploaded.
@@ -145,7 +162,9 @@ class Runner:
             execution_task.cancel()
             await asyncio.gather(execution_task, return_exceptions=True)
             try:
-                await self.client.fail_assignment(lease.id, lease.lease_token, "heartbeat_lost")
+                await self.client.fail_assignment(
+                    lease.id, lease.lease_token, "heartbeat_lost", lease.lease_epoch
+                )
             except Exception:
                 log.exception("failed to release heartbeat-lost lease %s", lease.id)
         except asyncio.CancelledError:
@@ -156,7 +175,9 @@ class Runner:
             execution_task.cancel()
             await asyncio.gather(execution_task, return_exceptions=True)
             try:
-                await self.client.fail_assignment(lease.id, lease.lease_token, "runner_error")
+                await self.client.fail_assignment(
+                    lease.id, lease.lease_token, "runner_error", lease.lease_epoch
+                )
             except Exception:
                 log.exception("failed to report runner error for %s", lease.id)
         finally:
@@ -183,7 +204,7 @@ class Runner:
         while True:
             await asyncio.sleep(interval)
             try:
-                await self.client.heartbeat(lease.id, lease.lease_token)
+                await self.client.heartbeat(lease.id, lease.lease_token, lease.lease_epoch)
             except LeaseFencedError:
                 failed.set()
                 return

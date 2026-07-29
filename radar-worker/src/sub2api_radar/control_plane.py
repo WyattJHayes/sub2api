@@ -175,23 +175,24 @@ class ControlPlaneClient:
             json_body={"worker_id": self.settings.worker_id},
         )
 
-    async def heartbeat(self, assignment_id: UUID, token: str) -> str:
+    async def heartbeat(self, assignment_id: UUID, token: str, lease_epoch: int = 0) -> str:
         payload = await self._request(
             "POST",
             f"/internal/radar/v1/leases/{assignment_id}/heartbeat",
-            json_body={"lease_token": token},
+            json_body={"lease_token": token, "lease_epoch": lease_epoch},
             key=self._key(assignment_id, "heartbeat"),
         )
         return str(self._data(payload).get("lease_expires_at", ""))
 
     async def submit_evidence(
-        self, assignment_id: UUID, token: str, evidence: ExecutionEvidence
+        self, assignment_id: UUID, token: str, evidence: ExecutionEvidence, lease_epoch: int = 0
     ) -> EvidenceReceipt:
         payload = await self._request(
             "POST",
             f"/internal/radar/v1/leases/{assignment_id}/evidence",
             json_body={
                 "lease_token": token,
+                "lease_epoch": lease_epoch,
                 "sample_id": str(evidence.sample_id),
                 "evidence": evidence.model_dump(mode="json"),
             },
@@ -199,39 +200,59 @@ class ControlPlaneClient:
         )
         return EvidenceReceipt.model_validate(self._data(payload))
 
-    async def complete_assignment(self, assignment_id: UUID, token: str) -> None:
+    async def complete_assignment(
+        self, assignment_id: UUID, token: str, lease_epoch: int = 0
+    ) -> None:
         await self._request(
             "POST",
             f"/internal/radar/v1/leases/{assignment_id}/complete",
-            json_body={"lease_token": token},
+            json_body={"lease_token": token, "lease_epoch": lease_epoch},
             key=self._key(assignment_id, "complete"),
         )
 
-    async def fail_assignment(self, assignment_id: UUID, token: str, failure_code: str) -> None:
+    async def fail_assignment(
+        self, assignment_id: UUID, token: str, failure_code: str, lease_epoch: int = 0
+    ) -> None:
         await self._request(
             "POST",
             f"/internal/radar/v1/leases/{assignment_id}/fail",
-            json_body={"lease_token": token, "failure_code": failure_code},
+            json_body={
+                "lease_token": token,
+                "lease_epoch": lease_epoch,
+                "failure_code": failure_code,
+            },
             key=self._key(assignment_id, "fail"),
         )
 
     async def presign_artifact(
-        self, assignment_id: UUID, token: str, request: ArtifactPresignRequest
+        self, assignment_id: UUID, token: str, request: ArtifactPresignRequest, lease_epoch: int = 0
     ) -> Mapping[str, Any]:
         return await self._request(
             "POST",
             f"/internal/radar/v1/leases/{assignment_id}/artifacts/presign",
-            json_body={"lease_token": token, **request.model_dump(mode="json")},
+            json_body={
+                "lease_token": token,
+                "lease_epoch": lease_epoch,
+                **request.model_dump(mode="json"),
+            },
             key=self._key(assignment_id, f"presign:{request.sha256}"),
         )
 
     async def confirm_artifact(
-        self, assignment_id: UUID, token: str, confirmation: ArtifactConfirmation
+        self,
+        assignment_id: UUID,
+        token: str,
+        confirmation: ArtifactConfirmation,
+        lease_epoch: int = 0,
     ) -> ArtifactReceipt:
         payload = await self._request(
             "POST",
             f"/internal/radar/v1/leases/{assignment_id}/artifacts/confirm",
-            json_body={"lease_token": token, **confirmation.model_dump(mode="json")},
+            json_body={
+                "lease_token": token,
+                "lease_epoch": lease_epoch,
+                **confirmation.model_dump(mode="json"),
+            },
             key=self._key(assignment_id, f"confirm:{confirmation.artifact_id}"),
         )
         return ArtifactReceipt.model_validate(self._data(payload))
@@ -247,30 +268,40 @@ class ControlPlaneClient:
             return None
         return GradingLease.model_validate(data)
 
-    async def heartbeat_grading(self, lease_id: UUID, token: str) -> str:
+    async def heartbeat_grading(self, lease_id: UUID, token: str, lease_epoch: int = 0) -> str:
         payload = await self._request(
             "POST",
             f"/internal/radar/v1/grading-leases/{lease_id}/heartbeat",
-            json_body={"lease_token": token},
+            json_body={"lease_token": token, "lease_epoch": lease_epoch},
             key=self._key(lease_id, "grading-heartbeat"),
         )
         return str(self._data(payload).get("lease_expires_at", ""))
 
     async def submit_score(
-        self, lease_id: UUID, token: str, submission: ScoreSubmission
+        self, lease_id: UUID, token: str, submission: ScoreSubmission, lease_epoch: int = 0
     ) -> Mapping[str, Any]:
         return await self._request(
             "POST",
             f"/internal/radar/v1/grading-leases/{lease_id}/complete",
-            json_body={"lease_token": token, **submission.model_dump(mode="json")},
+            json_body={
+                "lease_token": token,
+                "lease_epoch": lease_epoch,
+                **submission.model_dump(mode="json"),
+            },
             key=self._key(lease_id, "score"),
         )
 
-    async def fail_grading(self, lease_id: UUID, token: str, failure_code: str) -> None:
+    async def fail_grading(
+        self, lease_id: UUID, token: str, failure_code: str, lease_epoch: int = 0
+    ) -> None:
         await self._request(
             "POST",
             f"/internal/radar/v1/grading-leases/{lease_id}/fail",
-            json_body={"lease_token": token, "failure_code": failure_code},
+            json_body={
+                "lease_token": token,
+                "lease_epoch": lease_epoch,
+                "failure_code": failure_code,
+            },
             key=self._key(lease_id, "grading-fail"),
         )
 
@@ -286,11 +317,15 @@ class ControlPlaneClient:
         return AnalysisLease.model_validate(data)
 
     async def complete_analysis(
-        self, lease_id: UUID, token: str, submission: AggregateSubmission
+        self, lease_id: UUID, token: str, submission: AggregateSubmission, lease_epoch: int = 0
     ) -> Mapping[str, Any]:
         return await self._request(
             "POST",
             f"/internal/radar/v1/analysis-jobs/{lease_id}/complete",
-            json_body={"lease_token": token, **submission.model_dump(mode="json")},
+            json_body={
+                "lease_token": token,
+                "lease_epoch": lease_epoch,
+                **submission.model_dump(mode="json"),
+            },
             key=self._key(lease_id, "aggregate"),
         )

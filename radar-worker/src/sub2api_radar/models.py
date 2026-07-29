@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import datetime
 from decimal import Decimal
 from enum import StrEnum
-from typing import Any
+from typing import Any, Literal
 from uuid import UUID
 
 from pydantic import AliasChoices, BaseModel, ConfigDict, Field, field_validator
@@ -69,6 +69,9 @@ class AssignmentLease(StrictModel):
     lease_expires_at: datetime = Field(
         validation_alias=AliasChoices("lease_expires_at", "expires_at")
     )
+    lease_epoch: int = Field(default=0, ge=0)
+    worker_image_digest: str = ""
+    work_origin: Literal["initial", "regrade"] = "initial"
     gateway_api_key: str = ""
     gateway_evaluation_token: str = Field(min_length=1)
     route_trace_id: str = Field(min_length=1)
@@ -112,6 +115,9 @@ class GradingLease(StrictModel):
     lease_expires_at: datetime = Field(
         validation_alias=AliasChoices("lease_expires_at", "expires_at")
     )
+    lease_epoch: int = Field(default=0, ge=0)
+    worker_image_digest: str = ""
+    work_origin: Literal["initial", "regrade"] = "initial"
 
 
 class AnalysisLease(StrictModel):
@@ -128,6 +134,9 @@ class AnalysisLease(StrictModel):
     lease_expires_at: datetime = Field(
         validation_alias=AliasChoices("lease_expires_at", "expires_at")
     )
+    lease_epoch: int = Field(default=0, ge=0)
+    worker_image_digest: str = ""
+    work_origin: Literal["initial", "regrade"] = "initial"
     score_ids: tuple[UUID, ...] = ()
     pairs: tuple[PairedScore, ...] = ()
     history: tuple[dict[str, Any], ...] = ()

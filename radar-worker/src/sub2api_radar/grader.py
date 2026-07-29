@@ -176,7 +176,7 @@ class GraderWorker:
         if lease is None:
             return False
         try:
-            await self.client.heartbeat_grading(lease.id, lease.lease_token)
+            await self.client.heartbeat_grading(lease.id, lease.lease_token, lease.lease_epoch)
             heartbeat = asyncio.create_task(self._heartbeat(lease))
             try:
                 evidence = self.evidence_loader(lease)
@@ -197,7 +197,9 @@ class GraderWorker:
                     explanation=result.explanation,
                     evidence_hashes=result.evidence_hashes,
                 )
-                await self.client.submit_score(lease.id, lease.lease_token, submission)
+                await self.client.submit_score(
+                    lease.id, lease.lease_token, submission, lease.lease_epoch
+                )
             finally:
                 heartbeat.cancel()
                 await asyncio.gather(heartbeat, return_exceptions=True)
@@ -208,7 +210,9 @@ class GraderWorker:
         except Exception:
             log.exception("grading lease %s failed", lease.id)
             try:
-                await self.client.fail_grading(lease.id, lease.lease_token, "grader_error")
+                await self.client.fail_grading(
+                    lease.id, lease.lease_token, "grader_error", lease.lease_epoch
+                )
             except Exception:
                 log.exception("failed to report grader error for %s", lease.id)
             return True
@@ -229,7 +233,7 @@ class GraderWorker:
         )
         while True:
             await asyncio.sleep(interval)
-            await self.client.heartbeat_grading(lease.id, lease.lease_token)
+            await self.client.heartbeat_grading(lease.id, lease.lease_token, lease.lease_epoch)
 
 
 async def run(settings: Settings) -> None:

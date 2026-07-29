@@ -25,6 +25,7 @@ class StateRecord:
     idempotency_key: str
     evidence: dict[str, Any] | None = None
     lease_token: str | None = None
+    lease_epoch: int = 0
 
     def to_json(self) -> dict[str, Any]:
         return {
@@ -33,6 +34,7 @@ class StateRecord:
             "idempotency_key": self.idempotency_key,
             "evidence": self.evidence,
             "lease_token": self.lease_token,
+            "lease_epoch": self.lease_epoch,
         }
 
     @classmethod
@@ -43,6 +45,7 @@ class StateRecord:
             idempotency_key=str(payload["idempotency_key"]),
             evidence=payload.get("evidence"),
             lease_token=payload.get("lease_token"),
+            lease_epoch=int(payload.get("lease_epoch", 0)),
         )
 
 
