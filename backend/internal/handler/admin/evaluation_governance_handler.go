@@ -216,6 +216,69 @@ func (h *RadarGovernanceHandler) StartRun(c *gin.Context) {
 	response.Accepted(c, run)
 }
 
+type radarRunActionRequest struct {
+	Reason         string `json:"reason" binding:"required"`
+	IdempotencyKey string `json:"idempotency_key" binding:"required,len=64"`
+}
+
+func (h *RadarGovernanceHandler) runAction(c *gin.Context, action func(service.RadarRunActionInput) (*service.RadarRunActionResult, error)) {
+	if _, available := h.repo.(service.RadarRunControlRepository); !available {
+		response.Error(c, http.StatusServiceUnavailable, "Radar run control is not available")
+		return
+	}
+	actorID, ok := h.require(c, service.PermissionRunControl)
+	if !ok {
+		return
+	}
+	runID, ok := parseUUIDParam(c, "id")
+	if !ok {
+		return
+	}
+	var req radarRunActionRequest
+	if !decodeJSON(c, &req) {
+		return
+	}
+	if !validWorkerIdempotencyKeyRequest(c, req.IdempotencyKey) {
+		return
+	}
+	result, err := action(service.RadarRunActionInput{
+		RunID: runID, Reason: strings.TrimSpace(req.Reason), ActorID: actorID, IdempotencyKey: req.IdempotencyKey,
+	})
+	if errors.Is(err, sql.ErrNoRows) {
+		response.NotFound(c, "Run not found")
+		return
+	}
+	if err != nil {
+		response.ErrorFrom(c, err)
+		return
+	}
+	response.Success(c, result)
+}
+
+func (h *RadarGovernanceHandler) PauseRun(c *gin.Context) {
+	h.runAction(c, func(input service.RadarRunActionInput) (*service.RadarRunActionResult, error) {
+		return h.repo.(service.RadarRunControlRepository).PauseRun(c.Request.Context(), input)
+	})
+}
+
+func (h *RadarGovernanceHandler) ResumeRun(c *gin.Context) {
+	h.runAction(c, func(input service.RadarRunActionInput) (*service.RadarRunActionResult, error) {
+		return h.repo.(service.RadarRunControlRepository).ResumeRun(c.Request.Context(), input)
+	})
+}
+
+func (h *RadarGovernanceHandler) CancelRun(c *gin.Context) {
+	h.runAction(c, func(input service.RadarRunActionInput) (*service.RadarRunActionResult, error) {
+		return h.repo.(service.RadarRunControlRepository).CancelRun(c.Request.Context(), input)
+	})
+}
+
+func (h *RadarGovernanceHandler) FenceRun(c *gin.Context) {
+	h.runAction(c, func(input service.RadarRunActionInput) (*service.RadarRunActionResult, error) {
+		return h.repo.(service.RadarRunControlRepository).FenceRun(c.Request.Context(), input)
+	})
+}
+
 type radarWorkerRegistrationRequest struct {
 	Name           string   `json:"name" binding:"required"`
 	WorkerKind     string   `json:"worker_kind" binding:"required"`

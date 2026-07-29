@@ -23,6 +23,7 @@ const (
 	PermissionView                   RadarPermission = "view"
 	PermissionRunStart               RadarPermission = "run_start"
 	PermissionRunRetry               RadarPermission = "run_retry"
+	PermissionRunControl             RadarPermission = "run_control"
 	PermissionWorkerManage           RadarPermission = "worker_manage"
 	PermissionDatasetManage          RadarPermission = "dataset_manage"
 	PermissionDatasetPublish         RadarPermission = "dataset_publish"
@@ -40,7 +41,7 @@ var ErrRadarForbidden = errors.New("radar permission denied")
 
 var radarRolePermissions = map[RadarRole][]RadarPermission{
 	RoleViewer:         {PermissionView},
-	RoleTestOperator:   {PermissionView, PermissionRunStart, PermissionRunRetry, PermissionWorkerManage},
+	RoleTestOperator:   {PermissionView, PermissionRunStart, PermissionRunRetry, PermissionRunControl, PermissionWorkerManage},
 	RoleQualityAdmin:   {PermissionView, PermissionDatasetManage, PermissionDatasetPublish, PermissionPolicyManage, PermissionBaselineQualityApprove},
 	RoleReleaseManager: {PermissionView, PermissionGateDecide, PermissionGateWaive, PermissionBaselineReleaseApprove},
 	RolePlatformAdmin:  {PermissionView, PermissionRoleManage, PermissionRouteAction, PermissionEvaluationKeyManage},

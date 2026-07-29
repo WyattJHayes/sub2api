@@ -397,9 +397,9 @@ func (r *evaluationRepository) ClaimAssignment(ctx context.Context, workerID uui
 		UPDATE evaluation_assignments
 		SET status = 'leased', lease_token_hash = $2, leased_by = $3,
 			lease_expires_at = NOW() + $4::interval, heartbeat_at = NOW(), updated_at = NOW()
-		WHERE id = $1 AND status = 'pending'
+		WHERE id = $1 AND status = 'pending' AND lease_epoch = $5
 		RETURNING lease_expires_at`,
-		lease.ID, tokenHash, workerID, postgresInterval(leaseTTL)).Scan(&lease.ExpiresAt)
+		lease.ID, tokenHash, workerID, postgresInterval(leaseTTL), candidate.leaseEpoch).Scan(&lease.ExpiresAt)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, errors.New("evaluation assignment became unavailable while locked")
 	}
@@ -484,6 +484,7 @@ func (r *evaluationRepository) RenewLease(ctx context.Context, assignmentID uuid
 		SET lease_expires_at = NOW() + $3::interval, heartbeat_at = NOW(), updated_at = NOW()
 		WHERE id = $1 AND lease_token_hash = $2 AND lease_expires_at > NOW()
 			AND status IN ('leased', 'running')
+			AND lease_epoch = (SELECT r.control_epoch FROM evaluation_assignments a JOIN evaluation_samples s ON s.id = a.sample_id JOIN evaluation_runs r ON r.id = s.run_id WHERE a.id = $1)
 		RETURNING lease_expires_at`, assignmentID, hashToken(leaseToken), postgresInterval(extendBy)).Scan(&expiresAt)
 	})
 	if errors.Is(err, sql.ErrNoRows) {
@@ -515,6 +516,7 @@ func (r *evaluationRepository) TransitionAssignment(ctx context.Context, input s
 			SET status = $3, heartbeat_at = NOW(), started_at = COALESCE(started_at, NOW()), updated_at = NOW()
 			WHERE id = $1 AND lease_token_hash = $2 AND lease_expires_at > NOW()
 				AND status IN ('leased', 'running')
+				AND lease_epoch = (SELECT r.control_epoch FROM evaluation_assignments a JOIN evaluation_samples s ON s.id = a.sample_id JOIN evaluation_runs r ON r.id = s.run_id WHERE a.id = $1)
 			RETURNING sample_id`, input.AssignmentID, hashToken(input.LeaseToken), input.To).Scan(&sampleID)
 	} else {
 		err = tx.QueryRowContext(ctx, `
@@ -523,6 +525,7 @@ func (r *evaluationRepository) TransitionAssignment(ctx context.Context, input s
 				heartbeat_at = NOW(), finished_at = NOW(), updated_at = NOW()
 			WHERE id = $1 AND lease_token_hash = $2 AND lease_expires_at > NOW()
 				AND status IN ('leased', 'running')
+				AND lease_epoch = (SELECT r.control_epoch FROM evaluation_assignments a JOIN evaluation_samples s ON s.id = a.sample_id JOIN evaluation_runs r ON r.id = s.run_id WHERE a.id = $1)
 			RETURNING sample_id`, input.AssignmentID, hashToken(input.LeaseToken), input.To).Scan(&sampleID)
 	}
 	if errors.Is(err, sql.ErrNoRows) {
@@ -626,13 +629,14 @@ type assignmentCandidate struct {
 	priority          string
 	sampleIndex       int
 	attempt           int
+	leaseEpoch        int64
 }
 
 func reclaimExpiredAssignment(ctx context.Context, tx *sql.Tx, capabilities []string) (*assignmentCandidate, error) {
 	var expired assignmentCandidate
 	err := tx.QueryRowContext(ctx, `
 		SELECT a.id, a.sample_id, s.run_id, s.case_id, s.model_route,
-			s.model_config, s.model_config_sha256, s.priority, s.sample_index, a.attempt
+			s.model_config, s.model_config_sha256, s.priority, s.sample_index, a.attempt, r.control_epoch
 		FROM evaluation_assignments a
 		JOIN evaluation_samples s ON s.id = a.sample_id
 		JOIN evaluation_cases c ON c.id = s.case_id
@@ -642,6 +646,7 @@ func reclaimExpiredAssignment(ctx context.Context, tx *sql.Tx, capabilities []st
 		JOIN users u ON u.id = k.user_id
 		LEFT JOIN groups g ON g.id = k.group_id
 		WHERE a.status IN ('leased', 'running') AND a.lease_expires_at <= NOW()
+			AND a.lease_epoch = r.control_epoch
 			AND c.capability_domain = ANY($1::text[])
 			AND p.enabled = TRUE
 			AND k.is_evaluation = TRUE AND k.status = 'active' AND k.deleted_at IS NULL
@@ -664,7 +669,7 @@ func reclaimExpiredAssignment(ctx context.Context, tx *sql.Tx, capabilities []st
 		LIMIT 1`, pq.Array(capabilities)).Scan(
 		&expired.id, &expired.sampleID, &expired.runID, &expired.caseID,
 		&expired.modelRoute, &expired.modelConfig, &expired.modelConfigSHA256,
-		&expired.priority, &expired.sampleIndex, &expired.attempt)
+		&expired.priority, &expired.sampleIndex, &expired.attempt, &expired.leaseEpoch)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, nil
 	}
@@ -691,10 +696,10 @@ func reclaimExpiredAssignment(ctx context.Context, tx *sql.Tx, capabilities []st
 	replacement.id = uuid.New()
 	replacement.attempt = nextAttempt
 	if _, err := tx.ExecContext(ctx, `
-		INSERT INTO evaluation_assignments (id, sample_id, attempt, idempotency_key, status)
-		VALUES ($1, $2, $3, $4, 'pending')`,
+		INSERT INTO evaluation_assignments (id, sample_id, attempt, idempotency_key, status, lease_epoch)
+		VALUES ($1, $2, $3, $4, 'pending', $5)`,
 		replacement.id, expired.sampleID, nextAttempt,
-		assignmentIdempotencyKey(expired.runID, expired.caseID, expired.modelRoute, expired.sampleIndex, nextAttempt)); err != nil {
+		assignmentIdempotencyKey(expired.runID, expired.caseID, expired.modelRoute, expired.sampleIndex, nextAttempt), expired.leaseEpoch); err != nil {
 		return nil, fmt.Errorf("create replacement evaluation assignment: %w", err)
 	}
 	return &replacement, nil
@@ -704,7 +709,7 @@ func selectPendingAssignment(ctx context.Context, tx *sql.Tx, capabilities []str
 	var candidate assignmentCandidate
 	err := tx.QueryRowContext(ctx, `
 		SELECT a.id, a.sample_id, s.run_id, s.case_id, s.model_route,
-			s.model_config, s.model_config_sha256, s.priority, s.sample_index, a.attempt
+			s.model_config, s.model_config_sha256, s.priority, s.sample_index, a.attempt, r.control_epoch
 		FROM evaluation_assignments a
 		JOIN evaluation_samples s ON s.id = a.sample_id
 		JOIN evaluation_cases c ON c.id = s.case_id
@@ -714,6 +719,7 @@ func selectPendingAssignment(ctx context.Context, tx *sql.Tx, capabilities []str
 		JOIN users u ON u.id = k.user_id
 		LEFT JOIN groups g ON g.id = k.group_id
 		WHERE a.status = 'pending'
+			AND a.lease_epoch = r.control_epoch
 			AND c.capability_domain = ANY($1::text[])
 			AND p.enabled = TRUE
 			AND k.is_evaluation = TRUE AND k.status = 'active' AND k.deleted_at IS NULL
@@ -736,7 +742,7 @@ func selectPendingAssignment(ctx context.Context, tx *sql.Tx, capabilities []str
 		LIMIT 1`, pq.Array(capabilities)).Scan(
 		&candidate.id, &candidate.sampleID, &candidate.runID, &candidate.caseID,
 		&candidate.modelRoute, &candidate.modelConfig, &candidate.modelConfigSHA256,
-		&candidate.priority, &candidate.sampleIndex, &candidate.attempt)
+		&candidate.priority, &candidate.sampleIndex, &candidate.attempt, &candidate.leaseEpoch)
 	if err != nil {
 		return assignmentCandidate{}, err
 	}

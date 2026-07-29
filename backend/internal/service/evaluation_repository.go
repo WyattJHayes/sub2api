@@ -36,6 +36,12 @@ type EvaluationRun struct {
 	ContractStatus        string          `json:"contract_status,omitempty"`
 	RequestManifestID     uuid.UUID       `json:"request_manifest_id,omitempty"`
 	RequestManifestSHA256 string          `json:"request_manifest_sha256,omitempty"`
+	PausedFromStatus      RunStatus       `json:"paused_from_status,omitempty"`
+	PauseReason           string          `json:"pause_reason,omitempty"`
+	ControlEpoch          int64           `json:"control_epoch"`
+	StateVersion          int64           `json:"state_version"`
+	CancelledAt           *time.Time      `json:"cancelled_at,omitempty"`
+	CancelledBy           *int64          `json:"cancelled_by,omitempty"`
 }
 
 type AssignmentLease struct {

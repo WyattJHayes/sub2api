@@ -13,6 +13,8 @@ var (
 	ErrRadarWorkerConflict            = infraerrors.Conflict("RADAR_WORKER_CONFLICT", "worker identity conflicts with an existing worker")
 	ErrRadarWorkerIdempotencyConflict = infraerrors.Conflict("RADAR_WORKER_IDEMPOTENCY_CONFLICT", "worker idempotency key was reused with a different request")
 	ErrRadarWorkerStateConflict       = infraerrors.Conflict("RADAR_WORKER_STATE_CONFLICT", "worker is not in a state that accepts this action")
+	ErrRadarRunIdempotencyConflict    = infraerrors.Conflict("RADAR_RUN_IDEMPOTENCY_CONFLICT", "run idempotency key was reused with a different request")
+	ErrRadarRunStateConflict          = infraerrors.Conflict("RADAR_RUN_STATE_CONFLICT", "run is not in a state that accepts this action")
 )
 
 // RadarGovernanceRepository is the durable control-plane contract for Radar
@@ -52,6 +54,33 @@ type RadarGovernanceRepository interface {
 	ResolveAlert(ctx context.Context, alertID uuid.UUID, actorID int64) error
 	RecordAttribution(ctx context.Context, input RadarAttributionInput) (*RadarAttributionRecord, error)
 	GetAlert(ctx context.Context, id uuid.UUID) (*RadarAlertRecord, error)
+}
+
+type RadarRunControlRepository interface {
+	PauseRun(ctx context.Context, input RadarRunActionInput) (*RadarRunActionResult, error)
+	ResumeRun(ctx context.Context, input RadarRunActionInput) (*RadarRunActionResult, error)
+	CancelRun(ctx context.Context, input RadarRunActionInput) (*RadarRunActionResult, error)
+	FenceRun(ctx context.Context, input RadarRunActionInput) (*RadarRunActionResult, error)
+}
+
+type RadarRunActionInput struct {
+	RunID          uuid.UUID
+	Reason         string
+	ActorID        int64
+	IdempotencyKey string
+}
+
+type RadarRunActionResult struct {
+	RunID             uuid.UUID      `json:"run_id"`
+	FromStatus        RunStatus      `json:"from_status"`
+	ToStatus          RunStatus      `json:"to_status"`
+	PreviousEpoch     int64          `json:"previous_epoch"`
+	CurrentEpoch      int64          `json:"current_epoch"`
+	AffectedWorkCount int            `json:"affected_work_count"`
+	ReplacementIDs    []uuid.UUID    `json:"replacement_ids,omitempty"`
+	EventID           uuid.UUID      `json:"event_id"`
+	Idempotent        bool           `json:"idempotent"`
+	Run               *EvaluationRun `json:"run,omitempty"`
 }
 
 type RadarEvaluationKeyRecord struct {
