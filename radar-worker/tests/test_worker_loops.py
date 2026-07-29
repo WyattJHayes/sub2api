@@ -20,8 +20,8 @@ from sub2api_radar.models import (
     GradingLease,
 )
 from sub2api_radar.runner import Runner, build_executor, runner_main
-from sub2api_radar.statistics.service import StatisticsWorker
 from sub2api_radar.state import AtomicStateStore, LocalState, StateRecord
+from sub2api_radar.statistics.service import StatisticsWorker
 
 
 def settings(mode: str = "runner") -> Settings:
