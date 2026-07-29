@@ -16,7 +16,7 @@ import (
 )
 
 type radarGovernanceHandlerRepoStub struct {
-	service.StaticRadarAuthorizer
+	*service.StaticRadarAuthorizer
 	proposed             *service.RadarBaselineInput
 	gateDecision         *service.RadarGateDecisionInput
 	dataset              *service.CreateRadarDatasetInput
@@ -24,6 +24,8 @@ type radarGovernanceHandlerRepoStub struct {
 	run                  *service.CreateRunInput
 	evaluationKeyID      int64
 	evaluationKeyActorID int64
+	workerRegistration   *service.RadarWorkerRegistrationInput
+	workerAction         *service.RadarWorkerActionInput
 }
 
 func (s *radarGovernanceHandlerRepoStub) EnableEvaluationKey(_ context.Context, keyID, actorID int64) (*service.RadarEvaluationKeyRecord, error) {
@@ -46,6 +48,30 @@ func (s *radarGovernanceHandlerRepoStub) CreatePlan(_ context.Context, input ser
 func (s *radarGovernanceHandlerRepoStub) CreateRunWithMatrix(_ context.Context, input service.CreateRunInput) (*service.EvaluationRun, error) {
 	s.run = &input
 	return &service.EvaluationRun{ID: uuid.New(), PlanID: input.PlanID}, nil
+}
+
+func (s *radarGovernanceHandlerRepoStub) RegisterWorker(_ context.Context, input service.RadarWorkerRegistrationInput) (*service.RadarWorkerRecord, error) {
+	s.workerRegistration = &input
+	return &service.RadarWorkerRecord{ID: uuid.New(), Name: input.Name, TokenFingerprint: "0123456789ab"}, nil
+}
+func (s *radarGovernanceHandlerRepoStub) RotateWorkerToken(_ context.Context, input service.RadarWorkerTokenRotationInput) (*service.RadarWorkerRecord, error) {
+	return &service.RadarWorkerRecord{ID: input.WorkerID, TokenFingerprint: "0123456789ab"}, nil
+}
+func (s *radarGovernanceHandlerRepoStub) PauseWorkerClaims(_ context.Context, input service.RadarWorkerActionInput) (*service.RadarWorkerActionResult, error) {
+	s.workerAction = &input
+	return &service.RadarWorkerActionResult{ClaimMode: "paused"}, nil
+}
+func (s *radarGovernanceHandlerRepoStub) ResumeWorkerClaims(_ context.Context, input service.RadarWorkerActionInput) (*service.RadarWorkerActionResult, error) {
+	s.workerAction = &input
+	return &service.RadarWorkerActionResult{ClaimMode: "open"}, nil
+}
+func (s *radarGovernanceHandlerRepoStub) DrainWorker(_ context.Context, input service.RadarWorkerActionInput) (*service.RadarWorkerActionResult, error) {
+	s.workerAction = &input
+	return &service.RadarWorkerActionResult{ClaimMode: "draining"}, nil
+}
+func (s *radarGovernanceHandlerRepoStub) DisableWorker(_ context.Context, input service.RadarWorkerActionInput) (*service.RadarWorkerActionResult, error) {
+	s.workerAction = &input
+	return &service.RadarWorkerActionResult{ClaimMode: "draining"}, nil
 }
 
 func (s *radarGovernanceHandlerRepoStub) CreateRoleBinding(context.Context, service.RadarRoleBindingInput) (*service.RadarRoleBinding, error) {
@@ -109,7 +135,7 @@ func radarGovernanceTestContext(userID int64) *gin.Context {
 
 func TestRadarGovernanceHandlerUsesAuthenticatedActorForBaselineProposal(t *testing.T) {
 	auth := service.NewStaticRadarAuthorizer(map[int64][]service.RadarRole{77: {service.RoleQualityAdmin}})
-	repo := &radarGovernanceHandlerRepoStub{StaticRadarAuthorizer: *auth}
+	repo := &radarGovernanceHandlerRepoStub{StaticRadarAuthorizer: auth}
 	h := NewRadarGovernanceHandler(repo)
 	c := radarGovernanceTestContext(77)
 	c.Request = httptest.NewRequest(http.MethodPost, "/", bytes.NewBufferString(`{"model_route":"deepseek","run_id":"`+uuid.NewString()+`","dataset_manifest_sha256":"`+string(bytes.Repeat([]byte("a"), 64))+`","evidence_hash":"`+string(bytes.Repeat([]byte("b"), 64))+`","route_profile_version":"v1","policy_version":1}`))
@@ -121,7 +147,7 @@ func TestRadarGovernanceHandlerUsesAuthenticatedActorForBaselineProposal(t *test
 
 func TestRadarGovernanceHandlerRejectsMissingRadarPermission(t *testing.T) {
 	auth := service.NewStaticRadarAuthorizer(map[int64][]service.RadarRole{77: {service.RoleViewer}})
-	repo := &radarGovernanceHandlerRepoStub{StaticRadarAuthorizer: *auth}
+	repo := &radarGovernanceHandlerRepoStub{StaticRadarAuthorizer: auth}
 	h := NewRadarGovernanceHandler(repo)
 	c := radarGovernanceTestContext(77)
 	c.Request = httptest.NewRequest(http.MethodPost, "/", bytes.NewBufferString(`{}`))
@@ -131,7 +157,7 @@ func TestRadarGovernanceHandlerRejectsMissingRadarPermission(t *testing.T) {
 
 func TestRadarGovernanceHandlerDerivesGateStatusServerSide(t *testing.T) {
 	auth := service.NewStaticRadarAuthorizer(map[int64][]service.RadarRole{77: {service.RoleReleaseManager}})
-	repo := &radarGovernanceHandlerRepoStub{StaticRadarAuthorizer: *auth}
+	repo := &radarGovernanceHandlerRepoStub{StaticRadarAuthorizer: auth}
 	h := NewRadarGovernanceHandler(repo)
 	c := radarGovernanceTestContext(77)
 	c.Request = httptest.NewRequest(http.MethodPost, "/", bytes.NewBufferString(`{
@@ -150,7 +176,7 @@ func TestRadarGovernanceHandlerDerivesGateStatusServerSide(t *testing.T) {
 
 func TestRadarGovernanceHandlerCreatesDatasetWithAuthenticatedActor(t *testing.T) {
 	auth := service.NewStaticRadarAuthorizer(map[int64][]service.RadarRole{77: {service.RoleQualityAdmin}})
-	repo := &radarGovernanceHandlerRepoStub{StaticRadarAuthorizer: *auth}
+	repo := &radarGovernanceHandlerRepoStub{StaticRadarAuthorizer: auth}
 	h := NewRadarGovernanceHandler(repo)
 	c := radarGovernanceTestContext(77)
 	c.Request = httptest.NewRequest(http.MethodPost, "/", bytes.NewBufferString(`{
@@ -169,7 +195,7 @@ func TestRadarGovernanceHandlerCreatesDatasetWithAuthenticatedActor(t *testing.T
 
 func TestRadarGovernanceHandlerStartsRunWithAuthenticatedActor(t *testing.T) {
 	auth := service.NewStaticRadarAuthorizer(map[int64][]service.RadarRole{77: {service.RoleTestOperator}})
-	repo := &radarGovernanceHandlerRepoStub{StaticRadarAuthorizer: *auth}
+	repo := &radarGovernanceHandlerRepoStub{StaticRadarAuthorizer: auth}
 	h := NewRadarGovernanceHandler(repo)
 	planID := uuid.New()
 	c := radarGovernanceTestContext(77)
@@ -185,7 +211,7 @@ func TestRadarGovernanceHandlerStartsRunWithAuthenticatedActor(t *testing.T) {
 
 func TestRadarGovernanceHandlerEnablesEvaluationKeyWithAuthenticatedActor(t *testing.T) {
 	auth := service.NewStaticRadarAuthorizer(map[int64][]service.RadarRole{77: {service.RolePlatformAdmin}})
-	repo := &radarGovernanceHandlerRepoStub{StaticRadarAuthorizer: *auth}
+	repo := &radarGovernanceHandlerRepoStub{StaticRadarAuthorizer: auth}
 	h := NewRadarGovernanceHandler(repo)
 	c := radarGovernanceTestContext(77)
 	c.Params = gin.Params{{Key: "id", Value: "42"}}
@@ -195,4 +221,39 @@ func TestRadarGovernanceHandlerEnablesEvaluationKeyWithAuthenticatedActor(t *tes
 	require.Equal(t, http.StatusOK, c.Writer.Status())
 	require.Equal(t, int64(42), repo.evaluationKeyID)
 	require.Equal(t, int64(77), repo.evaluationKeyActorID)
+}
+
+func TestRadarGovernanceHandlerRegistersWorkerWithAuthenticatedActor(t *testing.T) {
+	auth := service.NewStaticRadarAuthorizer(map[int64][]service.RadarRole{77: {service.RoleTestOperator}})
+	repo := &radarGovernanceHandlerRepoStub{StaticRadarAuthorizer: auth}
+	h := NewRadarGovernanceHandler(repo)
+	c := radarGovernanceTestContext(77)
+	c.Request = httptest.NewRequest(http.MethodPost, "/", bytes.NewBufferString(`{
+		"name":"runner-a","worker_kind":"runner","region":"us-east",
+		"image_digest":"sha256:runner","capabilities":["coding"],"max_concurrency":2,
+		"token":"runner-secret","idempotency_key":"`+string(bytes.Repeat([]byte("a"), 64))+`"}`))
+
+	h.RegisterWorker(c)
+
+	require.Equal(t, http.StatusCreated, c.Writer.Status())
+	require.NotNil(t, repo.workerRegistration)
+	require.Equal(t, int64(77), repo.workerRegistration.ActorID)
+	require.Equal(t, "runner-a", repo.workerRegistration.Name)
+}
+
+func TestRadarGovernanceHandlerPausesWorkerClaimsWithAuthenticatedActor(t *testing.T) {
+	auth := service.NewStaticRadarAuthorizer(map[int64][]service.RadarRole{77: {service.RoleTestOperator}})
+	repo := &radarGovernanceHandlerRepoStub{StaticRadarAuthorizer: auth}
+	h := NewRadarGovernanceHandler(repo)
+	c := radarGovernanceTestContext(77)
+	workerID := uuid.New()
+	c.Params = gin.Params{{Key: "id", Value: workerID.String()}}
+	c.Request = httptest.NewRequest(http.MethodPost, "/", bytes.NewBufferString(`{"reason":"maintenance","idempotency_key":"`+string(bytes.Repeat([]byte("b"), 64))+`"}`))
+
+	h.PauseWorkerClaims(c)
+
+	require.Equal(t, http.StatusOK, c.Writer.Status())
+	require.NotNil(t, repo.workerAction)
+	require.Equal(t, workerID, repo.workerAction.WorkerID)
+	require.Equal(t, int64(77), repo.workerAction.ActorID)
 }

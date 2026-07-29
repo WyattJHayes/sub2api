@@ -665,7 +665,7 @@ func (r *radarGovernanceRepository) ListWorkers(ctx context.Context) ([]service.
 	if err := r.valid(); err != nil {
 		return nil, err
 	}
-	rows, err := r.db.QueryContext(ctx, `SELECT id, name, worker_kind, status, last_heartbeat_at, capabilities FROM evaluation_workers ORDER BY name`)
+	rows, err := r.db.QueryContext(ctx, `SELECT id, name, worker_kind, status, claim_mode, region, image_digest, last_heartbeat_at, capabilities FROM evaluation_workers ORDER BY name`)
 	if err != nil {
 		return nil, fmt.Errorf("list radar workers: %w", err)
 	}
@@ -674,7 +674,7 @@ func (r *radarGovernanceRepository) ListWorkers(ctx context.Context) ([]service.
 	for rows.Next() {
 		var item service.RadarWorkerProjection
 		var capabilities pq.StringArray
-		if err := rows.Scan(&item.ID, &item.Name, &item.WorkerKind, &item.Status, &item.LastHeartbeatAt, &capabilities); err != nil {
+		if err := rows.Scan(&item.ID, &item.Name, &item.WorkerKind, &item.Status, &item.ClaimMode, &item.Region, &item.ImageDigest, &item.LastHeartbeatAt, &capabilities); err != nil {
 			return nil, err
 		}
 		item.Capabilities = []string(capabilities)

@@ -279,11 +279,11 @@ func (r *evaluationGradingRepository) ClaimGradingLease(ctx context.Context, wor
 	}
 	defer func() { _ = tx.Rollback() }()
 
-	var kind string
+	var kind, claimMode string
 	var capabilities pq.StringArray
 	if err := tx.QueryRowContext(ctx, `
-		SELECT worker_kind, capabilities FROM evaluation_workers
-		WHERE id = $1 AND status = 'active' FOR UPDATE`, workerID).Scan(&kind, &capabilities); err != nil {
+		SELECT worker_kind, capabilities, claim_mode FROM evaluation_workers
+		WHERE id = $1 AND status = 'active' FOR UPDATE`, workerID).Scan(&kind, &capabilities, &claimMode); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return nil, errors.New("evaluation grader worker is unavailable")
 		}
@@ -291,6 +291,12 @@ func (r *evaluationGradingRepository) ClaimGradingLease(ctx context.Context, wor
 	}
 	if kind != "grader" {
 		return nil, service.ErrWorkerKindMismatch
+	}
+	if claimMode != "open" {
+		if err := tx.Commit(); err != nil {
+			return nil, fmt.Errorf("commit paused grader claim: %w", err)
+		}
+		return nil, nil
 	}
 	allowed := authorizedWorkerCapabilities(graderIDs, capabilities)
 	if len(allowed) == 0 {
@@ -628,9 +634,9 @@ func (r *evaluationGradingRepository) ClaimAnalysisJob(ctx context.Context, work
 		return nil, fmt.Errorf("begin analysis lease claim: %w", err)
 	}
 	defer func() { _ = tx.Rollback() }()
-	var kind string
+	var kind, claimMode string
 	var registered pq.StringArray
-	if err := tx.QueryRowContext(ctx, `SELECT worker_kind, capabilities FROM evaluation_workers WHERE id = $1 AND status = 'active' FOR UPDATE`, workerID).Scan(&kind, &registered); err != nil {
+	if err := tx.QueryRowContext(ctx, `SELECT worker_kind, capabilities, claim_mode FROM evaluation_workers WHERE id = $1 AND status = 'active' FOR UPDATE`, workerID).Scan(&kind, &registered, &claimMode); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return nil, errors.New("statistics worker is unavailable")
 		}
@@ -638,6 +644,12 @@ func (r *evaluationGradingRepository) ClaimAnalysisJob(ctx context.Context, work
 	}
 	if kind != "statistics" {
 		return nil, service.ErrWorkerKindMismatch
+	}
+	if claimMode != "open" {
+		if err := tx.Commit(); err != nil {
+			return nil, fmt.Errorf("commit paused statistics claim: %w", err)
+		}
+		return nil, nil
 	}
 	allowed := authorizedWorkerCapabilities(capabilities, registered)
 	if len(allowed) == 0 {

@@ -3,6 +3,7 @@ package admin
 import (
 	"context"
 	"database/sql"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"net/http"
@@ -213,6 +214,145 @@ func (h *RadarGovernanceHandler) StartRun(c *gin.Context) {
 		return
 	}
 	response.Accepted(c, run)
+}
+
+type radarWorkerRegistrationRequest struct {
+	Name           string   `json:"name" binding:"required"`
+	WorkerKind     string   `json:"worker_kind" binding:"required"`
+	Region         string   `json:"region" binding:"required"`
+	ImageDigest    string   `json:"image_digest" binding:"required"`
+	Capabilities   []string `json:"capabilities"`
+	MaxConcurrency int      `json:"max_concurrency" binding:"required,gt=0,lte=1000"`
+	Token          string   `json:"token" binding:"required"`
+	IdempotencyKey string   `json:"idempotency_key" binding:"required,len=64"`
+}
+
+type radarWorkerTokenRotationRequest struct {
+	Token          string `json:"token" binding:"required"`
+	IdempotencyKey string `json:"idempotency_key" binding:"required,len=64"`
+}
+
+type radarWorkerActionRequest struct {
+	Reason         string `json:"reason" binding:"required"`
+	IdempotencyKey string `json:"idempotency_key" binding:"required,len=64"`
+}
+
+func validWorkerIdempotencyKeyRequest(c *gin.Context, value string) bool {
+	if len(value) == 64 {
+		if _, err := hex.DecodeString(value); err == nil {
+			return true
+		}
+	}
+	response.BadRequest(c, "idempotency_key must be 64 hexadecimal characters")
+	return false
+}
+
+func (h *RadarGovernanceHandler) RegisterWorker(c *gin.Context) {
+	actorID, ok := h.require(c, service.PermissionWorkerManage)
+	if !ok {
+		return
+	}
+	var req radarWorkerRegistrationRequest
+	if !decodeJSON(c, &req) {
+		return
+	}
+	if !validWorkerIdempotencyKeyRequest(c, req.IdempotencyKey) {
+		return
+	}
+	worker, err := h.repo.RegisterWorker(c.Request.Context(), service.RadarWorkerRegistrationInput{
+		Name: req.Name, WorkerKind: req.WorkerKind, Region: req.Region, ImageDigest: req.ImageDigest,
+		Capabilities: req.Capabilities, MaxConcurrency: req.MaxConcurrency, Token: req.Token,
+		ActorID: actorID, IdempotencyKey: req.IdempotencyKey,
+	})
+	if err != nil {
+		response.ErrorFrom(c, err)
+		return
+	}
+	response.Created(c, worker)
+}
+
+func (h *RadarGovernanceHandler) RotateWorkerToken(c *gin.Context) {
+	actorID, ok := h.require(c, service.PermissionWorkerManage)
+	if !ok {
+		return
+	}
+	workerID, ok := parseUUIDParam(c, "id")
+	if !ok {
+		return
+	}
+	var req radarWorkerTokenRotationRequest
+	if !decodeJSON(c, &req) {
+		return
+	}
+	if !validWorkerIdempotencyKeyRequest(c, req.IdempotencyKey) {
+		return
+	}
+	worker, err := h.repo.RotateWorkerToken(c.Request.Context(), service.RadarWorkerTokenRotationInput{
+		WorkerID: workerID, Token: req.Token, ActorID: actorID, IdempotencyKey: req.IdempotencyKey,
+	})
+	if errors.Is(err, sql.ErrNoRows) {
+		response.NotFound(c, "Worker not found")
+		return
+	}
+	if err != nil {
+		response.ErrorFrom(c, err)
+		return
+	}
+	response.Success(c, worker)
+}
+
+func (h *RadarGovernanceHandler) workerAction(c *gin.Context, action func(service.RadarWorkerActionInput) (*service.RadarWorkerActionResult, error)) {
+	actorID, ok := h.require(c, service.PermissionWorkerManage)
+	if !ok {
+		return
+	}
+	workerID, ok := parseUUIDParam(c, "id")
+	if !ok {
+		return
+	}
+	var req radarWorkerActionRequest
+	if !decodeJSON(c, &req) {
+		return
+	}
+	if !validWorkerIdempotencyKeyRequest(c, req.IdempotencyKey) {
+		return
+	}
+	result, err := action(service.RadarWorkerActionInput{
+		WorkerID: workerID, Reason: strings.TrimSpace(req.Reason), ActorID: actorID, IdempotencyKey: req.IdempotencyKey,
+	})
+	if errors.Is(err, sql.ErrNoRows) {
+		response.NotFound(c, "Worker not found")
+		return
+	}
+	if err != nil {
+		response.ErrorFrom(c, err)
+		return
+	}
+	response.Success(c, result)
+}
+
+func (h *RadarGovernanceHandler) PauseWorkerClaims(c *gin.Context) {
+	h.workerAction(c, func(input service.RadarWorkerActionInput) (*service.RadarWorkerActionResult, error) {
+		return h.repo.PauseWorkerClaims(c.Request.Context(), input)
+	})
+}
+
+func (h *RadarGovernanceHandler) ResumeWorkerClaims(c *gin.Context) {
+	h.workerAction(c, func(input service.RadarWorkerActionInput) (*service.RadarWorkerActionResult, error) {
+		return h.repo.ResumeWorkerClaims(c.Request.Context(), input)
+	})
+}
+
+func (h *RadarGovernanceHandler) DrainWorker(c *gin.Context) {
+	h.workerAction(c, func(input service.RadarWorkerActionInput) (*service.RadarWorkerActionResult, error) {
+		return h.repo.DrainWorker(c.Request.Context(), input)
+	})
+}
+
+func (h *RadarGovernanceHandler) DisableWorker(c *gin.Context) {
+	h.workerAction(c, func(input service.RadarWorkerActionInput) (*service.RadarWorkerActionResult, error) {
+		return h.repo.DisableWorker(c.Request.Context(), input)
+	})
 }
 
 type radarRoleBindingRequest struct {

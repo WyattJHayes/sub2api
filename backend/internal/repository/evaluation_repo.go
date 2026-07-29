@@ -314,15 +314,22 @@ func (r *evaluationRepository) ClaimAssignment(ctx context.Context, workerID uui
 	defer func() { _ = tx.Rollback() }()
 
 	var registeredCapabilities pq.StringArray
+	var claimMode string
 	err = tx.QueryRowContext(ctx, `
-		SELECT capabilities FROM evaluation_workers
+		SELECT capabilities, claim_mode FROM evaluation_workers
 		WHERE id = $1 AND status = 'active'
-		FOR UPDATE`, workerID).Scan(&registeredCapabilities)
+		FOR UPDATE`, workerID).Scan(&registeredCapabilities, &claimMode)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, errors.New("evaluation worker is unavailable")
 	}
 	if err != nil {
 		return nil, fmt.Errorf("lock evaluation worker: %w", err)
+	}
+	if claimMode != "open" {
+		if err := tx.Commit(); err != nil {
+			return nil, fmt.Errorf("commit paused evaluation assignment claim: %w", err)
+		}
+		return nil, nil
 	}
 	authorizedCapabilities := intersectCapabilities(capabilities, registeredCapabilities)
 	if len(authorizedCapabilities) == 0 {

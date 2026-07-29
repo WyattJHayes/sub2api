@@ -5,7 +5,14 @@ import (
 	"encoding/json"
 	"time"
 
+	infraerrors "github.com/Wei-Shaw/sub2api/internal/pkg/errors"
 	"github.com/google/uuid"
+)
+
+var (
+	ErrRadarWorkerConflict            = infraerrors.Conflict("RADAR_WORKER_CONFLICT", "worker identity conflicts with an existing worker")
+	ErrRadarWorkerIdempotencyConflict = infraerrors.Conflict("RADAR_WORKER_IDEMPOTENCY_CONFLICT", "worker idempotency key was reused with a different request")
+	ErrRadarWorkerStateConflict       = infraerrors.Conflict("RADAR_WORKER_STATE_CONFLICT", "worker is not in a state that accepts this action")
 )
 
 // RadarGovernanceRepository is the durable control-plane contract for Radar
@@ -19,6 +26,12 @@ type RadarGovernanceRepository interface {
 	PublishDataset(ctx context.Context, datasetID uuid.UUID, actorID int64) (*RadarDatasetRecord, error)
 	CreatePlan(ctx context.Context, input CreateRadarPlanInput) (*RadarPlanRecord, error)
 	CreateRunWithMatrix(ctx context.Context, input CreateRunInput) (*EvaluationRun, error)
+	RegisterWorker(ctx context.Context, input RadarWorkerRegistrationInput) (*RadarWorkerRecord, error)
+	RotateWorkerToken(ctx context.Context, input RadarWorkerTokenRotationInput) (*RadarWorkerRecord, error)
+	PauseWorkerClaims(ctx context.Context, input RadarWorkerActionInput) (*RadarWorkerActionResult, error)
+	ResumeWorkerClaims(ctx context.Context, input RadarWorkerActionInput) (*RadarWorkerActionResult, error)
+	DrainWorker(ctx context.Context, input RadarWorkerActionInput) (*RadarWorkerActionResult, error)
+	DisableWorker(ctx context.Context, input RadarWorkerActionInput) (*RadarWorkerActionResult, error)
 
 	CreateRoleBinding(ctx context.Context, input RadarRoleBindingInput) (*RadarRoleBinding, error)
 	DisableRoleBinding(ctx context.Context, id uuid.UUID, actorID int64) error
@@ -113,8 +126,60 @@ type RadarWorkerProjection struct {
 	Name            string     `json:"name"`
 	WorkerKind      string     `json:"worker_kind"`
 	Status          string     `json:"status"`
+	ClaimMode       string     `json:"claim_mode"`
+	Region          string     `json:"region,omitempty"`
+	ImageDigest     string     `json:"image_digest,omitempty"`
 	LastHeartbeatAt *time.Time `json:"last_heartbeat_at,omitempty"`
 	Capabilities    []string   `json:"capabilities,omitempty"`
+}
+
+type RadarWorkerRegistrationInput struct {
+	Name           string
+	WorkerKind     string
+	Region         string
+	ImageDigest    string
+	Capabilities   []string
+	MaxConcurrency int
+	Token          string
+	ActorID        int64
+	IdempotencyKey string
+}
+
+type RadarWorkerTokenRotationInput struct {
+	WorkerID       uuid.UUID
+	Token          string
+	ActorID        int64
+	IdempotencyKey string
+}
+
+type RadarWorkerActionInput struct {
+	WorkerID       uuid.UUID
+	Reason         string
+	ActorID        int64
+	IdempotencyKey string
+}
+
+type RadarWorkerRecord struct {
+	ID               uuid.UUID  `json:"id"`
+	Name             string     `json:"name"`
+	WorkerKind       string     `json:"worker_kind"`
+	Region           string     `json:"region"`
+	ImageDigest      string     `json:"image_digest"`
+	Status           string     `json:"status"`
+	ClaimMode        string     `json:"claim_mode"`
+	Capabilities     []string   `json:"capabilities,omitempty"`
+	MaxConcurrency   int        `json:"max_concurrency"`
+	LastHeartbeatAt  *time.Time `json:"last_heartbeat_at,omitempty"`
+	TokenFingerprint string     `json:"token_fingerprint"`
+}
+
+type RadarWorkerActionResult struct {
+	Worker            *RadarWorkerRecord `json:"worker"`
+	EventID           uuid.UUID          `json:"event_id"`
+	PreviousClaimMode string             `json:"previous_claim_mode"`
+	ClaimMode         string             `json:"claim_mode"`
+	ActiveLeaseCount  int                `json:"active_lease_count"`
+	Idempotent        bool               `json:"idempotent"`
 }
 
 type RadarDatasetProjection struct {
