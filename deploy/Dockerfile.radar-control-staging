@@ -1,6 +1,6 @@
 ARG NODE_IMAGE=node:24-alpine
 ARG GOLANG_IMAGE=golang:1.26.5-alpine
-ARG RUNTIME_IMAGE=sub2api-custom:0.1.151-disable-image-generation.1
+ARG ALPINE_IMAGE=alpine:3.20
 ARG GOPROXY=https://goproxy.cn,direct
 ARG GOSUMDB=sum.golang.google.cn
 
@@ -45,9 +45,29 @@ RUN CGO_ENABLED=0 GOOS=linux go build \
     -o /app/sub2api \
     ./cmd/server
 
-FROM ${RUNTIME_IMAGE}
+FROM ${ALPINE_IMAGE}
+
+RUN apk add --no-cache ca-certificates tzdata curl su-exec \
+    && rm -rf /var/cache/apk/*
+
+RUN addgroup -g 1000 sub2api \
+    && adduser -u 1000 -G sub2api -s /bin/sh -D sub2api
+
+WORKDIR /app
 
 COPY --from=backend-builder /app/sub2api /app/sub2api
 
-USER root
-RUN chown sub2api:sub2api /app/sub2api && chmod 0755 /app/sub2api
+RUN mkdir -p /app/data \
+    && chown -R sub2api:sub2api /app \
+    && chmod 0755 /app/sub2api
+
+COPY deploy/docker-entrypoint.sh /app/docker-entrypoint.sh
+RUN chmod 0755 /app/docker-entrypoint.sh
+
+EXPOSE 8080
+
+HEALTHCHECK --interval=30s --timeout=10s --start-period=10s --retries=3 \
+    CMD wget -q -T 5 -O /dev/null http://localhost:${SERVER_PORT:-8080}/health || exit 1
+
+ENTRYPOINT ["/app/docker-entrypoint.sh"]
+CMD ["/app/sub2api"]

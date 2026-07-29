@@ -16,6 +16,7 @@ func TestRadarStagingDockerfileBuildsReleaseArtifactFromSource(t *testing.T) {
 	dockerfile := string(contents)
 
 	required := []string{
+		"ARG ALPINE_IMAGE=alpine:3.20",
 		"AS frontend-builder",
 		"corepack prepare pnpm@11.5.2 --activate",
 		"COPY frontend/package.json frontend/pnpm-lock.yaml frontend/pnpm-workspace.yaml ./",
@@ -24,7 +25,11 @@ func TestRadarStagingDockerfileBuildsReleaseArtifactFromSource(t *testing.T) {
 		"COPY --from=frontend-builder /app/backend/internal/web/dist ./internal/web/dist",
 		"go build",
 		"-tags embed",
+		"FROM ${ALPINE_IMAGE}",
 		"COPY --from=backend-builder /app/sub2api /app/sub2api",
+		"COPY deploy/docker-entrypoint.sh /app/docker-entrypoint.sh",
+		"ENTRYPOINT [\"/app/docker-entrypoint.sh\"]",
+		"CMD [\"/app/sub2api\"]",
 	}
 	for _, fragment := range required {
 		if !strings.Contains(dockerfile, fragment) {
@@ -33,6 +38,9 @@ func TestRadarStagingDockerfileBuildsReleaseArtifactFromSource(t *testing.T) {
 	}
 	if strings.Contains(dockerfile, "COPY radar-control-plane /app/sub2api") {
 		t.Error("Radar staging Dockerfile must not copy a manually built control-plane binary")
+	}
+	if strings.Contains(dockerfile, "sub2api-custom") {
+		t.Error("Radar staging Dockerfile must not depend on an unpublished local runtime image")
 	}
 }
 
