@@ -150,19 +150,67 @@ func (r *evaluationRepository) CreateRunWithMatrix(ctx context.Context, input se
 	if err != nil {
 		return nil, fmt.Errorf("insert evaluation run: %w", err)
 	}
+	manifest := defaultRequestManifest(run.ID)
+	manifestBytes, manifestHash, err := service.CanonicalRequestManifest(manifest)
+	if err != nil {
+		return nil, fmt.Errorf("build request manifest: %w", err)
+	}
+	if _, err := tx.ExecContext(ctx, `
+		INSERT INTO evaluation_request_manifests (
+			id, schema_version, interaction_type, canonical_manifest_bytes, manifest_sha256
+		) VALUES ($1, $2, $3, $4, $5)
+		ON CONFLICT (manifest_sha256) DO NOTHING`, manifest.ID, manifest.SchemaVersion,
+		manifest.InteractionType, manifestBytes, manifestHash); err != nil {
+		return nil, fmt.Errorf("insert run request manifest: %w", err)
+	}
+	run.ContractStatus = "bound"
+	run.RequestManifestID = manifest.ID
+	run.RequestManifestSHA256 = manifestHash
 
 	for _, evaluationCase := range cases {
-		for _, matrixEntry := range matrix {
-			for _, side := range []string{"baseline", "candidate"} {
-				modelRoute := side + ":" + matrixEntry.route
-				modelConfig, modelConfigSHA256 := matrixEntry.configForSide(side)
-				for sampleIndex := 0; sampleIndex < evaluationCase.sampleCount; sampleIndex++ {
-					if err := insertEvaluationSampleAndAssignment(
-						ctx, tx, run.ID, evaluationCase, modelRoute,
-						modelConfig, modelConfigSHA256, sampleIndex,
-					); err != nil {
-						return nil, err
-					}
+		for matrixIndex, matrixEntry := range matrix {
+			for sampleIndex := 0; sampleIndex < evaluationCase.sampleCount; sampleIndex++ {
+				baselineConfig, baselineConfigHash := matrixEntry.configForSide("baseline")
+				candidateConfig, candidateConfigHash := matrixEntry.configForSide("candidate")
+				baselineSampleID, err := insertEvaluationSampleAndAssignment(
+					ctx, tx, run.ID, evaluationCase, "baseline:"+matrixEntry.route,
+					baselineConfig, baselineConfigHash, sampleIndex,
+				)
+				if err != nil {
+					return nil, err
+				}
+				candidateSampleID, err := insertEvaluationSampleAndAssignment(
+					ctx, tx, run.ID, evaluationCase, "candidate:"+matrixEntry.route,
+					candidateConfig, candidateConfigHash, sampleIndex,
+				)
+				if err != nil {
+					return nil, err
+				}
+				pair := defaultPairSpec(run, evaluationCase, manifest, matrixIndex, sampleIndex)
+				baseline := defaultSideSpec("baseline", matrixEntry.route, baselineConfigHash, baselineSampleID)
+				candidate := defaultSideSpec("candidate", matrixEntry.route, candidateConfigHash, candidateSampleID)
+				baseline.PairSpecID = pair.ID
+				candidate.PairSpecID = pair.ID
+				pairBytes, pairHash, err := service.CanonicalPairSpec(pair)
+				if err != nil {
+					return nil, err
+				}
+				baselineBytes, baselineHash, err := service.CanonicalSideSpec(baseline)
+				if err != nil {
+					return nil, err
+				}
+				candidateBytes, candidateHash, err := service.CanonicalSideSpec(candidate)
+				if err != nil {
+					return nil, err
+				}
+				binding, err := service.BuildPairBinding(pair, baseline, candidate)
+				if err != nil {
+					return nil, err
+				}
+				if err := insertPairContractTx(ctx, tx, run.ID, manifest, pair, baseline, candidate,
+					manifestBytes, manifestHash, pairBytes, pairHash, baselineBytes, baselineHash,
+					candidateBytes, candidateHash, binding, nil); err != nil {
+					return nil, err
 				}
 			}
 		}
@@ -184,6 +232,69 @@ func (r *evaluationRepository) CreateRunWithMatrix(ctx context.Context, input se
 		return nil, fmt.Errorf("commit evaluation run transaction: %w", err)
 	}
 	return run, nil
+}
+
+func defaultRequestManifest(runID uuid.UUID) service.RequestManifest {
+	semanticsHash := hashString("request:" + runID.String())
+	toolHash := hashString("{}")
+	return service.RequestManifest{
+		ID:              uuid.New(),
+		SchemaVersion:   service.RequestManifestSchemaVersion,
+		InteractionType: service.InteractionSingle,
+		OrdinalPolicy:   service.OrdinalPolicyExact,
+		MinRequests:     1,
+		MaxRequests:     1,
+		RequestSlots: []service.RequestSlot{{
+			SlotID:                         "slot-0",
+			OrdinalMin:                     0,
+			OrdinalMax:                     0,
+			Phase:                          "prompt",
+			Required:                       true,
+			SemanticsMode:                  service.SemanticsModeExact,
+			ExpectedRequestSemanticsSHA256: semanticsHash,
+			ToolSchemaSHA256:               toolHash,
+			AllowedToolSetSHA256:           toolHash,
+			MaxOccurrences:                 1,
+		}},
+	}
+}
+
+func defaultPairSpec(run *service.EvaluationRun, evaluationCase evaluationCaseForRun, manifest service.RequestManifest, repeatIndex, sampleIndex int) service.PairSpec {
+	return service.PairSpec{
+		ID:                            uuid.New(),
+		DatasetVersionID:              evaluationCase.datasetVersionID,
+		CaseID:                        evaluationCase.id,
+		SampleIndex:                   sampleIndex,
+		RepeatIndex:                   repeatIndex,
+		ExpectedRequestManifestID:     manifest.ID,
+		ExpectedRequestManifestSHA256: run.RequestManifestSHA256,
+		PromptSHA256:                  hashString("prompt:" + evaluationCase.id.String()),
+		ToolSchemaSHA256:              hashString("{}"),
+		GraderID:                      evaluationCase.graderID,
+		GraderVersion:                 evaluationCase.graderVersion,
+		SamplingPolicy:                "model-config-bound",
+		RandomSeed:                    int64(sampleIndex),
+		Region:                        "legacy-unbound",
+		Protocol:                      "openai-chat",
+		TimeBlock:                     run.CreatedAt.UTC().Format(time.RFC3339),
+		InterleaveOrder:               "round_robin",
+		RetryPolicy:                   "same-route-once",
+		AllowedTreatmentFields:        []string{"model_config_sha256"},
+	}
+}
+
+func defaultSideSpec(side, route, modelConfigHash string, sampleID uuid.UUID) service.SideSpec {
+	return service.SideSpec{
+		ID:                       uuid.New(),
+		SampleID:                 sampleID,
+		Side:                     side,
+		ModelRoute:               side + ":" + route,
+		ModelConfigSHA256:        modelConfigHash,
+		ExpectedModelAlias:       route,
+		ExpectedResolvedModel:    route,
+		RouteProfileVersion:      "legacy-unbound",
+		ProviderParametersSHA256: hashString("{}"),
+	}
 }
 
 func (r *evaluationRepository) ClaimAssignment(ctx context.Context, workerID uuid.UUID, capabilities []string, leaseTTL time.Duration) (*service.AssignmentLease, error) {
@@ -424,15 +535,19 @@ func (r *evaluationRepository) TransitionAssignment(ctx context.Context, input s
 }
 
 type evaluationCaseForRun struct {
-	id            uuid.UUID
-	priority      string
-	sampleCount   int
-	estimatedCost decimal.Decimal
+	id               uuid.UUID
+	datasetVersionID uuid.UUID
+	priority         string
+	sampleCount      int
+	estimatedCost    decimal.Decimal
+	graderID         string
+	graderVersion    string
 }
 
 func loadEvaluationCases(ctx context.Context, tx *sql.Tx, planID uuid.UUID) ([]evaluationCaseForRun, error) {
 	rows, err := tx.QueryContext(ctx, `
-		SELECT c.id, c.priority, c.sample_count, c.estimated_cost
+		SELECT c.id, c.dataset_version_id, c.priority, c.sample_count, c.estimated_cost,
+		       c.grader_id, c.grader_version
 		FROM evaluation_cases c
 		JOIN evaluation_plans p ON p.dataset_version_id = c.dataset_version_id
 		WHERE p.id = $1
@@ -444,7 +559,9 @@ func loadEvaluationCases(ctx context.Context, tx *sql.Tx, planID uuid.UUID) ([]e
 	var cases []evaluationCaseForRun
 	for rows.Next() {
 		var evaluationCase evaluationCaseForRun
-		if err := rows.Scan(&evaluationCase.id, &evaluationCase.priority, &evaluationCase.sampleCount, &evaluationCase.estimatedCost); err != nil {
+		if err := rows.Scan(&evaluationCase.id, &evaluationCase.datasetVersionID, &evaluationCase.priority,
+			&evaluationCase.sampleCount, &evaluationCase.estimatedCost, &evaluationCase.graderID,
+			&evaluationCase.graderVersion); err != nil {
 			return nil, fmt.Errorf("scan evaluation case: %w", err)
 		}
 		cases = append(cases, evaluationCase)
@@ -464,7 +581,7 @@ func insertEvaluationSampleAndAssignment(
 	modelConfig []byte,
 	modelConfigSHA256 string,
 	sampleIndex int,
-) error {
+) (uuid.UUID, error) {
 	sampleID := uuid.New()
 	if _, err := tx.ExecContext(ctx, `
 		INSERT INTO evaluation_samples (
@@ -473,22 +590,22 @@ func insertEvaluationSampleAndAssignment(
 		) VALUES ($1, $2, $3, $4, $5::jsonb, $6, $7, $8, 'pending', $9)`,
 		sampleID, runID, evaluationCase.id, modelRoute, modelConfig,
 		modelConfigSHA256, sampleIndex, evaluationCase.priority, evaluationCase.estimatedCost); err != nil {
-		return fmt.Errorf("insert evaluation sample: %w", err)
+		return uuid.Nil, fmt.Errorf("insert evaluation sample: %w", err)
 	}
 	assignmentID := uuid.New()
 	idempotencyKey := assignmentIdempotencyKey(runID, evaluationCase.id, modelRoute, sampleIndex, 1)
 	if _, err := tx.ExecContext(ctx, `
 		INSERT INTO evaluation_assignments (id, sample_id, attempt, idempotency_key, status)
 		VALUES ($1, $2, 1, $3, 'pending')`, assignmentID, sampleID, idempotencyKey); err != nil {
-		return fmt.Errorf("insert evaluation assignment: %w", err)
+		return uuid.Nil, fmt.Errorf("insert evaluation assignment: %w", err)
 	}
 	if _, err := tx.ExecContext(ctx, `
 		INSERT INTO evaluation_budget_ledger (id, run_id, sample_id, assignment_id, entry_type, amount, idempotency_key)
 		VALUES ($1, $2, $3, $4, 'reservation', $5, $6)`,
 		uuid.New(), runID, sampleID, assignmentID, evaluationCase.estimatedCost, hashString("reservation\x00"+assignmentID.String())); err != nil {
-		return fmt.Errorf("insert evaluation budget reservation: %w", err)
+		return uuid.Nil, fmt.Errorf("insert evaluation budget reservation: %w", err)
 	}
-	return nil
+	return sampleID, nil
 }
 
 type assignmentCandidate struct {

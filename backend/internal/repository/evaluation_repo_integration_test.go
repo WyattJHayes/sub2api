@@ -35,7 +35,7 @@ func TestEvaluationRepository_ExpandsMatrixIntoSamplesAndAssignments(t *testing.
 	require.NoError(t, err)
 	require.NotNil(t, run)
 
-	var samples, assignments, reservations int
+	var samples, assignments, reservations, pairSpecs, sideSpecs, bindings int
 	require.NoError(t, integrationDB.QueryRowContext(ctx,
 		"SELECT COUNT(*) FROM evaluation_samples WHERE run_id = $1", run.ID).Scan(&samples))
 	require.NoError(t, integrationDB.QueryRowContext(ctx, `
@@ -46,9 +46,27 @@ func TestEvaluationRepository_ExpandsMatrixIntoSamplesAndAssignments(t *testing.
 	require.NoError(t, integrationDB.QueryRowContext(ctx, `
 		SELECT COUNT(*) FROM evaluation_budget_ledger
 		WHERE run_id = $1 AND entry_type = 'reservation'`, run.ID).Scan(&reservations))
+	require.NoError(t, integrationDB.QueryRowContext(ctx, `
+		SELECT COUNT(*) FROM evaluation_pair_specs WHERE run_id = $1`, run.ID).Scan(&pairSpecs))
+	require.NoError(t, integrationDB.QueryRowContext(ctx, `
+		SELECT COUNT(*)
+		FROM evaluation_side_specs s
+		JOIN evaluation_pair_specs p ON p.id = s.pair_spec_id
+		WHERE p.run_id = $1`, run.ID).Scan(&sideSpecs))
+	require.NoError(t, integrationDB.QueryRowContext(ctx, `
+		SELECT COUNT(*)
+		FROM evaluation_pair_bindings b
+		JOIN evaluation_pair_specs p ON p.id = b.pair_spec_id
+		WHERE p.run_id = $1`, run.ID).Scan(&bindings))
 	require.Equal(t, 24, samples)
 	require.Equal(t, 24, assignments)
 	require.Equal(t, 24, reservations)
+	require.Equal(t, 12, pairSpecs)
+	require.Equal(t, 24, sideSpecs)
+	require.Equal(t, 12, bindings)
+	require.Equal(t, "bound", run.ContractStatus)
+	require.NotEqual(t, uuid.Nil, run.RequestManifestID)
+	require.Len(t, run.RequestManifestSHA256, 64)
 
 	var caseID uuid.UUID
 	var modelRoute string
@@ -705,6 +723,13 @@ func cleanupEvaluationRepositoryFixture(t *testing.T, fixture evaluationReposito
 	for _, statement := range []string{
 		`DELETE FROM evaluation_budget_ledger WHERE run_id IN (SELECT id FROM evaluation_runs WHERE plan_id = $1)`,
 		`DELETE FROM evaluation_artifacts WHERE run_id IN (SELECT id FROM evaluation_runs WHERE plan_id = $1)`,
+		`DELETE FROM evaluation_pair_bindings WHERE pair_spec_id IN (
+			SELECT id FROM evaluation_pair_specs WHERE run_id IN (SELECT id FROM evaluation_runs WHERE plan_id = $1)
+		)`,
+		`DELETE FROM evaluation_side_specs WHERE pair_spec_id IN (
+			SELECT id FROM evaluation_pair_specs WHERE run_id IN (SELECT id FROM evaluation_runs WHERE plan_id = $1)
+		)`,
+		`DELETE FROM evaluation_pair_specs WHERE run_id IN (SELECT id FROM evaluation_runs WHERE plan_id = $1)`,
 		`DELETE FROM evaluation_assignments WHERE sample_id IN (
 			SELECT s.id FROM evaluation_samples s
 			JOIN evaluation_runs r ON r.id = s.run_id

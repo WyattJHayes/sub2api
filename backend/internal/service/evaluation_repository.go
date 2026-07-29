@@ -27,12 +27,15 @@ type CreateRunInput struct {
 }
 
 type EvaluationRun struct {
-	ID           uuid.UUID
-	PlanID       uuid.UUID
-	Status       RunStatus
-	BudgetLimit  decimal.Decimal
-	ReservedCost decimal.Decimal
-	CreatedAt    time.Time
+	ID                    uuid.UUID       `json:"id"`
+	PlanID                uuid.UUID       `json:"plan_id"`
+	Status                RunStatus       `json:"status"`
+	BudgetLimit           decimal.Decimal `json:"budget_limit"`
+	ReservedCost          decimal.Decimal `json:"reserved_cost"`
+	CreatedAt             time.Time       `json:"created_at"`
+	ContractStatus        string          `json:"contract_status,omitempty"`
+	RequestManifestID     uuid.UUID       `json:"request_manifest_id,omitempty"`
+	RequestManifestSHA256 string          `json:"request_manifest_sha256,omitempty"`
 }
 
 type AssignmentLease struct {

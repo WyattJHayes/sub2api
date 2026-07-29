@@ -572,7 +572,35 @@ func (r *radarGovernanceRepository) ListRuns(ctx context.Context) ([]service.Rad
 	if err := r.valid(); err != nil {
 		return nil, err
 	}
-	rows, err := r.db.QueryContext(ctx, `SELECT id, plan_id, trigger_source, status, created_at, started_at, finished_at FROM evaluation_runs ORDER BY created_at DESC LIMIT 200`)
+	rows, err := r.db.QueryContext(ctx, `
+		SELECT r.id, r.plan_id, r.trigger_source, r.status, r.created_at, r.started_at, r.finished_at,
+			CASE
+				WHEN contract.manifest_id IS NULL THEN 'legacy-unbound'
+				WHEN contract.pair_count = contract.binding_count AND contract.pair_count > 0 THEN 'bound'
+				ELSE 'incomplete'
+			END AS contract_status,
+			contract.manifest_id, contract.manifest_sha256
+		FROM evaluation_runs r
+		LEFT JOIN LATERAL (
+			SELECT
+				(SELECT ps.request_manifest_id
+				 FROM evaluation_pair_specs ps
+				 WHERE ps.run_id = r.id
+				 ORDER BY ps.created_at, ps.id
+				 LIMIT 1) AS manifest_id,
+				(SELECT ps.request_manifest_sha256
+				 FROM evaluation_pair_specs ps
+				 WHERE ps.run_id = r.id
+				 ORDER BY ps.created_at, ps.id
+				 LIMIT 1) AS manifest_sha256,
+				(SELECT COUNT(*) FROM evaluation_pair_specs ps WHERE ps.run_id = r.id) AS pair_count,
+				(SELECT COUNT(*)
+				 FROM evaluation_pair_specs ps
+				 JOIN evaluation_pair_bindings pb ON pb.pair_spec_id = ps.id
+				 WHERE ps.run_id = r.id) AS binding_count
+		) contract ON TRUE
+		ORDER BY r.created_at DESC
+		LIMIT 200`)
 	if err != nil {
 		return nil, fmt.Errorf("list radar runs: %w", err)
 	}
@@ -580,8 +608,13 @@ func (r *radarGovernanceRepository) ListRuns(ctx context.Context) ([]service.Rad
 	var out []service.RadarRunProjection
 	for rows.Next() {
 		var item service.RadarRunProjection
-		if err := rows.Scan(&item.ID, &item.PlanID, &item.TriggerSource, &item.Status, &item.CreatedAt, &item.StartedAt, &item.FinishedAt); err != nil {
+		var manifestHash sql.NullString
+		if err := rows.Scan(&item.ID, &item.PlanID, &item.TriggerSource, &item.Status, &item.CreatedAt, &item.StartedAt, &item.FinishedAt,
+			&item.ContractStatus, &item.RequestManifestID, &manifestHash); err != nil {
 			return nil, err
+		}
+		if manifestHash.Valid {
+			item.RequestManifestSHA256 = manifestHash.String
 		}
 		out = append(out, item)
 	}

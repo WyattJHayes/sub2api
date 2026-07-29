@@ -77,13 +77,16 @@ type RadarModelHealthProjection struct {
 }
 
 type RadarRunProjection struct {
-	ID            uuid.UUID  `json:"id"`
-	PlanID        uuid.UUID  `json:"plan_id"`
-	TriggerSource string     `json:"trigger_source"`
-	Status        string     `json:"status"`
-	CreatedAt     time.Time  `json:"created_at"`
-	StartedAt     *time.Time `json:"started_at,omitempty"`
-	FinishedAt    *time.Time `json:"finished_at,omitempty"`
+	ID                    uuid.UUID  `json:"id"`
+	PlanID                uuid.UUID  `json:"plan_id"`
+	TriggerSource         string     `json:"trigger_source"`
+	Status                string     `json:"status"`
+	CreatedAt             time.Time  `json:"created_at"`
+	StartedAt             *time.Time `json:"started_at,omitempty"`
+	FinishedAt            *time.Time `json:"finished_at,omitempty"`
+	ContractStatus        string     `json:"contract_status"`
+	RequestManifestID     *uuid.UUID `json:"request_manifest_id,omitempty"`
+	RequestManifestSHA256 string     `json:"request_manifest_sha256,omitempty"`
 }
 
 type RadarAlertProjection struct {
