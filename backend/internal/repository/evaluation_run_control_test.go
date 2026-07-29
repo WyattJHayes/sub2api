@@ -3,71 +3,100 @@ package repository
 import (
 	"context"
 	"database/sql"
-	"regexp"
+	"encoding/json"
+	"strings"
 	"testing"
 
-	"github.com/DATA-DOG/go-sqlmock"
+	sqlmock "github.com/DATA-DOG/go-sqlmock"
+	"github.com/Wei-Shaw/sub2api/internal/service"
 	"github.com/google/uuid"
+	"github.com/stretchr/testify/require"
 )
 
-func TestValidRunReasonUsesFiniteReasonCodes(t *testing.T) {
-	tests := []struct {
-		name   string
-		reason string
-		valid  bool
-	}{
-		{name: "operator request", reason: "operator_request", valid: true},
-		{name: "digits", reason: "incident_2026", valid: true},
-		{name: "empty", reason: "", valid: false},
-		{name: "free text", reason: "operator requested a pause", valid: false},
-		{name: "uppercase", reason: "Operator_Request", valid: false},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			if got := validRunReason(tt.reason); got != tt.valid {
-				t.Fatalf("validRunReason(%q) = %v, want %v", tt.reason, got, tt.valid)
-			}
-		})
-	}
+func TestPauseRunPreservesInflightLeaseAndEpoch(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	require.NoError(t, err)
+	defer db.Close()
+	runID := uuid.New()
+	expectRadarWorkerWriter(t, mock)
+	mock.ExpectQuery("SELECT id, run_id, event_type, payload").WithArgs(strings.Repeat("a", 64)).WillReturnError(sql.ErrNoRows)
+	mock.ExpectQuery("SELECT status, paused_from_status, pause_reason, control_epoch, state_version").WithArgs(runID).
+		WillReturnRows(sqlmock.NewRows([]string{"status", "paused_from_status", "pause_reason", "control_epoch", "state_version"}).AddRow("running", nil, nil, int64(4), int64(7)))
+	mock.ExpectExec("UPDATE evaluation_runs SET status='paused'").WithArgs(runID, "running", "operator", int64(8)).WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectExec("INSERT INTO evaluation_run_events").WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectCommit()
+
+	repo := &radarGovernanceRepository{db: db}
+	result, err := repo.PauseRun(context.Background(), runID, "operator", 9, strings.Repeat("a", 64))
+	require.NoError(t, err)
+	require.Equal(t, int64(4), result.PreviousEpoch)
+	require.Equal(t, int64(4), result.CurrentEpoch)
+	require.Equal(t, "running", result.FromStatus)
+	require.Equal(t, "paused", result.ToStatus)
+	require.NoError(t, mock.ExpectationsWereMet())
 }
 
-func TestLoadRunControlEventRestoresIdempotentResponseMetadata(t *testing.T) {
+func TestFenceRunPreservesStatusAndIncrementsEpoch(t *testing.T) {
 	db, mock, err := sqlmock.New()
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 	defer db.Close()
-	mock.ExpectBegin()
-	tx, err := db.Begin()
-	if err != nil {
-		t.Fatal(err)
-	}
 	runID := uuid.New()
-	eventID := uuid.New()
-	key := "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
-	payload := `{"request_hash":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","affected_work_count":3,"replacement_ids":["00000000-0000-0000-0000-000000000001"],"previous_epoch":4}`
-	mock.ExpectQuery(regexp.QuoteMeta("SELECT id, run_id, event_type, payload, from_status, to_status, control_epoch FROM evaluation_run_events WHERE idempotency_key = $1 FOR UPDATE")).
-		WithArgs(key).
-		WillReturnRows(sqlmock.NewRows([]string{"id", "run_id", "event_type", "payload", "from_status", "to_status", "control_epoch"}).
-			AddRow(eventID, runID, "run_fenced", payload, "running", "running", int64(5)))
-	event, err := loadRunControlEvent(context.Background(), tx, key)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if event == nil || event.ID != eventID || event.RunID != runID {
-		t.Fatalf("unexpected event: %#v", event)
-	}
-	if event.RequestHash == "" || event.Affected != 3 || event.ControlEpoch != 5 || event.PreviousEpoch != 4 {
-		t.Fatalf("event metadata was not restored: %#v", event)
-	}
-	if len(event.ReplacementIDs) != 1 || event.ReplacementIDs[0].String() != "00000000-0000-0000-0000-000000000001" {
-		t.Fatalf("replacement ids were not restored: %#v", event.ReplacementIDs)
-	}
-	mock.ExpectRollback()
-	if err := tx.Rollback(); err != nil && err != sql.ErrTxDone {
-		t.Fatal(err)
-	}
-	if err := mock.ExpectationsWereMet(); err != nil {
-		t.Fatal(err)
-	}
+	expectRadarWorkerWriter(t, mock)
+	mock.ExpectQuery("SELECT id, run_id, event_type, payload").WithArgs(strings.Repeat("b", 64)).WillReturnError(sql.ErrNoRows)
+	mock.ExpectQuery("SELECT status, paused_from_status, pause_reason, control_epoch, state_version").WithArgs(runID).
+		WillReturnRows(sqlmock.NewRows([]string{"status", "paused_from_status", "pause_reason", "control_epoch", "state_version"}).AddRow("running", nil, nil, int64(4), int64(7)))
+	mock.ExpectQuery("SELECT a.id, a.sample_id").WithArgs(runID).WillReturnRows(sqlmock.NewRows([]string{"id", "sample_id", "case_id", "model_route", "sample_index", "attempt"}))
+	mock.ExpectExec("UPDATE evaluation_runs SET control_epoch").WithArgs(runID, int64(5), int64(7)).WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectExec("INSERT INTO evaluation_run_events").WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectCommit()
+
+	repo := &radarGovernanceRepository{db: db}
+	result, err := repo.FenceRun(context.Background(), runID, "incident", 9, strings.Repeat("b", 64))
+	require.NoError(t, err)
+	require.Equal(t, service.RunStatusRunning, service.RunStatus(result.ToStatus))
+	require.Equal(t, int64(5), result.CurrentEpoch)
+	require.Equal(t, int64(0), int64(result.AffectedWorkCount))
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestRunControlIdempotencyReturnsOriginalResult(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	require.NoError(t, err)
+	defer db.Close()
+	runID, eventID := uuid.New(), uuid.New()
+	original := service.RunControlResult{RunID: runID, FromStatus: "running", ToStatus: "paused", PreviousEpoch: 4, CurrentEpoch: 4, EventID: eventID}
+	payload, err := json.Marshal(map[string]any{"reason": "operator", "result": original})
+	require.NoError(t, err)
+	expectRadarWorkerWriter(t, mock)
+	mock.ExpectQuery("SELECT id, run_id, event_type, payload").WithArgs(strings.Repeat("c", 64)).WillReturnRows(
+		sqlmock.NewRows([]string{"id", "run_id", "event_type", "payload"}).AddRow(eventID, runID, "run_control_pause", payload))
+	mock.ExpectCommit()
+
+	repo := &radarGovernanceRepository{db: db}
+	result, err := repo.PauseRun(context.Background(), runID, "operator", 9, strings.Repeat("c", 64))
+	require.NoError(t, err)
+	require.Equal(t, eventID, result.EventID)
+	require.Equal(t, "paused", result.ToStatus)
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestRunControlRejectsInvalidReasonBeforeOpeningTransaction(t *testing.T) {
+	repo := &radarGovernanceRepository{db: nil}
+	_, err := repo.PauseRun(context.Background(), uuid.New(), "unknown", 9, strings.Repeat("d", 64))
+	require.Error(t, err)
+}
+
+func TestRunControlRejectsTerminalStatus(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	require.NoError(t, err)
+	defer db.Close()
+	runID := uuid.New()
+	expectRadarWorkerWriter(t, mock)
+	mock.ExpectQuery("SELECT id, run_id, event_type, payload").WithArgs(strings.Repeat("e", 64)).WillReturnError(sql.ErrNoRows)
+	mock.ExpectQuery("SELECT status, paused_from_status, pause_reason, control_epoch, state_version").WithArgs(runID).
+		WillReturnRows(sqlmock.NewRows([]string{"status", "paused_from_status", "pause_reason", "control_epoch", "state_version"}).AddRow("completed", nil, nil, int64(4), int64(7)))
+	repo := &radarGovernanceRepository{db: db}
+	_, err = repo.CancelRun(context.Background(), runID, "operator", 9, strings.Repeat("e", 64))
+	require.Error(t, err)
+	require.NoError(t, mock.ExpectationsWereMet())
 }

@@ -33,6 +33,12 @@ func TestDeriveAuditAction(t *testing.T) {
 	}
 }
 
+func TestWorkerAuditRedactsPlaintextToken(t *testing.T) {
+	got := service.RedactAuditBody([]byte(`{"name":"runner-a","token":"worker-canary-secret","worker_kind":"runner"}`), "application/json")
+	require.NotContains(t, got, "worker-canary-secret")
+	require.Contains(t, got, `"token":"***"`)
+}
+
 type auditCaptureRepository struct {
 	mu   sync.Mutex
 	logs []*service.AuditLog

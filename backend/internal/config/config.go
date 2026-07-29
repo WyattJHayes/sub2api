@@ -14,6 +14,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/spf13/viper"
 	"golang.org/x/net/http/httpguts"
 )
@@ -102,16 +103,19 @@ type Config struct {
 }
 
 type RadarConfig struct {
-	Enabled               bool   `mapstructure:"enabled"`
-	SigningSecret         string `mapstructure:"signing_secret"`
-	HashingSecret         string `mapstructure:"hashing_secret"`
-	MaxContextTTLSeconds  int    `mapstructure:"max_context_ttl_seconds"`
-	Region                string `mapstructure:"region"`
-	RouteProfileVersion   string `mapstructure:"route_profile_version"`
-	WriterInstanceID      string `mapstructure:"writer_instance_id"`
-	WriterKind            string `mapstructure:"writer_kind"`
-	WriterProtocolVersion int64  `mapstructure:"writer_protocol_version"`
+	Enabled                   bool   `mapstructure:"enabled"`
+	SigningSecret             string `mapstructure:"signing_secret"`
+	HashingSecret             string `mapstructure:"hashing_secret"`
+	MaxContextTTLSeconds      int    `mapstructure:"max_context_ttl_seconds"`
+	Region                    string `mapstructure:"region"`
+	RouteProfileVersion       string `mapstructure:"route_profile_version"`
+	WriterInstanceID          string `mapstructure:"writer_instance_id"`
+	WriterKind                string `mapstructure:"writer_kind"`
+	WriterProtocolVersion     int64  `mapstructure:"writer_protocol_version"`
+	WriterHeartbeatTTLSeconds int    `mapstructure:"writer_heartbeat_ttl_seconds"`
 }
+
+const currentRadarWriterProtocolVersion = int64(2)
 
 type LogConfig struct {
 	Level           string            `mapstructure:"level"`
@@ -1680,6 +1684,12 @@ func load(allowMissingJWTSecret bool) (*Config, error) {
 	if err := viper.BindEnv("radar.hashing_secret", "RADAR_EVIDENCE_HASH_KEY", "RADAR_HASHING_SECRET"); err != nil {
 		return nil, fmt.Errorf("bind RADAR_EVIDENCE_HASH_KEY: %w", err)
 	}
+	if err := viper.BindEnv("radar.writer_instance_id", "RADAR_WRITER_INSTANCE_ID"); err != nil {
+		return nil, fmt.Errorf("bind RADAR_WRITER_INSTANCE_ID: %w", err)
+	}
+	if err := viper.BindEnv("radar.writer_kind", "RADAR_WRITER_KIND"); err != nil {
+		return nil, fmt.Errorf("bind RADAR_WRITER_KIND: %w", err)
+	}
 
 	// 默认值
 	setDefaults()
@@ -1868,8 +1878,9 @@ func setDefaults() {
 	viper.SetDefault("radar.region", "")
 	viper.SetDefault("radar.route_profile_version", "")
 	viper.SetDefault("radar.writer_instance_id", "")
-	viper.SetDefault("radar.writer_kind", "control")
-	viper.SetDefault("radar.writer_protocol_version", int64(1))
+	viper.SetDefault("radar.writer_kind", "api")
+	viper.SetDefault("radar.writer_protocol_version", currentRadarWriterProtocolVersion)
+	viper.SetDefault("radar.writer_heartbeat_ttl_seconds", 300)
 
 	// Server
 	viper.SetDefault("server.host", "0.0.0.0")
@@ -2551,8 +2562,19 @@ func (c *Config) Validate() error {
 	if c.Radar.MaxContextTTLSeconds <= 0 || c.Radar.MaxContextTTLSeconds > 900 {
 		return fmt.Errorf("radar.max_context_ttl_seconds must be between 1 and 900")
 	}
-	if c.Radar.WriterProtocolVersion < 0 {
-		return fmt.Errorf("radar.writer_protocol_version must be non-negative")
+	if c.Radar.WriterProtocolVersion != currentRadarWriterProtocolVersion {
+		return fmt.Errorf("radar.writer_protocol_version must be %d", currentRadarWriterProtocolVersion)
+	}
+	if c.Radar.WriterInstanceID != "" {
+		if _, err := uuid.Parse(c.Radar.WriterInstanceID); err != nil {
+			return fmt.Errorf("radar.writer_instance_id must be a UUID")
+		}
+	}
+	if c.Radar.WriterHeartbeatTTLSeconds <= 0 || c.Radar.WriterHeartbeatTTLSeconds > 86400 {
+		return fmt.Errorf("radar.writer_heartbeat_ttl_seconds must be between 1 and 86400")
+	}
+	if strings.TrimSpace(c.Radar.WriterKind) == "" || len(strings.TrimSpace(c.Radar.WriterKind)) > 32 {
+		return fmt.Errorf("radar.writer_kind must be between 1 and 32 characters")
 	}
 	if c.Radar.Enabled {
 		if len([]byte(strings.TrimSpace(c.Radar.SigningSecret))) < 32 {

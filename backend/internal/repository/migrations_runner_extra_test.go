@@ -12,6 +12,7 @@ import (
 	"time"
 
 	sqlmock "github.com/DATA-DOG/go-sqlmock"
+	"github.com/Wei-Shaw/sub2api/migrations"
 	"github.com/stretchr/testify/require"
 )
 
@@ -256,6 +257,31 @@ func TestApplyMigrationsFS_ChecksumMismatchRejected(t *testing.T) {
 	err = applyMigrationsFS(context.Background(), db, fsys)
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "checksum mismatch")
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestApplyMigrationsFS_AcceptsPublishedMigration198Checksum(t *testing.T) {
+	const migrationName = "198_add_radar_trusted_governance.sql"
+	const publishedChecksum = "91eaf1b6f78d5a6f33907a6c3a401f4bdbbd1d1cf30617321304b037163312ed"
+
+	content, err := migrations.FS.ReadFile(migrationName)
+	require.NoError(t, err)
+	db, mock, err := sqlmock.New()
+	require.NoError(t, err)
+	defer func() { _ = db.Close() }()
+
+	prepareMigrationsBootstrapExpectations(mock)
+	mock.ExpectQuery("SELECT checksum FROM schema_migrations WHERE filename = \\$1").
+		WithArgs(migrationName).
+		WillReturnRows(sqlmock.NewRows([]string{"checksum"}).AddRow(publishedChecksum))
+	mock.ExpectExec("SELECT pg_advisory_unlock\\(\\$1\\)").
+		WithArgs(migrationsAdvisoryLockID).
+		WillReturnResult(sqlmock.NewResult(0, 1))
+
+	err = applyMigrationsFS(context.Background(), db, fstest.MapFS{
+		migrationName: &fstest.MapFile{Data: content},
+	})
+	require.NoError(t, err)
 	require.NoError(t, mock.ExpectationsWereMet())
 }
 

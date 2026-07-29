@@ -35,7 +35,7 @@ func TestEvaluationRepository_ExpandsMatrixIntoSamplesAndAssignments(t *testing.
 	require.NoError(t, err)
 	require.NotNil(t, run)
 
-	var samples, assignments, reservations, pairSpecs, sideSpecs, bindings int
+	var samples, assignments, reservations int
 	require.NoError(t, integrationDB.QueryRowContext(ctx,
 		"SELECT COUNT(*) FROM evaluation_samples WHERE run_id = $1", run.ID).Scan(&samples))
 	require.NoError(t, integrationDB.QueryRowContext(ctx, `
@@ -46,27 +46,9 @@ func TestEvaluationRepository_ExpandsMatrixIntoSamplesAndAssignments(t *testing.
 	require.NoError(t, integrationDB.QueryRowContext(ctx, `
 		SELECT COUNT(*) FROM evaluation_budget_ledger
 		WHERE run_id = $1 AND entry_type = 'reservation'`, run.ID).Scan(&reservations))
-	require.NoError(t, integrationDB.QueryRowContext(ctx, `
-		SELECT COUNT(*) FROM evaluation_pair_specs WHERE run_id = $1`, run.ID).Scan(&pairSpecs))
-	require.NoError(t, integrationDB.QueryRowContext(ctx, `
-		SELECT COUNT(*)
-		FROM evaluation_side_specs s
-		JOIN evaluation_pair_specs p ON p.id = s.pair_spec_id
-		WHERE p.run_id = $1`, run.ID).Scan(&sideSpecs))
-	require.NoError(t, integrationDB.QueryRowContext(ctx, `
-		SELECT COUNT(*)
-		FROM evaluation_pair_bindings b
-		JOIN evaluation_pair_specs p ON p.id = b.pair_spec_id
-		WHERE p.run_id = $1`, run.ID).Scan(&bindings))
 	require.Equal(t, 24, samples)
 	require.Equal(t, 24, assignments)
 	require.Equal(t, 24, reservations)
-	require.Equal(t, 12, pairSpecs)
-	require.Equal(t, 24, sideSpecs)
-	require.Equal(t, 12, bindings)
-	require.Equal(t, "bound", run.ContractStatus)
-	require.NotEqual(t, uuid.Nil, run.RequestManifestID)
-	require.Len(t, run.RequestManifestSHA256, 64)
 
 	var caseID uuid.UUID
 	var modelRoute string
@@ -81,6 +63,41 @@ func TestEvaluationRepository_ExpandsMatrixIntoSamplesAndAssignments(t *testing.
 		LIMIT 1`, run.ID).Scan(&caseID, &modelRoute, &sampleIndex, &attempt, &idempotencyKey))
 	expectedKey := sha256.Sum256([]byte(fmt.Sprintf("%s\x00%s\x00%s\x00%d\x00%d", run.ID, caseID, modelRoute, sampleIndex, attempt)))
 	require.Equal(t, fmt.Sprintf("%x", expectedKey), idempotencyKey)
+}
+
+func TestEvaluationRepository_CreatesFrozenExperimentBindings(t *testing.T) {
+	ctx := context.Background()
+	fixture := createEvaluationRepositoryFixture(t, 1, []string{"route-a"}, 1)
+	repo := NewEvaluationRepository(integrationDB)
+
+	run, err := repo.CreateRunWithMatrix(ctx, service.CreateRunInput{
+		PlanID: fixture.planID, TriggerSource: "manual", CreatedBy: fixture.userID,
+	})
+	require.NoError(t, err)
+	require.Equal(t, "bound", run.ContractStatus)
+	require.Len(t, run.PairBindings, 1)
+	require.NotEmpty(t, run.PairBindings[0].PairSpecHash)
+	require.NotEmpty(t, run.PairBindings[0].BindingHash)
+
+	var manifests, pairs, sides, bindings int
+	require.NoError(t, integrationDB.QueryRowContext(ctx, `
+		SELECT COUNT(*) FROM evaluation_request_manifests m
+		JOIN evaluation_pair_specs p ON p.request_manifest_id = m.id
+		WHERE p.run_id = $1`, run.ID).Scan(&manifests))
+	require.NoError(t, integrationDB.QueryRowContext(ctx,
+		`SELECT COUNT(*) FROM evaluation_pair_specs WHERE run_id = $1`, run.ID).Scan(&pairs))
+	require.NoError(t, integrationDB.QueryRowContext(ctx, `
+		SELECT COUNT(*) FROM evaluation_side_specs s
+		JOIN evaluation_pair_specs p ON p.id = s.pair_spec_id
+		WHERE p.run_id = $1`, run.ID).Scan(&sides))
+	require.NoError(t, integrationDB.QueryRowContext(ctx, `
+		SELECT COUNT(*) FROM evaluation_pair_bindings b
+		JOIN evaluation_pair_specs p ON p.id = b.pair_spec_id
+		WHERE p.run_id = $1`, run.ID).Scan(&bindings))
+	require.Equal(t, 1, manifests)
+	require.Equal(t, 1, pairs)
+	require.Equal(t, 2, sides)
+	require.Equal(t, 1, bindings)
 }
 
 func TestEvaluationRepository_ConcurrentLeaseAndLeaseFencing(t *testing.T) {
@@ -146,6 +163,87 @@ func TestEvaluationRepository_ConcurrentLeaseAndLeaseFencing(t *testing.T) {
 		WHERE s.run_id = $1 AND s.id = $2`, run.ID, old.SampleID).Scan(&attemptOne, &attemptTwo))
 	require.Equal(t, 1, attemptOne)
 	require.Equal(t, 1, attemptTwo)
+}
+
+func TestEvaluationGradingRepository_FailedAssignmentTerminatesRun(t *testing.T) {
+	ctx := context.Background()
+	fixture := createEvaluationRepositoryFixture(t, 1, []string{"route-a"}, 1)
+	runRepo := NewEvaluationRepository(integrationDB)
+	run, err := runRepo.CreateRunWithMatrix(ctx, service.CreateRunInput{
+		PlanID: fixture.planID, TriggerSource: "manual", CreatedBy: fixture.userID,
+	})
+	require.NoError(t, err)
+
+	lease, err := runRepo.ClaimAssignment(ctx, fixture.workerIDs[0], []string{"coding"}, time.Minute)
+	require.NoError(t, err)
+	require.NotNil(t, lease)
+
+	gradingRepo := &evaluationGradingRepository{db: integrationDB}
+	require.NoError(t, gradingRepo.FailAssignment(
+		ctx, lease.ID, lease.Token, "infrastructure", "upstream_rejected", lease.LeaseEpoch,
+	))
+
+	var runStatus string
+	var controlEpoch, stateVersion int64
+	require.NoError(t, integrationDB.QueryRowContext(ctx, `
+		SELECT status, control_epoch, state_version
+		FROM evaluation_runs WHERE id = $1`, run.ID).Scan(&runStatus, &controlEpoch, &stateVersion))
+	require.Equal(t, "failed", runStatus)
+	require.Equal(t, int64(1), controlEpoch)
+	require.Equal(t, int64(2), stateVersion)
+
+	var assignmentStatus, sampleStatus string
+	require.NoError(t, integrationDB.QueryRowContext(ctx, `
+		SELECT a.status, s.status
+		FROM evaluation_assignments a
+		JOIN evaluation_samples s ON s.id = a.sample_id
+		WHERE a.id = $1`, lease.ID).Scan(&assignmentStatus, &sampleStatus))
+	require.Equal(t, "infra_failed", assignmentStatus)
+	require.Equal(t, "infra_failed", sampleStatus)
+
+	var reconciledEvents int
+	require.NoError(t, integrationDB.QueryRowContext(ctx, `
+		SELECT COUNT(*) FROM evaluation_run_events
+		WHERE run_id = $1 AND event_type = 'run_reconciled'`, run.ID).Scan(&reconciledEvents))
+	require.Equal(t, 1, reconciledEvents)
+}
+
+func TestAssignmentCompleteRejectsOldRunEpoch(t *testing.T) {
+	ctx := context.Background()
+	fixture := createEvaluationRepositoryFixture(t, 1, []string{"route-a"}, 1)
+	repo := NewEvaluationRepository(integrationDB)
+	_, err := repo.CreateRunWithMatrix(ctx, service.CreateRunInput{PlanID: fixture.planID, TriggerSource: "manual", CreatedBy: fixture.userID})
+	require.NoError(t, err)
+	lease, err := repo.ClaimAssignment(ctx, fixture.workerIDs[0], []string{"coding"}, time.Minute)
+	require.NoError(t, err)
+	require.NotNil(t, lease)
+	require.GreaterOrEqual(t, lease.LeaseEpoch, int64(0))
+	err = repo.TransitionAssignment(ctx, service.AssignmentTransition{
+		AssignmentID: lease.ID,
+		LeaseToken:   lease.Token,
+		LeaseEpoch:   lease.LeaseEpoch + 1,
+		To:           service.AssignmentStatusCompleted,
+	})
+	require.ErrorIs(t, err, service.ErrLeaseFenced)
+}
+
+func TestFirstClaimSetsStartedAtExactlyOnce(t *testing.T) {
+	ctx := context.Background()
+	fixture := createEvaluationRepositoryFixture(t, 1, []string{"route-a"}, 2)
+	repo := NewEvaluationRepository(integrationDB)
+	run, err := repo.CreateRunWithMatrix(ctx, service.CreateRunInput{PlanID: fixture.planID, TriggerSource: "manual", CreatedBy: fixture.userID})
+	require.NoError(t, err)
+	first, err := repo.ClaimAssignment(ctx, fixture.workerIDs[0], []string{"coding"}, time.Minute)
+	require.NoError(t, err)
+	require.NotNil(t, first)
+	var startedAt time.Time
+	require.NoError(t, integrationDB.QueryRowContext(ctx, `SELECT started_at FROM evaluation_runs WHERE id = $1`, run.ID).Scan(&startedAt))
+	second, err := repo.ClaimAssignment(ctx, fixture.workerIDs[1], []string{"coding"}, time.Minute)
+	require.NoError(t, err)
+	require.NotNil(t, second)
+	var startedAtAgain time.Time
+	require.NoError(t, integrationDB.QueryRowContext(ctx, `SELECT started_at FROM evaluation_runs WHERE id = $1`, run.ID).Scan(&startedAtAgain))
+	require.Equal(t, startedAt, startedAtAgain)
 }
 
 func TestEvaluationRepository_EmptyCapabilitiesCannotClaim(t *testing.T) {
@@ -723,12 +821,8 @@ func cleanupEvaluationRepositoryFixture(t *testing.T, fixture evaluationReposito
 	for _, statement := range []string{
 		`DELETE FROM evaluation_budget_ledger WHERE run_id IN (SELECT id FROM evaluation_runs WHERE plan_id = $1)`,
 		`DELETE FROM evaluation_artifacts WHERE run_id IN (SELECT id FROM evaluation_runs WHERE plan_id = $1)`,
-		`DELETE FROM evaluation_pair_bindings WHERE pair_spec_id IN (
-			SELECT id FROM evaluation_pair_specs WHERE run_id IN (SELECT id FROM evaluation_runs WHERE plan_id = $1)
-		)`,
-		`DELETE FROM evaluation_side_specs WHERE pair_spec_id IN (
-			SELECT id FROM evaluation_pair_specs WHERE run_id IN (SELECT id FROM evaluation_runs WHERE plan_id = $1)
-		)`,
+		`DELETE FROM evaluation_pair_bindings WHERE pair_spec_id IN (SELECT id FROM evaluation_pair_specs WHERE run_id IN (SELECT id FROM evaluation_runs WHERE plan_id = $1))`,
+		`DELETE FROM evaluation_side_specs WHERE pair_spec_id IN (SELECT id FROM evaluation_pair_specs WHERE run_id IN (SELECT id FROM evaluation_runs WHERE plan_id = $1))`,
 		`DELETE FROM evaluation_pair_specs WHERE run_id IN (SELECT id FROM evaluation_runs WHERE plan_id = $1)`,
 		`DELETE FROM evaluation_assignments WHERE sample_id IN (
 			SELECT s.id FROM evaluation_samples s
@@ -743,6 +837,8 @@ func cleanupEvaluationRepositoryFixture(t *testing.T, fixture evaluationReposito
 		_, err = tx.ExecContext(ctx, statement, fixture.planID)
 		require.NoError(t, err)
 	}
+	_, err = tx.ExecContext(ctx, `DELETE FROM evaluation_request_manifests WHERE id NOT IN (SELECT request_manifest_id FROM evaluation_pair_specs)`)
+	require.NoError(t, err)
 	_, err = tx.ExecContext(ctx, `DELETE FROM evaluation_cases WHERE dataset_version_id = $1`, fixture.datasetID)
 	require.NoError(t, err)
 	_, err = tx.ExecContext(ctx, `DELETE FROM evaluation_dataset_versions WHERE id = $1`, fixture.datasetID)

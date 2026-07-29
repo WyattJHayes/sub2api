@@ -11,9 +11,8 @@ import (
 )
 
 var (
-	ErrLeaseFenced        = errors.New("evaluation assignment lease fenced")
-	ErrBudgetExceeded     = errors.New("evaluation run budget exceeded")
-	ErrRadarCutoverActive = errors.New("radar cutover active")
+	ErrLeaseFenced    = errors.New("evaluation assignment lease fenced")
+	ErrBudgetExceeded = errors.New("evaluation run budget exceeded")
 )
 
 const AssignmentCompleted = AssignmentStatusCompleted
@@ -27,21 +26,14 @@ type CreateRunInput struct {
 }
 
 type EvaluationRun struct {
-	ID                    uuid.UUID       `json:"id"`
-	PlanID                uuid.UUID       `json:"plan_id"`
-	Status                RunStatus       `json:"status"`
-	BudgetLimit           decimal.Decimal `json:"budget_limit"`
-	ReservedCost          decimal.Decimal `json:"reserved_cost"`
-	CreatedAt             time.Time       `json:"created_at"`
-	ContractStatus        string          `json:"contract_status,omitempty"`
-	RequestManifestID     uuid.UUID       `json:"request_manifest_id,omitempty"`
-	RequestManifestSHA256 string          `json:"request_manifest_sha256,omitempty"`
-	PausedFromStatus      RunStatus       `json:"paused_from_status,omitempty"`
-	PauseReason           string          `json:"pause_reason,omitempty"`
-	ControlEpoch          int64           `json:"control_epoch"`
-	StateVersion          int64           `json:"state_version"`
-	CancelledAt           *time.Time      `json:"cancelled_at,omitempty"`
-	CancelledBy           *int64          `json:"cancelled_by,omitempty"`
+	ID             uuid.UUID        `json:"id"`
+	PlanID         uuid.UUID        `json:"plan_id"`
+	Status         RunStatus        `json:"status"`
+	BudgetLimit    decimal.Decimal  `json:"budget_limit"`
+	ReservedCost   decimal.Decimal  `json:"reserved_cost"`
+	CreatedAt      time.Time        `json:"created_at"`
+	ContractStatus string           `json:"contract_status"`
+	PairBindings   []PairBindingRef `json:"pair_bindings,omitempty"`
 }
 
 type AssignmentLease struct {
@@ -54,6 +46,9 @@ type AssignmentLease struct {
 	Attempt                int                 `json:"attempt"`
 	Token                  string              `json:"token"`
 	ExpiresAt              time.Time           `json:"expires_at"`
+	LeaseEpoch             int64               `json:"lease_epoch"`
+	WorkerImageDigest      string              `json:"worker_image_digest,omitempty"`
+	WorkOrigin             string              `json:"work_origin,omitempty"`
 	Case                   *EvaluationCaseSpec `json:"case,omitempty"`
 	RouteConfig            json.RawMessage     `json:"-"`
 	GatewayAPIKeyID        int64               `json:"-"`
@@ -85,6 +80,7 @@ type EvidenceSubmission struct {
 	AssignmentID uuid.UUID       `json:"assignment_id"`
 	SampleID     uuid.UUID       `json:"sample_id"`
 	Evidence     json.RawMessage `json:"evidence"`
+	LeaseEpoch   int64           `json:"lease_epoch"`
 }
 
 type EvidenceReceipt struct {
@@ -94,9 +90,10 @@ type EvidenceReceipt struct {
 }
 
 type ArtifactPresignRequest struct {
-	MIMEType string `json:"mime_type"`
-	Bytes    int64  `json:"bytes"`
-	SHA256   string `json:"sha256"`
+	MIMEType   string `json:"mime_type"`
+	Bytes      int64  `json:"bytes"`
+	SHA256     string `json:"sha256"`
+	LeaseEpoch int64  `json:"lease_epoch,omitempty"`
 }
 
 type ArtifactUpload struct {
@@ -114,6 +111,7 @@ type ArtifactConfirmation struct {
 	ObjectKey  string    `json:"object_key"`
 	SHA256     string    `json:"sha256"`
 	Bytes      int64     `json:"bytes"`
+	LeaseEpoch int64     `json:"lease_epoch,omitempty"`
 }
 
 type ArtifactReceipt struct {
@@ -130,12 +128,13 @@ type AssignmentTransition struct {
 	AssignmentID uuid.UUID
 	LeaseToken   string
 	To           AssignmentStatus
+	LeaseEpoch   int64
 }
 
 type EvaluationRepository interface {
 	CreateRunWithMatrix(ctx context.Context, input CreateRunInput) (*EvaluationRun, error)
 	ClaimAssignment(ctx context.Context, workerID uuid.UUID, capabilities []string, leaseTTL time.Duration) (*AssignmentLease, error)
-	RenewLease(ctx context.Context, assignmentID uuid.UUID, leaseToken string, extendBy time.Duration) (time.Time, error)
+	RenewLease(ctx context.Context, assignmentID uuid.UUID, leaseToken string, extendBy time.Duration, leaseEpoch ...int64) (time.Time, error)
 	TransitionAssignment(ctx context.Context, input AssignmentTransition) error
 	SubmitEvidence(ctx context.Context, input EvidenceSubmission, leaseToken string) (*EvidenceReceipt, error)
 }

@@ -91,7 +91,6 @@ class Runner:
                         record.idempotency_key,
                         receipt.model_dump(mode="json"),
                         record.lease_token,
-                        record.lease_epoch,
                     )
                 )
                 self.state_store.delete(record.assignment_id)

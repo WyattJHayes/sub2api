@@ -6,458 +6,265 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"strconv"
+	"net/http"
 	"strings"
 
+	infraerrors "github.com/Wei-Shaw/sub2api/internal/pkg/errors"
 	"github.com/Wei-Shaw/sub2api/internal/service"
 	"github.com/google/uuid"
 )
 
-type runControlEvent struct {
-	ID             uuid.UUID
-	RunID          uuid.UUID
-	EventType      string
-	RequestHash    string
-	FromStatus     service.RunStatus
-	ToStatus       service.RunStatus
-	ControlEpoch   int64
-	PreviousEpoch  int64
-	Affected       int
-	ReplacementIDs []uuid.UUID
+var _ service.RunControlRepository = (*radarGovernanceRepository)(nil)
+
+var validRunControlReasons = map[string]struct{}{
+	"operator": {},
+	"budget":   {},
+	"incident": {},
+	"release":  {},
+	"safety":   {},
+	"recovery": {},
 }
 
-type runControlMutation struct {
-	eventType string
-	from      service.RunStatus
-	apply     func(context.Context, *sql.Tx, *service.EvaluationRun) (runControlWork, error)
+type runControlRow struct {
+	status       string
+	pausedFrom   sql.NullString
+	pauseReason  sql.NullString
+	epoch        int64
+	stateVersion int64
 }
 
-type runControlWork struct {
-	affected       int
-	replacementIDs []uuid.UUID
+func validateRunControl(runID uuid.UUID, reason, idempotencyKey string) error {
+	if runID == uuid.Nil || len(strings.TrimSpace(idempotencyKey)) != 64 {
+		return infraerrors.New(http.StatusBadRequest, "RUN_CONTROL_INVALID", "run id and 64 character idempotency key are required")
+	}
+	if _, ok := validRunControlReasons[strings.TrimSpace(reason)]; !ok {
+		return infraerrors.New(http.StatusBadRequest, "RUN_CONTROL_INVALID", "unsupported run control reason")
+	}
+	return nil
 }
 
-func (r *radarGovernanceRepository) PauseRun(ctx context.Context, input service.RadarRunActionInput) (*service.RadarRunActionResult, error) {
-	return r.mutateRun(ctx, input, runControlMutation{
-		eventType: "run_paused",
-		apply: func(ctx context.Context, tx *sql.Tx, run *service.EvaluationRun) (runControlWork, error) {
-			if run.Status != service.RunStatusPending && run.Status != service.RunStatusRunning && run.Status != service.RunStatusBudgetPaused {
-				return runControlWork{}, service.ErrRadarRunStateConflict
-			}
-			if _, err := tx.ExecContext(ctx, `
-				UPDATE evaluation_runs
-				SET status = 'paused', paused_from_status = $2, pause_reason = $3,
-					state_version = state_version + 1, updated_at = NOW()
-				WHERE id = $1`, run.ID, run.Status, strings.TrimSpace(input.Reason)); err != nil {
-				return runControlWork{}, fmt.Errorf("pause evaluation run: %w", err)
-			}
-			return runControlWork{}, nil
-		},
-	})
+func decodeRunControlReplay(payload []byte, eventID, runID uuid.UUID) (*service.RunControlResult, error) {
+	var result service.RunControlResult
+	if err := json.Unmarshal(payload, &result); err != nil {
+		return nil, fmt.Errorf("decode run control replay: %w", err)
+	}
+	result.EventID = eventID
+	result.RunID = runID
+	return &result, nil
 }
 
-func (r *radarGovernanceRepository) ResumeRun(ctx context.Context, input service.RadarRunActionInput) (*service.RadarRunActionResult, error) {
-	return r.mutateRun(ctx, input, runControlMutation{
-		eventType: "run_resumed",
-		apply: func(ctx context.Context, tx *sql.Tx, run *service.EvaluationRun) (runControlWork, error) {
-			if run.Status != service.RunStatusPaused {
-				return runControlWork{}, service.ErrRadarRunStateConflict
-			}
-			to, failed, err := recomputeResumeStatus(ctx, tx, run)
-			if err != nil {
-				return runControlWork{}, err
-			}
-			if failed {
-				if _, err := tx.ExecContext(ctx, `
-					UPDATE evaluation_runs SET status = 'failed', control_epoch = control_epoch + 1,
-						state_version = state_version + 1, finished_at = NOW(), updated_at = NOW()
-					WHERE id = $1`, run.ID); err != nil {
-					return runControlWork{}, fmt.Errorf("fail evaluation run while resuming: %w", err)
-				}
-				if _, err := cancelRunWork(ctx, tx, run.ID); err != nil {
-					return runControlWork{}, err
-				}
-			} else if _, err := tx.ExecContext(ctx, `
-				UPDATE evaluation_runs
-				SET status = $2, paused_from_status = NULL, pause_reason = NULL,
-					state_version = state_version + 1, updated_at = NOW()
-				WHERE id = $1`, run.ID, to); err != nil {
-				return runControlWork{}, fmt.Errorf("resume evaluation run: %w", err)
-			}
-			return runControlWork{}, nil
-		},
-	})
+func loadRunControlReplay(ctx context.Context, tx *sql.Tx, runID uuid.UUID, idempotencyKey, reason, action string) (*service.RunControlResult, bool, error) {
+	var eventID, eventRunID uuid.UUID
+	var eventType string
+	var payload []byte
+	err := tx.QueryRowContext(ctx, `
+		SELECT id, run_id, event_type, payload
+		FROM evaluation_run_events
+		WHERE idempotency_key = $1
+		FOR UPDATE`, idempotencyKey).Scan(&eventID, &eventRunID, &eventType, &payload)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, false, nil
+	}
+	if err != nil {
+		return nil, false, fmt.Errorf("load run control event: %w", err)
+	}
+	if eventRunID != runID || eventType != "run_control_"+action {
+		return nil, false, infraerrors.Conflict("RUN_CONTROL_IDEMPOTENCY_CONFLICT", "idempotency key belongs to another run action")
+	}
+	var body struct {
+		Reason string          `json:"reason"`
+		Result json.RawMessage `json:"result"`
+	}
+	if err := json.Unmarshal(payload, &body); err != nil || body.Reason != reason {
+		return nil, false, infraerrors.Conflict("RUN_CONTROL_IDEMPOTENCY_CONFLICT", "idempotency key was reused with different parameters")
+	}
+	result, err := decodeRunControlReplay(body.Result, eventID, runID)
+	if err != nil {
+		return nil, false, err
+	}
+	return result, true, nil
 }
 
-func (r *radarGovernanceRepository) CancelRun(ctx context.Context, input service.RadarRunActionInput) (*service.RadarRunActionResult, error) {
-	return r.mutateRun(ctx, input, runControlMutation{
-		eventType: "run_cancelled",
-		apply: func(ctx context.Context, tx *sql.Tx, run *service.EvaluationRun) (runControlWork, error) {
-			if run.Status == service.RunStatusCompleted || run.Status == service.RunStatusFailed || run.Status == service.RunStatusCancelled {
-				return runControlWork{}, service.ErrRadarRunStateConflict
-			}
-			if _, err := tx.ExecContext(ctx, `
-				UPDATE evaluation_runs
-				SET status = 'cancelled', control_epoch = control_epoch + 1,
-					state_version = state_version + 1, cancelled_at = NOW(), cancelled_by = $2,
-					finished_at = COALESCE(finished_at, NOW()), paused_from_status = NULL,
-					pause_reason = NULL, updated_at = NOW()
-				WHERE id = $1`, run.ID, input.ActorID); err != nil {
-				return runControlWork{}, fmt.Errorf("cancel evaluation run: %w", err)
-			}
-			affected, err := cancelRunWork(ctx, tx, run.ID)
-			if err != nil {
-				return runControlWork{}, err
-			}
-			return runControlWork{affected: affected}, nil
-		},
-	})
-}
-
-func (r *radarGovernanceRepository) FenceRun(ctx context.Context, input service.RadarRunActionInput) (*service.RadarRunActionResult, error) {
-	return r.mutateRun(ctx, input, runControlMutation{
-		eventType: "run_fenced",
-		apply: func(ctx context.Context, tx *sql.Tx, run *service.EvaluationRun) (runControlWork, error) {
-			if run.Status == service.RunStatusCompleted || run.Status == service.RunStatusFailed || run.Status == service.RunStatusCancelled {
-				return runControlWork{}, service.ErrRadarRunStateConflict
-			}
-			if _, err := tx.ExecContext(ctx, `
-				UPDATE evaluation_runs
-				SET control_epoch = control_epoch + 1, state_version = state_version + 1, updated_at = NOW()
-				WHERE id = $1`, run.ID); err != nil {
-				return runControlWork{}, fmt.Errorf("fence evaluation run: %w", err)
-			}
-			return fenceRunWork(ctx, tx, run.ID)
-		},
-	})
-}
-
-func (r *radarGovernanceRepository) mutateRun(ctx context.Context, input service.RadarRunActionInput, mutation runControlMutation) (*service.RadarRunActionResult, error) {
-	if err := r.valid(); err != nil {
+func (r *radarGovernanceRepository) controlRun(ctx context.Context, runID uuid.UUID, reason string, actorID int64, idempotencyKey, action string) (*service.RunControlResult, error) {
+	reason = strings.TrimSpace(reason)
+	idempotencyKey = strings.TrimSpace(idempotencyKey)
+	if err := validateRunControl(runID, reason, idempotencyKey); err != nil {
 		return nil, err
 	}
-	if input.RunID == uuid.Nil || input.ActorID <= 0 || !validWorkerIdempotencyKey(input.IdempotencyKey) {
-		return nil, errors.New("run action requires run, actor and idempotency key")
+	if actorID <= 0 {
+		return nil, infraerrors.New(http.StatusBadRequest, "RUN_CONTROL_INVALID", "actor is required")
 	}
-	if !validRunReason(input.Reason) {
-		return nil, errors.New("run action reason is invalid")
-	}
-	requestHash := workerRequestHash(mutation.eventType, map[string]any{
-		"run_id": input.RunID, "reason": strings.TrimSpace(input.Reason),
-	})
-	result := &service.RadarRunActionResult{}
-	err := WithEvaluationWriterTx(ctx, r.db, defaultEvaluationWriterIdentity("control"), func(tx *sql.Tx) error {
-		existing, err := loadRunControlEvent(ctx, tx, input.IdempotencyKey)
-		if err != nil {
-			return err
-		}
-		if existing != nil {
-			if existing.EventType != mutation.eventType || existing.RequestHash != requestHash || existing.RunID != input.RunID {
-				return service.ErrRadarRunIdempotencyConflict
-			}
-			run, err := loadEvaluationRunForControl(ctx, tx, input.RunID)
-			if err != nil {
-				return err
-			}
-			result.Run = run
-			result.RunID = run.ID
-			result.FromStatus = existing.FromStatus
-			result.ToStatus = existing.ToStatus
-			result.PreviousEpoch = existing.PreviousEpoch
-			result.CurrentEpoch = existing.ControlEpoch
-			result.AffectedWorkCount = existing.Affected
-			result.ReplacementIDs = existing.ReplacementIDs
-			result.EventID = existing.ID
-			result.Idempotent = true
-			return nil
-		}
-		run, err := loadEvaluationRunForControl(ctx, tx, input.RunID)
-		if err != nil {
-			return err
-		}
-		mutation.from = run.Status
-		work, err := mutation.apply(ctx, tx, run)
-		if err != nil {
-			return err
-		}
-		updatedBeforeEvent, err := loadEvaluationRunForControl(ctx, tx, input.RunID)
-		if err != nil {
-			return err
-		}
-		var eventID uuid.UUID
-		var stateVersion int64
-		var controlEpoch int64
-		if err := tx.QueryRowContext(ctx, `SELECT state_version, control_epoch FROM evaluation_runs WHERE id = $1`, input.RunID).Scan(&stateVersion, &controlEpoch); err != nil {
-			return fmt.Errorf("read updated evaluation run state: %w", err)
-		}
-		payload, err := json.Marshal(map[string]any{
-			"actor_id": input.ActorID, "reason": strings.TrimSpace(input.Reason),
-			"request_hash": requestHash, "affected_work_count": work.affected,
-			"replacement_ids": work.replacementIDs, "previous_epoch": run.ControlEpoch,
-			"current_epoch": updatedBeforeEvent.ControlEpoch,
-		})
-		if err != nil {
-			return fmt.Errorf("encode run control event: %w", err)
-		}
-		eventID = uuid.New()
-		if err := tx.QueryRowContext(ctx, `
-			INSERT INTO evaluation_run_events (
-				id, run_id, event_type, payload, actor_type, actor_ref,
-				transition_version, from_status, to_status, control_epoch, idempotency_key
-			) VALUES ($1, $2, $3, $4::jsonb, 'user', $5, $6, $7, $8, $9, $10)
-			RETURNING id`, eventID, input.RunID, mutation.eventType, string(payload), strconv.FormatInt(input.ActorID, 10),
-			stateVersion, mutation.from, updatedBeforeEvent.Status, controlEpoch, input.IdempotencyKey).Scan(&eventID); err != nil {
-			return fmt.Errorf("append run control event: %w", err)
-		}
-		updated, err := loadEvaluationRunForControl(ctx, tx, input.RunID)
-		if err != nil {
-			return err
-		}
-		result.Run = updated
-		result.RunID = updated.ID
-		result.FromStatus = mutation.from
-		result.ToStatus = updated.Status
-		result.PreviousEpoch = run.ControlEpoch
-		result.CurrentEpoch = updated.ControlEpoch
-		result.AffectedWorkCount = work.affected
-		result.ReplacementIDs = work.replacementIDs
-		result.EventID = eventID
-		return nil
-	})
+	tx, err := beginRadarWriterTx(ctx, r.db, "api")
 	if err != nil {
-		if errors.Is(err, sql.ErrNoRows) {
-			return nil, sql.ErrNoRows
+		return nil, err
+	}
+	defer func() { _ = tx.Rollback() }()
+	if replay, found, err := loadRunControlReplay(ctx, tx, runID, idempotencyKey, reason, action); err != nil {
+		return nil, err
+	} else if found {
+		if err := tx.Commit(); err != nil {
+			return nil, err
 		}
+		return replay, nil
+	}
+	var row runControlRow
+	if err := tx.QueryRowContext(ctx, `
+		SELECT status, paused_from_status, pause_reason, control_epoch, state_version
+		FROM evaluation_runs WHERE id = $1 FOR UPDATE`, runID).Scan(
+		&row.status, &row.pausedFrom, &row.pauseReason, &row.epoch, &row.stateVersion); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, infraerrors.New(http.StatusNotFound, "RUN_NOT_FOUND", "evaluation run not found")
+		}
+		return nil, fmt.Errorf("lock evaluation run: %w", err)
+	}
+	if row.status == "completed" || row.status == "failed" || row.status == "cancelled" {
+		return nil, infraerrors.Conflict("RUN_TERMINAL", "terminal evaluation runs cannot be controlled")
+	}
+	result := &service.RunControlResult{RunID: runID, FromStatus: row.status, PreviousEpoch: row.epoch, CurrentEpoch: row.epoch}
+	toStatus := row.status
+	newEpoch := row.epoch
+	newStateVersion := row.stateVersion + 1
+	var affected int
+	var replacementIDs []uuid.UUID
+	var eventPayload map[string]any
+	switch action {
+	case "pause":
+		if row.status != "pending" && row.status != "running" && row.status != "budget_paused" {
+			return nil, infraerrors.Conflict("RUN_PAUSE_INVALID", "run is not pauseable")
+		}
+		toStatus = "paused"
+		if _, err := tx.ExecContext(ctx, `UPDATE evaluation_runs SET status='paused', paused_from_status=$2, pause_reason=$3, state_version=$4, updated_at=NOW() WHERE id=$1`, runID, row.status, reason, newStateVersion); err != nil {
+			return nil, fmt.Errorf("pause evaluation run: %w", err)
+		}
+	case "resume":
+		if row.status != "paused" {
+			return nil, infraerrors.Conflict("RUN_RESUME_INVALID", "run is not paused")
+		}
+		toStatus = "pending"
+		if row.pausedFrom.Valid && row.pausedFrom.String != "" {
+			toStatus = row.pausedFrom.String
+		}
+		if _, err := tx.ExecContext(ctx, `UPDATE evaluation_runs SET status=$2, paused_from_status=NULL, pause_reason=NULL, state_version=$3, updated_at=NOW() WHERE id=$1`, runID, toStatus, newStateVersion); err != nil {
+			return nil, fmt.Errorf("resume evaluation run: %w", err)
+		}
+		var p0Pending int
+		if err := tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM evaluation_samples WHERE run_id=$1 AND priority='P0' AND status NOT IN ('completed','cancelled','infra_failed','upstream_failed','invalid_evidence','grading_failed')`, runID).Scan(&p0Pending); err != nil {
+			return nil, fmt.Errorf("recompute P0 readiness: %w", err)
+		}
+		affected = p0Pending
+	case "cancel":
+		toStatus = "cancelled"
+		newEpoch++
+		if resultCount, err := tx.ExecContext(ctx, `UPDATE evaluation_assignments SET status='cancelled', lease_token_hash=NULL, leased_by=NULL, lease_expires_at=NULL, heartbeat_at=NULL, finished_at=NOW(), updated_at=NOW() WHERE sample_id IN (SELECT id FROM evaluation_samples WHERE run_id=$1) AND status NOT IN ('completed','cancelled','infra_failed','upstream_failed','invalid_evidence','grading_failed')`, runID); err != nil {
+			return nil, fmt.Errorf("cancel evaluation assignments: %w", err)
+		} else if n, err := resultCount.RowsAffected(); err == nil {
+			affected += int(n)
+		}
+		if _, err := tx.ExecContext(ctx, `UPDATE evaluation_samples SET status='cancelled', updated_at=NOW() WHERE run_id=$1 AND status NOT IN ('completed','cancelled','infra_failed','upstream_failed','invalid_evidence','grading_failed')`, runID); err != nil {
+			return nil, fmt.Errorf("cancel evaluation samples: %w", err)
+		}
+		if _, err := tx.ExecContext(ctx, `UPDATE evaluation_grading_jobs SET status='cancelled', lease_token_hash=NULL, leased_by=NULL, lease_expires_at=NULL, updated_at=NOW() WHERE run_id=$1 AND status NOT IN ('completed','cancelled','failed')`, runID); err != nil {
+			return nil, fmt.Errorf("cancel grading jobs: %w", err)
+		}
+		if _, err := tx.ExecContext(ctx, `UPDATE evaluation_analysis_jobs SET status='cancelled', lease_token_hash=NULL, leased_by=NULL, lease_expires_at=NULL, finished_at=NOW(), updated_at=NOW() WHERE run_id=$1 AND status NOT IN ('completed','cancelled','failed')`, runID); err != nil {
+			return nil, fmt.Errorf("cancel analysis jobs: %w", err)
+		}
+		if _, err := tx.ExecContext(ctx, `
+			INSERT INTO evaluation_route_evidence_terminalization_outbox
+				(id, run_id, terminal_status, control_epoch, idempotency_key, payload)
+			VALUES ($1, $2, 'cancelled', $3, $4, jsonb_build_object('run_id', $2::uuid, 'terminal_status', 'cancelled', 'control_epoch', $3::bigint))
+			ON CONFLICT (idempotency_key) DO NOTHING`, uuid.New(), runID, newEpoch,
+			hashReconcileKey(fmt.Sprintf("evidence-terminalization:%s:cancelled:%d", runID, newEpoch))); err != nil {
+			return nil, fmt.Errorf("enqueue route evidence terminalization: %w", err)
+		}
+		if _, err := tx.ExecContext(ctx, `UPDATE evaluation_runs SET status='cancelled', cancelled_at=NOW(), cancelled_by=$2, finished_at=NOW(), control_epoch=$3, state_version=$4, updated_at=NOW() WHERE id=$1`, runID, actorID, newEpoch, newStateVersion); err != nil {
+			return nil, fmt.Errorf("cancel evaluation run: %w", err)
+		}
+	case "fence":
+		newEpoch++
+		newStateVersion = row.stateVersion
+		rows, err := tx.QueryContext(ctx, `SELECT a.id, a.sample_id, s.case_id, s.model_route, s.sample_index, a.attempt, a.work_origin FROM evaluation_assignments a JOIN evaluation_samples s ON s.id=a.sample_id WHERE s.run_id=$1 AND a.status IN ('leased','running') FOR UPDATE`, runID)
+		if err != nil {
+			return nil, fmt.Errorf("load retryable runner work: %w", err)
+		}
+		type fencedAssignment struct {
+			assignmentID, sampleID, caseID uuid.UUID
+			modelRoute                     string
+			sampleIndex, attempt           int
+			workOrigin                     string
+		}
+		var fenced []fencedAssignment
+		for rows.Next() {
+			var item fencedAssignment
+			if err := rows.Scan(&item.assignmentID, &item.sampleID, &item.caseID, &item.modelRoute, &item.sampleIndex, &item.attempt, &item.workOrigin); err != nil {
+				rows.Close()
+				return nil, err
+			}
+			fenced = append(fenced, item)
+		}
+		if err := rows.Err(); err != nil {
+			rows.Close()
+			return nil, fmt.Errorf("iterate retryable runner work: %w", err)
+		}
+		if err := rows.Close(); err != nil {
+			return nil, fmt.Errorf("close retryable runner work: %w", err)
+		}
+		for _, item := range fenced {
+			if _, err := tx.ExecContext(ctx, `UPDATE evaluation_assignments SET status='infra_failed', lease_token_hash=NULL, leased_by=NULL, lease_expires_at=NULL, heartbeat_at=NULL, failure_class='infrastructure', failure_code='fenced', finished_at=NOW(), updated_at=NOW() WHERE id=$1`, item.assignmentID); err != nil {
+				return nil, err
+			}
+			replacementID := uuid.New()
+			if _, err := tx.ExecContext(ctx, `INSERT INTO evaluation_assignments (id, sample_id, attempt, idempotency_key, status, lease_epoch, work_origin) VALUES ($1,$2,$3,$4,'pending',$5,$6)`, replacementID, item.sampleID, item.attempt+1, assignmentIdempotencyKey(runID, item.caseID, item.modelRoute, item.sampleIndex, item.attempt+1), newEpoch, item.workOrigin); err != nil {
+				return nil, err
+			}
+			if err := propagateAssignmentReplacement(ctx, tx, runID, item.sampleID, item.assignmentID, replacementID, item.attempt); err != nil {
+				return nil, err
+			}
+			replacementIDs = append(replacementIDs, replacementID)
+		}
+		affected = len(replacementIDs)
+		if _, err := tx.ExecContext(ctx, `UPDATE evaluation_runs SET control_epoch=$2, state_version=$3, updated_at=NOW() WHERE id=$1`, runID, newEpoch, newStateVersion); err != nil {
+			return nil, err
+		}
+	default:
+		return nil, infraerrors.New(http.StatusBadRequest, "RUN_CONTROL_INVALID", "unsupported run action")
+	}
+	result.ToStatus = toStatus
+	result.CurrentEpoch = newEpoch
+	result.AffectedWorkCount = affected
+	result.ReplacementIDs = replacementIDs
+	eventID := uuid.New()
+	result.EventID = eventID
+	if eventPayload == nil {
+		eventPayload = map[string]any{}
+	}
+	eventPayload["reason"] = reason
+	eventPayload["result"] = result
+	payload, _ := json.Marshal(eventPayload)
+	var transitionVersion any
+	var fromStatus, toStatusValue any
+	if toStatus != row.status {
+		transitionVersion = newStateVersion
+		fromStatus, toStatusValue = row.status, toStatus
+	}
+	if _, err := tx.ExecContext(ctx, `INSERT INTO evaluation_run_events (id, run_id, event_type, payload, actor_type, actor_ref, transition_version, from_status, to_status, control_epoch, idempotency_key) VALUES ($1,$2,$3,$4::jsonb,'user',$5,$6,$7,$8,$9,$10)`, eventID, runID, "run_control_"+action, string(payload), fmt.Sprintf("%d", actorID), transitionVersion, fromStatus, toStatusValue, newEpoch, idempotencyKey); err != nil {
+		return nil, fmt.Errorf("record run control event: %w", err)
+	}
+	if err := tx.Commit(); err != nil {
 		return nil, err
 	}
 	return result, nil
 }
 
-func validRunReason(reason string) bool {
-	reason = strings.TrimSpace(reason)
-	if reason == "" || len(reason) > 64 {
-		return false
-	}
-	for _, r := range reason {
-		if (r < 'a' || r > 'z') && (r < '0' || r > '9') && r != '_' {
-			return false
-		}
-	}
-	return true
+func (r *radarGovernanceRepository) PauseRun(ctx context.Context, runID uuid.UUID, reason string, actorID int64, key string) (*service.RunControlResult, error) {
+	return r.controlRun(ctx, runID, reason, actorID, key, "pause")
 }
-
-func loadRunControlEvent(ctx context.Context, tx *sql.Tx, key string) (*runControlEvent, error) {
-	var event runControlEvent
-	var payload []byte
-	err := tx.QueryRowContext(ctx, `
-		SELECT id, run_id, event_type, payload, from_status, to_status, control_epoch
-		FROM evaluation_run_events WHERE idempotency_key = $1 FOR UPDATE`, key).
-		Scan(&event.ID, &event.RunID, &event.EventType, &payload, &event.FromStatus, &event.ToStatus, &event.ControlEpoch)
-	if errors.Is(err, sql.ErrNoRows) {
-		return nil, nil
-	}
-	if err != nil {
-		return nil, fmt.Errorf("load run control event: %w", err)
-	}
-	var body struct {
-		RequestHash string `json:"request_hash"`
-	}
-	if err := json.Unmarshal(payload, &body); err != nil {
-		return nil, fmt.Errorf("decode run control event: %w", err)
-	}
-	event.RequestHash = body.RequestHash
-	var details struct {
-		Affected       int         `json:"affected_work_count"`
-		ReplacementIDs []uuid.UUID `json:"replacement_ids"`
-		PreviousEpoch  int64       `json:"previous_epoch"`
-	}
-	if err := json.Unmarshal(payload, &details); err == nil {
-		event.Affected = details.Affected
-		event.ReplacementIDs = details.ReplacementIDs
-		event.PreviousEpoch = details.PreviousEpoch
-	}
-	return &event, nil
+func (r *radarGovernanceRepository) ResumeRun(ctx context.Context, runID uuid.UUID, reason string, actorID int64, key string) (*service.RunControlResult, error) {
+	return r.controlRun(ctx, runID, reason, actorID, key, "resume")
 }
-
-func recomputeResumeStatus(ctx context.Context, tx *sql.Tx, run *service.EvaluationRun) (service.RunStatus, bool, error) {
-	var total, completed, open, p0Total, p0Completed, p0Failed, p0Open int
-	if err := tx.QueryRowContext(ctx, `
-		SELECT
-			COUNT(*),
-			COUNT(*) FILTER (WHERE status = 'completed'),
-			COUNT(*) FILTER (WHERE status IN ('pending', 'leased', 'running', 'evidence_uploaded', 'grading')),
-			COUNT(*) FILTER (WHERE priority = 'P0'),
-			COUNT(*) FILTER (WHERE priority = 'P0' AND status = 'completed'),
-			COUNT(*) FILTER (WHERE priority = 'P0' AND status IN ('infra_failed', 'upstream_failed', 'invalid_evidence', 'grading_failed', 'cancelled')),
-			COUNT(*) FILTER (WHERE priority = 'P0' AND status IN ('pending', 'leased', 'running', 'evidence_uploaded', 'grading'))
-		FROM evaluation_samples WHERE run_id = $1`, run.ID).
-		Scan(&total, &completed, &open, &p0Total, &p0Completed, &p0Failed, &p0Open); err != nil {
-		return service.RunStatusPending, false, fmt.Errorf("recompute evaluation run readiness: %w", err)
-	}
-	if p0Failed > 0 && p0Open == 0 {
-		return service.RunStatusFailed, true, nil
-	}
-	if p0Total > 0 && p0Completed < p0Total && run.ReservedCost.GreaterThanOrEqual(run.BudgetLimit) {
-		return service.RunStatusBudgetPaused, false, nil
-	}
-	if run.PausedFromStatus == service.RunStatusPending && completed == 0 && open == total {
-		return service.RunStatusPending, false, nil
-	}
-	return service.RunStatusRunning, false, nil
+func (r *radarGovernanceRepository) CancelRun(ctx context.Context, runID uuid.UUID, reason string, actorID int64, key string) (*service.RunControlResult, error) {
+	return r.controlRun(ctx, runID, reason, actorID, key, "cancel")
 }
-
-func loadEvaluationRunForControl(ctx context.Context, tx *sql.Tx, id uuid.UUID) (*service.EvaluationRun, error) {
-	run := &service.EvaluationRun{ID: id}
-	var paused sql.NullString
-	var cancelledBy sql.NullInt64
-	err := tx.QueryRowContext(ctx, `
-		SELECT plan_id, status, budget_limit, reserved_cost, created_at,
-			paused_from_status, pause_reason, control_epoch, state_version,
-			cancelled_at, cancelled_by
-		FROM evaluation_runs WHERE id = $1 FOR UPDATE`, id).Scan(
-		&run.PlanID, &run.Status, &run.BudgetLimit, &run.ReservedCost, &run.CreatedAt,
-		&paused, &run.PauseReason, &run.ControlEpoch, &run.StateVersion,
-		&run.CancelledAt, &cancelledBy)
-	if err != nil {
-		return nil, err
-	}
-	if paused.Valid {
-		run.PausedFromStatus = service.RunStatus(paused.String)
-	}
-	if cancelledBy.Valid {
-		run.CancelledBy = &cancelledBy.Int64
-	}
-	return run, nil
-}
-
-func cancelRunWork(ctx context.Context, tx *sql.Tx, runID uuid.UUID) (int, error) {
-	affected := 0
-	if result, err := tx.ExecContext(ctx, `
-		UPDATE evaluation_assignments a
-		SET status = 'cancelled', lease_token_hash = NULL, leased_by = NULL,
-			lease_expires_at = NULL, heartbeat_at = NULL, finished_at = NOW(), updated_at = NOW()
-		FROM evaluation_samples s
-		WHERE a.sample_id = s.id AND s.run_id = $1
-		  AND a.status IN ('pending', 'leased', 'running', 'evidence_uploaded', 'grading')`, runID); err != nil {
-		return 0, fmt.Errorf("cancel evaluation assignments: %w", err)
-	} else if n, err := result.RowsAffected(); err == nil {
-		affected += int(n)
-	}
-	if result, err := tx.ExecContext(ctx, `UPDATE evaluation_samples SET status = 'cancelled', updated_at = NOW() WHERE run_id = $1 AND status IN ('pending', 'leased', 'running', 'evidence_uploaded', 'grading')`, runID); err != nil {
-		return 0, fmt.Errorf("cancel evaluation samples: %w", err)
-	} else if n, err := result.RowsAffected(); err == nil {
-		affected += int(n)
-	}
-	if result, err := tx.ExecContext(ctx, `UPDATE evaluation_grading_jobs SET status = 'cancelled', lease_token_hash = NULL, leased_by = NULL, lease_expires_at = NULL, finished_at = NOW(), updated_at = NOW() WHERE run_id = $1 AND status IN ('pending', 'leased')`, runID); err != nil {
-		return 0, fmt.Errorf("cancel evaluation grading jobs: %w", err)
-	} else if n, err := result.RowsAffected(); err == nil {
-		affected += int(n)
-	}
-	if result, err := tx.ExecContext(ctx, `UPDATE evaluation_analysis_jobs SET status = 'cancelled', lease_token_hash = NULL, leased_by = NULL, lease_expires_at = NULL, finished_at = NOW(), updated_at = NOW() WHERE run_id = $1 AND status IN ('pending', 'leased')`, runID); err != nil {
-		return 0, fmt.Errorf("cancel evaluation analysis jobs: %w", err)
-	} else if n, err := result.RowsAffected(); err == nil {
-		affected += int(n)
-	}
-	return affected, nil
-}
-
-func fenceRunWork(ctx context.Context, tx *sql.Tx, runID uuid.UUID) (runControlWork, error) {
-	type fencedAssignment struct {
-		assignmentID uuid.UUID
-		sampleID     uuid.UUID
-		caseID       uuid.UUID
-		route        string
-		sampleIndex  int
-		attempt      int
-	}
-	rows, err := tx.QueryContext(ctx, `
-		SELECT a.id, a.sample_id, s.case_id, s.model_route, s.sample_index, a.attempt
-		FROM evaluation_assignments a
-		JOIN evaluation_samples s ON s.id = a.sample_id
-		WHERE s.run_id = $1 AND a.status IN ('leased', 'running')
-		FOR UPDATE OF a`, runID)
-	if err != nil {
-		return runControlWork{}, fmt.Errorf("lock evaluation assignments for fence: %w", err)
-	}
-	assignments := make([]fencedAssignment, 0)
-	for rows.Next() {
-		var item fencedAssignment
-		if err := rows.Scan(&item.assignmentID, &item.sampleID, &item.caseID, &item.route, &item.sampleIndex, &item.attempt); err != nil {
-			_ = rows.Close()
-			return runControlWork{}, fmt.Errorf("scan evaluation assignment for fence: %w", err)
-		}
-		assignments = append(assignments, item)
-	}
-	if err := rows.Err(); err != nil {
-		_ = rows.Close()
-		return runControlWork{}, fmt.Errorf("iterate evaluation assignments for fence: %w", err)
-	}
-	if err := rows.Close(); err != nil {
-		return runControlWork{}, fmt.Errorf("close evaluation assignments for fence: %w", err)
-	}
-	if _, err := tx.ExecContext(ctx, `
-		UPDATE evaluation_grading_jobs SET status = 'cancelled', lease_token_hash = NULL,
-			leased_by = NULL, lease_expires_at = NULL, finished_at = NOW(), updated_at = NOW()
-		WHERE run_id = $1 AND status IN ('pending', 'leased')`, runID); err != nil {
-		return runControlWork{}, fmt.Errorf("fence evaluation grading jobs: %w", err)
-	}
-	if _, err := tx.ExecContext(ctx, `
-		UPDATE evaluation_analysis_jobs SET status = 'cancelled', lease_token_hash = NULL,
-			leased_by = NULL, lease_expires_at = NULL, finished_at = NOW(), updated_at = NOW()
-		WHERE run_id = $1 AND status IN ('pending', 'leased')`, runID); err != nil {
-		return runControlWork{}, fmt.Errorf("fence evaluation analysis jobs: %w", err)
-	}
-	replacements := 0
-	replacementIDs := make([]uuid.UUID, 0)
-	affected := 0
-	exhausted := false
-	for _, item := range assignments {
-		assignmentID, sampleID, caseID := item.assignmentID, item.sampleID, item.caseID
-		route, sampleIndex, attempt := item.route, item.sampleIndex, item.attempt
-		if _, err := tx.ExecContext(ctx, `UPDATE evaluation_assignments SET status = 'cancelled', lease_token_hash = NULL, leased_by = NULL, lease_expires_at = NULL, heartbeat_at = NULL, finished_at = NOW(), updated_at = NOW() WHERE id = $1`, assignmentID); err != nil {
-			return runControlWork{}, fmt.Errorf("fence evaluation assignment: %w", err)
-		}
-		affected++
-		if _, err := tx.ExecContext(ctx, `UPDATE evaluation_samples SET status = 'pending', updated_at = NOW() WHERE id = $1`, sampleID); err != nil {
-			return runControlWork{}, fmt.Errorf("reset evaluation sample after fence: %w", err)
-		}
-		if attempt >= 2 {
-			exhausted = true
-			if _, err := tx.ExecContext(ctx, `UPDATE evaluation_samples SET status = 'infra_failed', failure_class = 'infrastructure', failure_code = 'fence_retry_exhausted', updated_at = NOW() WHERE id = $1`, sampleID); err != nil {
-				return runControlWork{}, fmt.Errorf("mark fenced sample failed: %w", err)
-			}
-			continue
-		}
-		nextID := uuid.New()
-		_, err = tx.ExecContext(ctx, `
-			INSERT INTO evaluation_assignments (id, sample_id, attempt, idempotency_key, status, lease_epoch, work_origin)
-			VALUES ($1, $2, $3, $4, 'pending', (SELECT control_epoch FROM evaluation_runs WHERE id = $5), 'initial')`,
-			nextID, sampleID, attempt+1, assignmentIdempotencyKey(runID, caseID, route, sampleIndex, attempt+1), runID)
-		if err != nil {
-			return runControlWork{}, fmt.Errorf("create fenced replacement assignment: %w", err)
-		}
-		replacements++
-		replacementIDs = append(replacementIDs, nextID)
-	}
-	if _, err := tx.ExecContext(ctx, `
-		UPDATE evaluation_assignments a SET lease_epoch = r.control_epoch, updated_at = NOW()
-		FROM evaluation_samples s JOIN evaluation_runs r ON r.id = s.run_id
-		WHERE a.sample_id = s.id AND s.run_id = $1 AND a.status = 'pending'`, runID); err != nil {
-		return runControlWork{}, fmt.Errorf("advance pending assignment epoch: %w", err)
-	}
-	if exhausted {
-		if _, err := tx.ExecContext(ctx, `
-			UPDATE evaluation_runs
-			SET status = 'failed', state_version = state_version + 1,
-				finished_at = NOW(), updated_at = NOW()
-			WHERE id = $1`, runID); err != nil {
-			return runControlWork{}, fmt.Errorf("fail fenced evaluation run: %w", err)
-		}
-		cancelled, err := cancelRunWork(ctx, tx, runID)
-		if err != nil {
-			return runControlWork{}, err
-		}
-		affected += cancelled
-	}
-	return runControlWork{affected: affected, replacementIDs: replacementIDs}, nil
+func (r *radarGovernanceRepository) FenceRun(ctx context.Context, runID uuid.UUID, reason string, actorID int64, key string) (*service.RunControlResult, error) {
+	return r.controlRun(ctx, runID, reason, actorID, key, "fence")
 }

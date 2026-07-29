@@ -5,7 +5,10 @@ import (
 	"crypto/hmac"
 	"crypto/sha256"
 	"encoding/base64"
+	"encoding/hex"
 	"errors"
+	"fmt"
+	"reflect"
 	"strconv"
 	"strings"
 	"sync"
@@ -13,11 +16,17 @@ import (
 	"time"
 
 	"github.com/Wei-Shaw/sub2api/internal/pkg/logger"
+	"github.com/google/uuid"
 	"github.com/shopspring/decimal"
 	"go.uber.org/zap"
 )
 
 var ErrRouteEvidenceIdentityConflict = errors.New("route evidence identity conflict")
+
+var (
+	ErrRouteEvidenceFieldImmutable = errors.New("route evidence field is immutable once set")
+	ErrRouteEvidenceNotOpen        = errors.New("route evidence is not open")
+)
 
 var evaluationEvidencePersistenceFailures atomic.Uint64
 
@@ -32,6 +41,16 @@ func EvaluationEvidencePersistenceFailureCount() uint64 {
 type EvaluationEvidenceRepository interface {
 	UpsertTransport(ctx context.Context, evidence RouteEvidence) error
 	AttachBilling(ctx context.Context, traceID string, usage RouteUsageEvidence) error
+}
+
+type TrustedEvaluationEvidenceRepository interface {
+	CreateOpen(ctx context.Context, input CreateOpenRouteEvidenceInput) (RouteEvidencePatchState, error)
+	PatchRouteEvidence(ctx context.Context, traceID string, patch RouteEvidencePatch) (RouteEvidencePatchState, error)
+}
+
+type TrustedEvaluationEvidenceFinalizer interface {
+	FinalizeRouteEvidence(ctx context.Context, input FinalizeRouteEvidenceInput) (SealedRouteEvidence, error)
+	FinalizeRouteEvidenceFromTerminalization(ctx context.Context, input FinalizeRouteEvidenceFromTerminalizationInput) (int, error)
 }
 
 type RouteTraceConfig struct {
@@ -49,13 +68,20 @@ type RouteAttempt struct {
 }
 
 type RouteFallbackEntry struct {
-	Ordinal        int    `json:"ordinal"`
-	Provider       string `json:"provider"`
-	AccountPoolRef string `json:"account_pool_ref"`
-	ChannelRef     string `json:"channel_ref"`
-	ResolvedModel  string `json:"resolved_model"`
-	Region         string `json:"region"`
-	ErrorCode      string `json:"error_code"`
+	Ordinal            int        `json:"ordinal"`
+	ParentAttemptIndex *int       `json:"parent_attempt_index"`
+	DispatchMode       string     `json:"dispatch_mode"`
+	RouteRuleHash      string     `json:"route_rule_hash"`
+	RequestedModel     string     `json:"requested_model"`
+	Provider           string     `json:"provider"`
+	AccountPoolRef     string     `json:"account_pool_ref"`
+	ChannelRef         string     `json:"channel_ref"`
+	ResolvedModel      string     `json:"resolved_model"`
+	Region             string     `json:"region"`
+	Outcome            string     `json:"outcome"`
+	ErrorCode          string     `json:"error_code"`
+	StartedAt          time.Time  `json:"started_at"`
+	FinishedAt         *time.Time `json:"finished_at"`
 }
 
 type RouteEvidence struct {
@@ -88,7 +114,293 @@ type RouteUsageEvidence struct {
 	FinishReason string
 }
 
+type CreateOpenRouteEvidenceInput struct {
+	RouteTraceID           string
+	RunID                  string
+	SampleID               string
+	APIKeyID               int64
+	RequestID              string
+	RequestedModel         string
+	RouteProfileVersion    string
+	RequestOrdinal         int
+	Semantics              RequestSemantics
+	GatewayServiceIdentity string
+	GatewayImageDigest     string
+	Region                 string
+	StartedAt              time.Time
+}
+
+type RouteEvidenceIdentity struct {
+	RouteTraceID   string
+	RunID          string
+	SampleID       string
+	APIKeyID       int64
+	AssignmentID   string
+	RequestOrdinal int
+	LeaseEpoch     int64
+}
+
+type FinalizeRouteEvidenceInput struct {
+	RouteTraceID     string
+	ExpectedRevision int64
+	LeaseEpoch       int64
+}
+
+type SealedRouteEvidence struct {
+	Revision     int64
+	PayloadHash  string
+	SigningKeyID string
+	PayloadHMAC  string
+	SealedAt     time.Time
+}
+
+type FinalizeRouteEvidenceFromTerminalizationInput struct {
+	EventID      uuid.UUID
+	RunID        uuid.UUID
+	ControlEpoch int64
+}
+
+type TransportPatch struct {
+	ResolvedModel   *string
+	Provider        *string
+	ChannelRef      *string
+	AccountPoolRef  *string
+	Attempts        *int
+	FallbackChain   *[]RouteFallbackEntry
+	TransportStatus *string
+	ErrorCode       *string
+	FinishedAt      *time.Time
+}
+
+type BillingPatch struct {
+	InputTokens   *int
+	OutputTokens  *int
+	TTFT          *int
+	Latency       *int
+	BilledAmount  *decimal.Decimal
+	FinishReason  *string
+	BillingStatus *string
+}
+
+type RouteEvidencePatch struct {
+	ExpectedRevision int64
+	Identity         *RouteEvidenceIdentity
+	Transport        *TransportPatch
+	Billing          *BillingPatch
+}
+
+type RouteEvidencePatchState struct {
+	Identity  RouteEvidenceIdentity
+	Revision  int64
+	Terminal  bool
+	Sealed    bool
+	Transport TransportPatch
+	Billing   BillingPatch
+}
+
+type RouteEvidenceRevisionConflict struct {
+	CurrentRevision int64
+}
+
+type RouteEvidenceRevisionTracker struct {
+	mu      sync.Mutex
+	repo    TrustedEvaluationEvidenceRepository
+	traceID string
+	state   RouteEvidencePatchState
+}
+
+func NewRouteEvidenceRevisionTracker(repo TrustedEvaluationEvidenceRepository, traceID string, state RouteEvidencePatchState) *RouteEvidenceRevisionTracker {
+	return &RouteEvidenceRevisionTracker{repo: repo, traceID: strings.TrimSpace(traceID), state: state}
+}
+
+func (t *RouteEvidenceRevisionTracker) Patch(ctx context.Context, patch RouteEvidencePatch) (RouteEvidencePatchState, error) {
+	if t == nil || t.repo == nil || t.traceID == "" {
+		return RouteEvidencePatchState{}, ErrRouteEvidenceNotOpen
+	}
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	patch.ExpectedRevision = t.state.Revision
+	updated, err := t.repo.PatchRouteEvidence(ctx, t.traceID, patch)
+	if err != nil {
+		var conflict *RouteEvidenceRevisionConflict
+		if errors.As(err, &conflict) {
+			t.state.Revision = conflict.CurrentRevision
+		}
+		return t.state, err
+	}
+	t.state = updated
+	return updated, nil
+}
+
+func (t *RouteEvidenceRevisionTracker) State() RouteEvidencePatchState {
+	if t == nil {
+		return RouteEvidencePatchState{}
+	}
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	return t.state
+}
+
+func (e *RouteEvidenceRevisionConflict) Error() string {
+	return fmt.Sprintf("route evidence revision conflict: current revision is %d", e.CurrentRevision)
+}
+
+func MergeRouteEvidencePatch(current RouteEvidencePatchState, patch RouteEvidencePatch) (RouteEvidencePatchState, error) {
+	if current.Terminal || current.Sealed {
+		return current, ErrRouteEvidenceNotOpen
+	}
+	if patch.Identity != nil {
+		return current, ErrRouteEvidenceIdentityConflict
+	}
+
+	updated := current
+	changed := false
+	var err error
+	if patch.Transport != nil {
+		changed, err = mergeTransportPatch(&updated.Transport, *patch.Transport)
+		if err != nil {
+			return current, err
+		}
+	}
+	if patch.Billing != nil {
+		billingChanged, mergeErr := mergeBillingPatch(&updated.Billing, *patch.Billing)
+		if mergeErr != nil {
+			return current, mergeErr
+		}
+		changed = changed || billingChanged
+	}
+	if !changed {
+		return current, nil
+	}
+	if patch.ExpectedRevision != current.Revision {
+		return current, &RouteEvidenceRevisionConflict{CurrentRevision: current.Revision}
+	}
+	updated.Revision++
+	return updated, nil
+}
+
+func mergeTransportPatch(current *TransportPatch, patch TransportPatch) (bool, error) {
+	changed := false
+	fields := []struct {
+		current any
+		patch   any
+		assign  func()
+	}{
+		{current.ResolvedModel, patch.ResolvedModel, func() { current.ResolvedModel = patch.ResolvedModel }},
+		{current.Provider, patch.Provider, func() { current.Provider = patch.Provider }},
+		{current.ChannelRef, patch.ChannelRef, func() { current.ChannelRef = patch.ChannelRef }},
+		{current.AccountPoolRef, patch.AccountPoolRef, func() { current.AccountPoolRef = patch.AccountPoolRef }},
+		{current.Attempts, patch.Attempts, func() { current.Attempts = patch.Attempts }},
+		{current.FallbackChain, patch.FallbackChain, func() { current.FallbackChain = patch.FallbackChain }},
+		{current.ErrorCode, patch.ErrorCode, func() { current.ErrorCode = patch.ErrorCode }},
+		{current.FinishedAt, patch.FinishedAt, func() { current.FinishedAt = patch.FinishedAt }},
+	}
+	for _, field := range fields {
+		fieldChanged, err := mergeSetOnceField(field.current, field.patch, field.assign)
+		if err != nil {
+			return false, err
+		}
+		changed = changed || fieldChanged
+	}
+	statusChanged, err := mergeStatusField(&current.TransportStatus, patch.TransportStatus, "started", map[string]struct{}{
+		"succeeded": {}, "upstream_failed": {}, "gateway_failed": {}, "protocol_failed": {}, "client_cancelled": {},
+	})
+	return changed || statusChanged, err
+}
+
+func mergeBillingPatch(current *BillingPatch, patch BillingPatch) (bool, error) {
+	changed := false
+	fields := []struct {
+		current any
+		patch   any
+		assign  func()
+	}{
+		{current.InputTokens, patch.InputTokens, func() { current.InputTokens = patch.InputTokens }},
+		{current.OutputTokens, patch.OutputTokens, func() { current.OutputTokens = patch.OutputTokens }},
+		{current.TTFT, patch.TTFT, func() { current.TTFT = patch.TTFT }},
+		{current.Latency, patch.Latency, func() { current.Latency = patch.Latency }},
+		{current.BilledAmount, patch.BilledAmount, func() { current.BilledAmount = patch.BilledAmount }},
+		{current.FinishReason, patch.FinishReason, func() { current.FinishReason = patch.FinishReason }},
+	}
+	for _, field := range fields {
+		fieldChanged, err := mergeSetOnceField(field.current, field.patch, field.assign)
+		if err != nil {
+			return false, err
+		}
+		changed = changed || fieldChanged
+	}
+	statusChanged, err := mergeStatusField(&current.BillingStatus, patch.BillingStatus, "incomplete", map[string]struct{}{
+		"complete": {}, "not_applicable": {},
+	})
+	return changed || statusChanged, err
+}
+
+func mergeSetOnceField(current, patch any, assign func()) (bool, error) {
+	if isNilPatchValue(patch) {
+		return false, nil
+	}
+	if patchClearsValue(patch) {
+		return false, ErrRouteEvidenceFieldImmutable
+	}
+	if isNilPatchValue(current) {
+		assign()
+		return true, nil
+	}
+	if reflect.DeepEqual(current, patch) {
+		return false, nil
+	}
+	return false, ErrRouteEvidenceFieldImmutable
+}
+
+func mergeStatusField(current **string, patch *string, initial string, terminals map[string]struct{}) (bool, error) {
+	if patch == nil {
+		return false, nil
+	}
+	value := strings.TrimSpace(*patch)
+	if value == "" {
+		return false, ErrRouteEvidenceFieldImmutable
+	}
+	if *current == nil {
+		if value != initial {
+			if _, ok := terminals[value]; !ok {
+				return false, ErrRouteEvidenceFieldImmutable
+			}
+		}
+		*current = patch
+		return true, nil
+	}
+	if strings.TrimSpace(**current) == value {
+		return false, nil
+	}
+	if strings.TrimSpace(**current) == initial {
+		if _, ok := terminals[value]; ok {
+			*current = patch
+			return true, nil
+		}
+	}
+	return false, ErrRouteEvidenceFieldImmutable
+}
+
+func isNilPatchValue(value any) bool {
+	if value == nil {
+		return true
+	}
+	ref := reflect.ValueOf(value)
+	return ref.Kind() == reflect.Ptr && ref.IsNil()
+}
+
+func patchClearsValue(value any) bool {
+	ref := reflect.ValueOf(value)
+	if ref.Kind() != reflect.Ptr || ref.IsNil() {
+		return false
+	}
+	elem := ref.Elem()
+	return elem.Kind() == reflect.String && strings.TrimSpace(elem.String()) == ""
+}
+
 type evaluationEvidenceRepositoryContextKey struct{}
+
+type routeEvidenceRevisionTrackerContextKey struct{}
 
 func WithEvaluationEvidenceRepository(ctx context.Context, repo EvaluationEvidenceRepository) context.Context {
 	return context.WithValue(ctx, evaluationEvidenceRepositoryContextKey{}, repo)
@@ -97,6 +409,15 @@ func WithEvaluationEvidenceRepository(ctx context.Context, repo EvaluationEviden
 func EvaluationEvidenceRepositoryFromContext(ctx context.Context) (EvaluationEvidenceRepository, bool) {
 	repo, ok := ctx.Value(evaluationEvidenceRepositoryContextKey{}).(EvaluationEvidenceRepository)
 	return repo, ok && repo != nil
+}
+
+func WithRouteEvidenceRevisionTracker(ctx context.Context, tracker *RouteEvidenceRevisionTracker) context.Context {
+	return context.WithValue(ctx, routeEvidenceRevisionTrackerContextKey{}, tracker)
+}
+
+func RouteEvidenceRevisionTrackerFromContext(ctx context.Context) (*RouteEvidenceRevisionTracker, bool) {
+	tracker, ok := ctx.Value(routeEvidenceRevisionTrackerContextKey{}).(*RouteEvidenceRevisionTracker)
+	return tracker, ok && tracker != nil
 }
 
 func attachEvaluationBillingEvidence(ctx context.Context, usageLog *UsageLog, finishReason string) {
@@ -120,7 +441,34 @@ func attachEvaluationBillingEvidence(ctx context.Context, usageLog *UsageLog, fi
 		BilledAmount: decimal.NewFromFloat(usageLog.ActualCost),
 		FinishReason: strings.TrimSpace(finishReason),
 	}
-	if err := repo.AttachBilling(ctx, evaluation.RouteTraceID, usage); err != nil {
+	var err error
+	if tracker, tracked := RouteEvidenceRevisionTrackerFromContext(ctx); tracked {
+		inputTokens, outputTokens := usage.InputTokens, usage.OutputTokens
+		billedAmount := usage.BilledAmount
+		billingStatus := "complete"
+		patch := BillingPatch{
+			InputTokens: &inputTokens, OutputTokens: &outputTokens,
+			TTFT: usage.TTFT, Latency: usage.Latency,
+			BilledAmount: &billedAmount, BillingStatus: &billingStatus,
+		}
+		if usage.FinishReason != "" {
+			finishReason := usage.FinishReason
+			patch.FinishReason = &finishReason
+		}
+		var state RouteEvidencePatchState
+		state, err = tracker.Patch(ctx, RouteEvidencePatch{Billing: &patch})
+		if err == nil && routeEvidenceReadyForFinalization(state) {
+			if finalizer, ok := repo.(TrustedEvaluationEvidenceFinalizer); ok {
+				_, err = finalizer.FinalizeRouteEvidence(ctx, FinalizeRouteEvidenceInput{
+					RouteTraceID: evaluation.RouteTraceID, ExpectedRevision: state.Revision,
+					LeaseEpoch: state.Identity.LeaseEpoch,
+				})
+			}
+		}
+	} else {
+		err = repo.AttachBilling(ctx, evaluation.RouteTraceID, usage)
+	}
+	if err != nil {
 		RecordEvaluationEvidencePersistenceFailure()
 		logger.FromContext(ctx).Warn("evaluation billing evidence persistence failed",
 			zap.String("route_trace_id", evaluation.RouteTraceID),
@@ -129,16 +477,36 @@ func attachEvaluationBillingEvidence(ctx context.Context, usageLog *UsageLog, fi
 	}
 }
 
-// RouteTrace collects only redacted routing information for one evaluation request.
-type RouteTrace struct {
-	mu       sync.Mutex
-	hashKey  []byte
-	evidence RouteEvidence
+func routeEvidenceReadyForFinalization(state RouteEvidencePatchState) bool {
+	if state.Terminal || state.Sealed || state.Transport.TransportStatus == nil {
+		return false
+	}
+	transportStatus := strings.TrimSpace(*state.Transport.TransportStatus)
+	if transportStatus == "" || transportStatus == "started" {
+		return false
+	}
+	if transportStatus != "succeeded" {
+		return true
+	}
+	return state.Billing.BillingStatus != nil &&
+		strings.TrimSpace(*state.Billing.BillingStatus) == "complete"
 }
 
-func NewRouteTrace(_ EvaluationContext, cfg RouteTraceConfig) *RouteTrace {
+// RouteTrace collects only redacted routing information for one evaluation request.
+type RouteTrace struct {
+	mu             sync.Mutex
+	hashKey        []byte
+	requestedModel string
+	routeRuleHash  string
+	evidence       RouteEvidence
+}
+
+func NewRouteTrace(evaluation EvaluationContext, cfg RouteTraceConfig) *RouteTrace {
+	ruleDigest := sha256.Sum256([]byte(strings.TrimSpace(evaluation.ExpectedRouteProfile)))
 	return &RouteTrace{
-		hashKey: append([]byte(nil), cfg.HashKey...),
+		hashKey:        append([]byte(nil), cfg.HashKey...),
+		requestedModel: strings.TrimSpace(evaluation.ExpectedModelAlias),
+		routeRuleHash:  hex.EncodeToString(ruleDigest[:]),
 		evidence: RouteEvidence{
 			Region: strings.TrimSpace(cfg.Region),
 		},
@@ -152,15 +520,39 @@ func (t *RouteTrace) RecordAttempt(attempt RouteAttempt) {
 
 	t.mu.Lock()
 	defer t.mu.Unlock()
+	now := time.Now().UTC()
+	if last := len(t.evidence.FallbackChain) - 1; last >= 0 && t.evidence.FallbackChain[last].FinishedAt == nil {
+		finished := now
+		t.evidence.FallbackChain[last].FinishedAt = &finished
+		if t.evidence.FallbackChain[last].Outcome == "" {
+			t.evidence.FallbackChain[last].Outcome = "upstream_failed"
+		}
+	}
+	ordinal := len(t.evidence.FallbackChain) + 1
+	var parent *int
+	dispatchMode := "primary"
+	if ordinal > 1 {
+		value := ordinal - 1
+		parent = &value
+		dispatchMode = "fallback"
+	}
 
 	entry := RouteFallbackEntry{
-		Ordinal:        len(t.evidence.FallbackChain) + 1,
-		Provider:       strings.TrimSpace(attempt.Provider),
-		AccountPoolRef: RedactedResourceRef("account", attempt.AccountID, t.hashKey),
-		ChannelRef:     RedactedResourceRef("channel", attempt.ChannelID, t.hashKey),
-		ResolvedModel:  strings.TrimSpace(attempt.ResolvedModel),
-		Region:         strings.TrimSpace(attempt.Region),
-		ErrorCode:      strings.TrimSpace(attempt.ErrorCode),
+		Ordinal:            ordinal,
+		ParentAttemptIndex: parent,
+		DispatchMode:       dispatchMode,
+		RouteRuleHash:      t.routeRuleHash,
+		RequestedModel:     t.requestedModel,
+		Provider:           strings.TrimSpace(attempt.Provider),
+		AccountPoolRef:     RedactedResourceRef("account", attempt.AccountID, t.hashKey),
+		ChannelRef:         RedactedResourceRef("channel", attempt.ChannelID, t.hashKey),
+		ResolvedModel:      strings.TrimSpace(attempt.ResolvedModel),
+		Region:             strings.TrimSpace(attempt.Region),
+		ErrorCode:          strings.TrimSpace(attempt.ErrorCode),
+		StartedAt:          now,
+	}
+	if entry.ErrorCode != "" {
+		entry.Outcome = "upstream_failed"
 	}
 	t.evidence.FallbackChain = append(t.evidence.FallbackChain, entry)
 	t.evidence.Attempts = len(t.evidence.FallbackChain)
@@ -176,6 +568,35 @@ func (t *RouteTrace) RecordLatestAttemptError(errorCode string) {
 
 	if last := len(t.evidence.FallbackChain) - 1; last >= 0 {
 		t.evidence.FallbackChain[last].ErrorCode = strings.TrimSpace(errorCode)
+		t.evidence.FallbackChain[last].Outcome = "upstream_failed"
+		finished := time.Now().UTC()
+		t.evidence.FallbackChain[last].FinishedAt = &finished
+	}
+}
+
+func (t *RouteTrace) FinalizeLatestAttempt(outcome string, finishedAt time.Time) {
+	if t == nil {
+		return
+	}
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	last := len(t.evidence.FallbackChain) - 1
+	if last < 0 {
+		return
+	}
+	entry := &t.evidence.FallbackChain[last]
+	if finishedAt.Before(entry.StartedAt) {
+		finishedAt = entry.StartedAt
+	}
+	finishedAt = finishedAt.UTC()
+	entry.FinishedAt = &finishedAt
+	switch strings.TrimSpace(outcome) {
+	case "succeeded", "upstream_failed", "protocol_failed", "gateway_failed":
+		entry.Outcome = strings.TrimSpace(outcome)
+	case "client_cancelled":
+		entry.Outcome = "cancelled"
+	default:
+		entry.Outcome = "gateway_failed"
 	}
 }
 

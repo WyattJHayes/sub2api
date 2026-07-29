@@ -186,10 +186,6 @@ class GraderWorker:
                     evidence = ExecutionEvidence.model_validate(evidence)
                 result = grade_lease(lease, evidence)
                 submission = ScoreSubmission(
-                    sample_id=lease.sample_id,
-                    grader_id=lease.grader_id or (lease.case.grader_id if lease.case else ""),
-                    grader_version=lease.grader_version
-                    or (lease.case.grader_version if lease.case else "v1"),
                     score=result.score,
                     passed=result.passed,
                     failure_class=result.failure_class,

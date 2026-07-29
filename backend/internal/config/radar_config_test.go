@@ -16,6 +16,23 @@ func TestLoadRadarConfigDefaults(t *testing.T) {
 	require.NoError(t, err)
 	require.False(t, cfg.Radar.Enabled)
 	require.Equal(t, 900, cfg.Radar.MaxContextTTLSeconds)
+	require.Equal(t, int64(2), cfg.Radar.WriterProtocolVersion)
+}
+
+func TestLoadRejectsObsoleteRadarWriterProtocol(t *testing.T) {
+	resetViperWithJWTSecret(t)
+	t.Setenv("RADAR_WRITER_PROTOCOL_VERSION", "1")
+
+	_, err := Load()
+	require.ErrorContains(t, err, "radar.writer_protocol_version must be 2")
+}
+
+func TestLoadRejectsInvalidRadarWriterInstanceID(t *testing.T) {
+	resetViperWithJWTSecret(t)
+	t.Setenv("RADAR_WRITER_INSTANCE_ID", "not-a-uuid")
+
+	_, err := Load()
+	require.ErrorContains(t, err, "radar.writer_instance_id must be a UUID")
 }
 
 func TestLoadRadarConfigFromEnvironment(t *testing.T) {

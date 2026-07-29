@@ -2,13 +2,11 @@
 package response
 
 import (
-	"errors"
 	"log"
 	"math"
 	"net/http"
 
 	infraerrors "github.com/Wei-Shaw/sub2api/internal/pkg/errors"
-	"github.com/Wei-Shaw/sub2api/internal/service"
 	"github.com/Wei-Shaw/sub2api/internal/util/logredact"
 	"github.com/gin-gonic/gin"
 )
@@ -84,10 +82,6 @@ func ErrorWithDetails(c *gin.Context, statusCode int, message, reason string, me
 func ErrorFrom(c *gin.Context, err error) bool {
 	if err == nil {
 		return false
-	}
-	if errors.Is(err, service.ErrRadarCutoverActive) {
-		ErrorWithDetails(c, http.StatusServiceUnavailable, "Radar evaluation writes are temporarily unavailable", "radar_cutover_active", nil)
-		return true
 	}
 
 	statusCode, status := infraerrors.ToHTTP(err)

@@ -39,6 +39,7 @@ const (
 	radarP0RequestedModel    = "public-coder"
 	radarP0UpstreamModel     = "claude-sonnet-4"
 	radarP0UpstreamRequestID = "upstream-radar-request-123"
+	radarP0RouteProfile      = "radar-route-profile-v1"
 	radarP0AccountID         = int64(991)
 	radarP0ChannelID         = int64(772)
 )
@@ -55,6 +56,7 @@ type radarP0Fixture struct {
 	evaluationKey   string
 	normalKeyID     int64
 	evaluationKeyID int64
+	evaluationLease *service.AssignmentLease
 }
 
 type radarP0Evidence struct {
@@ -90,7 +92,7 @@ func TestRadarP0EvaluationIsolationAndEvidenceLifecycle(t *testing.T) {
 	t.Cleanup(upstream.Close)
 
 	fixture := newRadarP0Fixture(t, db, upstream.URL)
-	copiedToken := radarP0Token(t, fixture.signer, fixture.evaluationKeyID, uuid.NewString(), uuid.NewString())
+	copiedToken := radarP0Token(t, fixture.signer, fixture.evaluationKeyID, fixture.evaluationLease)
 
 	normalResponse := radarP0Request(fixture.router, fixture.normalKey, copiedToken)
 	require.Equal(t, http.StatusForbidden, normalResponse.Code, normalResponse.Body.String())
@@ -102,9 +104,9 @@ func TestRadarP0EvaluationIsolationAndEvidenceLifecycle(t *testing.T) {
 	require.Zero(t, upstreamCalls.Load(), "evaluation keys without a signed token must not reach inference")
 	requireRadarP0EvidenceCount(t, db.SQL, fixture.evaluationKeyID, 0)
 
-	runID := uuid.NewString()
-	sampleID := uuid.NewString()
-	validToken := radarP0Token(t, fixture.signer, fixture.evaluationKeyID, runID, sampleID)
+	runID := fixture.evaluationLease.RunID.String()
+	sampleID := fixture.evaluationLease.SampleID.String()
+	validToken := radarP0Token(t, fixture.signer, fixture.evaluationKeyID, fixture.evaluationLease)
 	response := radarP0Request(fixture.router, fixture.evaluationKey, validToken)
 	require.Equal(t, http.StatusOK, response.Code, response.Body.String())
 	require.Equal(t, int64(1), upstreamCalls.Load(), "valid evaluation requests must traverse the real upstream transport")
@@ -177,6 +179,7 @@ func newRadarP0Fixture(
 		normalKeyValue,
 		evaluationKeyValue,
 	)
+	evaluationLease := provisionRadarP0EvaluationLease(t, db.SQL, userID, evaluationKeyID)
 
 	cfg := &config.Config{
 		RunMode: config.RunModeStandard,
@@ -199,7 +202,7 @@ func newRadarP0Fixture(
 			HashingSecret:        strings.Repeat("h", 32),
 			MaxContextTTLSeconds: 300,
 			Region:               "cn-east",
-			RouteProfileVersion:  "route-v42",
+			RouteProfileVersion:  radarP0RouteProfile,
 		},
 	}
 
@@ -316,6 +319,7 @@ func newRadarP0Fixture(
 		evaluationKey:   evaluationKeyValue,
 		normalKeyID:     normalKeyID,
 		evaluationKeyID: evaluationKeyID,
+		evaluationLease: evaluationLease,
 	}
 }
 
@@ -456,32 +460,98 @@ func provisionRadarP0Principals(
 	return userID, groupID, normalKeyID, evaluationKeyID
 }
 
+func provisionRadarP0EvaluationLease(t *testing.T, db *sql.DB, userID, evaluationKeyID int64) *service.AssignmentLease {
+	t.Helper()
+	ctx := context.Background()
+	datasetID := uuid.New()
+	caseID := uuid.New()
+	planID := uuid.New()
+	_, err := db.ExecContext(ctx, `
+		INSERT INTO evaluation_dataset_versions (
+			id, dataset_key, version, manifest_sha256, source_type, status, created_by
+		) VALUES ($1,$2,'v1',$3,'synthetic','draft',$4)`,
+		datasetID, "radar-p0-"+uuid.NewString(), strings.Repeat("d", 64), userID)
+	require.NoError(t, err)
+	_, err = db.ExecContext(ctx, `
+		INSERT INTO evaluation_cases (
+			id, dataset_version_id, case_key, capability_domain, priority, weight, sample_count,
+			prompt_spec, expected_spec, execution_spec, grader_id, grader_version,
+			content_sha256, confidentiality, estimated_cost
+		) VALUES (
+			$1,$2,'gateway-p0','coding','P0',1,1,
+			$3::jsonb,'{"output":"ok"}'::jsonb,'{"url":"/v1/messages"}'::jsonb,
+			'grader','v1',$4,'synthetic',0.01
+		)`, caseID, datasetID, radarP0RequestBody(), strings.Repeat("c", 64))
+	require.NoError(t, err)
+	_, err = db.ExecContext(ctx, `
+		UPDATE evaluation_dataset_versions SET status='published', published_at=NOW() WHERE id=$1`, datasetID)
+	require.NoError(t, err)
+	matrix, err := json.Marshal([]map[string]any{{
+		"route": radarP0RequestedModel,
+		"baseline": map[string]any{
+			"route": radarP0RequestedModel, "variant": "baseline",
+		},
+		"candidate": map[string]any{
+			"route": radarP0RequestedModel, "variant": "candidate",
+		},
+	}})
+	require.NoError(t, err)
+	_, err = db.ExecContext(ctx, `
+		INSERT INTO evaluation_plans (
+			id, name, dataset_version_id, gateway_api_key_id, trigger_type, model_matrix,
+			max_run_cost, daily_cost_limit, max_concurrency, created_by
+		) VALUES ($1,$2,$3,$4,'manual',$5::jsonb,10,10,1,$6)`,
+		planID, "radar-p0-"+uuid.NewString(), datasetID, evaluationKeyID, string(matrix), userID)
+	require.NoError(t, err)
+	run, err := repository.NewEvaluationRepository(db).CreateRunWithMatrix(ctx, service.CreateRunInput{
+		PlanID: planID, TriggerSource: "manual", CreatedBy: userID,
+	})
+	require.NoError(t, err)
+	workerID := uuid.New()
+	_, err = db.ExecContext(ctx, `
+		INSERT INTO evaluation_workers (id, name, worker_kind, token_hash, capabilities, image_digest)
+		VALUES ($1,$2,'runner',$3,ARRAY['coding'],$4)`,
+		workerID, "radar-p0-runner-"+uuid.NewString(), strings.Repeat("e", 64), "runner@sha256:"+strings.Repeat("f", 64))
+	require.NoError(t, err)
+	lease, err := repository.NewEvaluationRepository(db).ClaimAssignment(ctx, workerID, []string{"coding"}, time.Minute)
+	require.NoError(t, err)
+	require.NotNil(t, lease)
+	require.Equal(t, run.ID, lease.RunID)
+	return lease
+}
+
 func radarP0Token(
 	t *testing.T,
 	signer *service.EvaluationContextSigner,
 	apiKeyID int64,
-	runID string,
-	sampleID string,
+	lease *service.AssignmentLease,
 ) string {
 	t.Helper()
 	now := time.Now().UTC()
 	token, err := signer.Sign(service.EvaluationContext{
-		RunID:                runID,
-		SampleID:             sampleID,
-		DatasetVersion:       "dataset-v1",
-		ExpectedModelAlias:   radarP0RequestedModel,
-		ExpectedRouteProfile: "route-v42",
-		APIKeyID:             apiKeyID,
-		IssuedAt:             now.Add(-time.Second),
-		ExpiresAt:            now.Add(2 * time.Minute),
+		RunID:                 lease.RunID.String(),
+		SampleID:              lease.SampleID.String(),
+		DatasetVersionID:      lease.DatasetVersionID.String(),
+		DatasetKey:            lease.DatasetKey,
+		DatasetVersion:        lease.DatasetVersion,
+		DatasetManifestSHA256: lease.DatasetManifestSHA256,
+		ExpectedModelAlias:    radarP0RequestedModel,
+		ExpectedRouteProfile:  radarP0RouteProfile,
+		APIKeyID:              apiKeyID,
+		IssuedAt:              now.Add(-time.Second),
+		ExpiresAt:             now.Add(2 * time.Minute),
+		RouteTraceID:          lease.RouteTraceID,
 	})
 	require.NoError(t, err)
 	return token
 }
 
+func radarP0RequestBody() string {
+	return `{"model":"` + radarP0RequestedModel + `","max_tokens":32,"messages":[{"role":"user","content":"hello"}]}`
+}
+
 func radarP0Request(router http.Handler, key string, token string) *httptest.ResponseRecorder {
-	body := `{"model":"` + radarP0RequestedModel + `","max_tokens":32,"messages":[{"role":"user","content":"hello"}]}`
-	request := httptest.NewRequest(http.MethodPost, "/v1/messages", strings.NewReader(body))
+	request := httptest.NewRequest(http.MethodPost, "/v1/messages", strings.NewReader(radarP0RequestBody()))
 	request.Header.Set("Authorization", "Bearer "+key)
 	request.Header.Set("Content-Type", "application/json")
 	if token != "" {
@@ -585,7 +655,7 @@ func assertRadarP0Evidence(
 	require.Equal(t, "client:"+clientRequestID, evidence.RequestID)
 	require.Equal(t, radarP0RequestedModel, evidence.RequestedModel)
 	require.Equal(t, radarP0UpstreamModel, evidence.ResolvedModel)
-	require.Equal(t, "route-v42", evidence.RouteProfile)
+	require.Equal(t, radarP0RouteProfile, evidence.RouteProfile)
 	require.Equal(t, service.PlatformAnthropic, evidence.Provider)
 	require.Equal(t, "cn-east", evidence.Region)
 	require.Equal(t, 1, evidence.Attempts)

@@ -601,10 +601,10 @@ Agent 评测输出需要保存工具调用序列、参数 schema 摘要、观察
 | 企业 RBAC 与多租户 | 五角色目标和租户隔离原则已定义 | Radar 路由仍要求平台 admin，role scope 只接受全局空 scope，读模型为全局聚合 | tenant_id 数据模型、scope authorizer、行级过滤、跨租户拒绝和权限驱动导航 |
 | 审批、告警与审计控制台 | 页面职责和危险动作要求已定义 | 后端有部分端点，前端缺少 Baseline、Policy、Approval、Waiver、Audit 和告警详情动作 | 双主体审批、豁免过期、告警时间线、审计检索和脱敏详情 E2E |
 | 公共 Benchmark 与安全红队 | Adapter、许可、评分和校准原则已定义 | 数据集 API 接收已组装 Case，尚无 MMLU、GSM8K、HumanEval 或红队导入器 | 版本锁定 Adapter、许可清单、校准集、沙箱和可复现导入报告 |
-| 精调训练平台 | 独立规格已冻结上传、切分、SFT、DPO、RLHF、产物和发布门禁 | 当前仓库没有训练编排器、GPU 队列、checkpoint 或模型仓库模块 | migration 201、最小 SFT 链路、故障恢复和 Radar 自动验收 |
-| 性能与多租户压测 | 独立规格已冻结 TTFT、TPOT、P99、Goodput、成本和并发矩阵 | route evidence 只覆盖部分延迟与计费字段，尚无专用负载发生器和可信 P99 Gate | migration 200、分层负载模型、原始直方图、计费幂等和峰值两倍报告 |
-| 混沌与容灾 | 独立规格已冻结场景、护栏、RPO 和 RTO | 当前只有 Compose 与运行手册，尚无自动注入控制器或恢复演练证据 | 受控 Fault Experiment、数据一致性证明、回切记录和季度复测 |
-| Agent、插件与 Coding Plan | 独立规格已冻结权限、工具轨迹、沙箱和评分原则 | 当前没有专用 Adapter、用例库或执行沙箱集成 | migration 202、工具协议集、越权阻断、可执行任务集和资源预算报告 |
+| 精调训练平台 | 上传、切分、SFT、DPO、RLHF、产物和发布门禁已定义 | 当前仓库没有训练编排器、GPU 队列、checkpoint 或模型仓库模块 | 独立训练控制面规格、最小 SFT 链路、故障恢复和 Radar 自动验收 |
+| 性能与多租户压测 | TTFT、TPOT、P99、Goodput、成本和并发矩阵已定义 | route evidence 只覆盖部分延迟与计费字段，尚无专用负载发生器和可信 P99 Gate | 分层负载模型、原始直方图、错误预算、计费幂等和峰值两倍报告 |
+| 混沌与容灾 | 场景、护栏、RPO 和 RTO 已定义 | 当前只有 Compose 与运行手册，尚无自动注入控制器或恢复演练证据 | 同构预生产演练、数据一致性证明、回切记录和季度复测 |
+| Agent、插件与 Coding Plan | 权限、工具轨迹、沙箱和评分原则已定义 | 当前没有专用 Adapter、用例库或执行沙箱集成 | 工具协议集、越权阻断、可执行任务集和资源预算报告 |
 
 staging 部署只验收第一行及其依赖的可信门禁和 Worker 生命周期。企业客户开放、模型发布强门禁和生产扩流必须等待对应工作域取得出口证据。
 
@@ -633,10 +633,4 @@ G2 失败不会自动回退当前远端版本。发布流程保留旧镜像摘�
 5. 精调训练集成，包含数据服务、训练编排、GPU 队列、checkpoint、模型仓库和自动 Radar Gate。
 6. Agent 与插件评测，包含工具协议、权限沙箱、Coding Plan 任务集和可执行评分。
 
-工作包 1 是其余包的可信证据基础。工作包 2 在企业客户开放前完成。工作包 3 和 4 可以在工作包 1 通过 G2 后并行。工作包 4、5 与 6 已拥有独立规格和实施计划，通过统一 Case、Evidence、Score 与 Gate 合同接入 Radar。
-
-独立规格：
-
-1. [性能、可靠性、混沌与容灾规格](superpowers/specs/2026-07-29-radar-performance-reliability-design.md)与[实施计划](superpowers/plans/2026-07-29-radar-performance-reliability.md)
-2. [精调训练集成规格](superpowers/specs/2026-07-29-radar-finetune-integration-design.md)与[实施计划](superpowers/plans/2026-07-29-radar-finetune-integration.md)
-3. [Agent、插件与 Coding Plan 评测规格](superpowers/specs/2026-07-29-radar-agent-plugin-evaluation-design.md)与[实施计划](superpowers/plans/2026-07-29-radar-agent-plugin-evaluation.md)
+工作包 1 是其余包的可信证据基础。工作包 2 在企业客户开放前完成。工作包 3 和 4 可以在工作包 1 通过 G2 后并行。工作包 5 与 6 分别拥有独立规格和实施计划，通过统一 Case、Evidence、Score 与 Gate 合同接入 Radar。

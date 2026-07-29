@@ -117,7 +117,10 @@ def aggregate_submission(
         ewma=Decimal(str(payload["ewma"])) if payload.get("ewma") is not None else None,
         cusum=Decimal(str(payload["cusum"])) if payload.get("cusum") is not None else None,
         seed=int(payload.get("seed", 20260725)),
+        input_set_hash=lease.input_set_hash,
         score_ids=lease.score_ids,
+        score_refs=lease.score_refs,
+        snapshot_refs=lease.snapshot_refs,
         aggregate=payload,
     )
 
@@ -151,10 +154,7 @@ class StatisticsWorker:
             if asyncio.iscoroutine(result):
                 result = await result
             await self.client.complete_analysis(
-                lease.id,
-                lease.lease_token,
-                aggregate_submission(lease, result),
-                lease.lease_epoch,
+                lease.id, lease.lease_token, aggregate_submission(lease, result), lease.lease_epoch
             )
         except LeaseFencedError:
             log.warning("analysis lease %s fenced", lease.id)

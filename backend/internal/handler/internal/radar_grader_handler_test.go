@@ -21,23 +21,26 @@ import (
 )
 
 type radarGraderHandlerRepoStub struct {
-	kind                  string
-	workerID              uuid.UUID
-	gradingLease          *service.GradingLease
-	assignmentLease       *service.AssignmentLease
-	score                 *service.Score
-	analysisLease         *service.AnalysisJobLease
-	identifyErr           error
-	claimErr              error
-	submitErr             error
-	upload                *service.ArtifactUpload
-	receipt               *service.ArtifactReceipt
-	artifactErr           error
-	claimCalls            int
-	failedAssignmentID    uuid.UUID
-	failedAssignmentToken string
-	failedAssignmentClass string
-	failedAssignmentCode  string
+	kind                     string
+	workerID                 uuid.UUID
+	gradingLease             *service.GradingLease
+	assignmentLease          *service.AssignmentLease
+	score                    *service.Score
+	analysisLease            *service.AnalysisJobLease
+	analysisErr              error
+	identifyErr              error
+	claimErr                 error
+	submitErr                error
+	evidenceErr              error
+	upload                   *service.ArtifactUpload
+	receipt                  *service.ArtifactReceipt
+	artifactErr              error
+	claimCalls               int
+	failedAssignmentID       uuid.UUID
+	failedAssignmentToken    string
+	failedAssignmentClass    string
+	failedAssignmentCode     string
+	completedAssignmentEpoch int64
 }
 
 func (s *radarGraderHandlerRepoStub) PresignArtifact(context.Context, uuid.UUID, string, service.ArtifactPresignRequest) (*service.ArtifactUpload, error) {
@@ -56,16 +59,19 @@ func (s *radarGraderHandlerRepoStub) ClaimAssignment(context.Context, uuid.UUID,
 	s.claimCalls++
 	return s.assignmentLease, nil
 }
-func (s *radarGraderHandlerRepoStub) RenewAssignmentLease(context.Context, uuid.UUID, string, time.Duration) (time.Time, error) {
+func (s *radarGraderHandlerRepoStub) RenewAssignmentLease(context.Context, uuid.UUID, string, time.Duration, ...int64) (time.Time, error) {
 	return time.Now().Add(time.Minute), nil
 }
 func (s *radarGraderHandlerRepoStub) SubmitEvidence(context.Context, service.EvidenceSubmission, string) (*service.EvidenceReceipt, error) {
-	return nil, nil
+	return nil, s.evidenceErr
 }
-func (s *radarGraderHandlerRepoStub) CompleteAssignment(context.Context, uuid.UUID, string) error {
+func (s *radarGraderHandlerRepoStub) CompleteAssignment(_ context.Context, _ uuid.UUID, _ string, epoch ...int64) error {
+	if len(epoch) > 0 {
+		s.completedAssignmentEpoch = epoch[0]
+	}
 	return nil
 }
-func (s *radarGraderHandlerRepoStub) FailAssignment(_ context.Context, id uuid.UUID, token, failureClass, failureCode string) error {
+func (s *radarGraderHandlerRepoStub) FailAssignment(_ context.Context, id uuid.UUID, token, failureClass, failureCode string, _ ...int64) error {
 	s.failedAssignmentID = id
 	s.failedAssignmentToken = token
 	s.failedAssignmentClass = failureClass
@@ -82,20 +88,20 @@ func (s *radarGraderHandlerRepoStub) AuthenticateWorker(context.Context, string,
 func (s *radarGraderHandlerRepoStub) ClaimGradingLease(context.Context, uuid.UUID, []string, time.Duration) (*service.GradingLease, error) {
 	return s.gradingLease, s.claimErr
 }
-func (s *radarGraderHandlerRepoStub) HeartbeatGradingLease(context.Context, uuid.UUID, string, time.Duration) (time.Time, error) {
+func (s *radarGraderHandlerRepoStub) HeartbeatGradingLease(context.Context, uuid.UUID, string, time.Duration, ...int64) (time.Time, error) {
 	return time.Now().Add(time.Minute), nil
 }
 func (s *radarGraderHandlerRepoStub) SubmitScore(context.Context, uuid.UUID, string, service.ScoreSubmission) (*service.Score, error) {
 	return s.score, s.submitErr
 }
-func (s *radarGraderHandlerRepoStub) FailGradingLease(context.Context, uuid.UUID, string, string, string) error {
+func (s *radarGraderHandlerRepoStub) FailGradingLease(context.Context, uuid.UUID, string, string, string, ...int64) error {
 	return nil
 }
 func (s *radarGraderHandlerRepoStub) ClaimAnalysisJob(context.Context, uuid.UUID, []string, time.Duration) (*service.AnalysisJobLease, error) {
 	return s.analysisLease, nil
 }
-func (s *radarGraderHandlerRepoStub) CompleteAnalysisJob(context.Context, uuid.UUID, string, service.AggregateSubmission) (*service.AggregateSnapshot, error) {
-	return &service.AggregateSnapshot{ID: uuid.New()}, nil
+func (s *radarGraderHandlerRepoStub) CompleteAnalysisJob(context.Context, uuid.UUID, string, service.AggregateSubmission, ...int64) (*service.AggregateSnapshot, error) {
+	return &service.AggregateSnapshot{ID: uuid.New()}, s.analysisErr
 }
 
 func TestRadarGraderHandlerRejectsRunnerTokenForGradingClaim(t *testing.T) {
@@ -209,17 +215,54 @@ func TestRadarGraderHandlerFailsClaimedAssignmentWhenSigningInputIsInvalid(t *te
 	require.Equal(t, "evaluation_context_signing_failed", repo.failedAssignmentCode)
 }
 
-func TestRadarGraderHandlerCompletesScoreWithIdempotentResponse(t *testing.T) {
+func TestRadarGraderHandlerForwardsAssignmentLeaseEpoch(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	repo := &radarGraderHandlerRepoStub{workerID: uuid.New()}
+	h := NewRadarGraderHandler(repo, &config.Config{})
+	r := gin.New()
+	r.POST("/internal/radar/v1/leases/:id/complete", h.CompleteAssignment)
+	assignmentID := uuid.New()
+	req := httptest.NewRequest(http.MethodPost, "/internal/radar/v1/leases/"+assignmentID.String()+"/complete", bytes.NewBufferString(`{"lease_token":"lease-token-123456","lease_epoch":7}`))
+	req.Header.Set("Authorization", "Bearer runner-token")
+	resp := httptest.NewRecorder()
+	r.ServeHTTP(resp, req)
+	require.Equal(t, http.StatusOK, resp.Code)
+	require.Equal(t, int64(7), repo.completedAssignmentEpoch)
+}
+
+func TestRadarGraderHandlerRetriesWhileRouteEvidenceIsUnsealed(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	repo := &radarGraderHandlerRepoStub{
+		workerID:    uuid.New(),
+		evidenceErr: service.ErrRouteEvidenceNotSealed,
+	}
+	h := NewRadarGraderHandler(repo, &config.Config{})
+	r := gin.New()
+	r.POST("/internal/radar/v1/leases/:id/evidence", h.SubmitEvidence)
+	assignmentID := uuid.New()
+	sampleID := uuid.New()
+	body := `{"lease_token":"lease-token-123456","lease_epoch":7,"sample_id":"` + sampleID.String() + `","evidence":{"route_trace_id":"trace-1"}}`
+	req := httptest.NewRequest(http.MethodPost, "/internal/radar/v1/leases/"+assignmentID.String()+"/evidence", bytes.NewBufferString(body))
+	req.Header.Set("Authorization", "Bearer runner-token")
+	resp := httptest.NewRecorder()
+
+	r.ServeHTTP(resp, req)
+
+	require.Equal(t, http.StatusServiceUnavailable, resp.Code)
+	require.Equal(t, "1", resp.Header().Get("Retry-After"))
+}
+
+func TestRadarGraderHandlerReturnsOnlyScoreReceipt(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	scoreID := uuid.New()
 	repo := &radarGraderHandlerRepoStub{
 		workerID: uuid.New(),
-		score:    &service.Score{ID: scoreID, SampleID: uuid.New(), Version: 1, Score: decimal.RequireFromString("0.75"), IsCurrent: true},
+		score:    &service.Score{ID: scoreID, SampleID: uuid.New(), Version: 1, Score: decimal.RequireFromString("0.75"), Ref: service.ScoreRef{ID: scoreID, CreatedAt: time.Now().UTC()}, HeadVersion: 1},
 	}
 	h := NewRadarGraderHandler(repo, &config.Config{})
 	r := gin.New()
 	r.POST("/internal/radar/v1/grading-leases/:id/complete", h.CompleteGradingLease)
-	body := `{"sample_id":"` + repo.score.SampleID.String() + `","grader_id":"exact","grader_version":"v1","score":"0.75","evidence_hashes":[]}`
+	body := `{"score":"0.75","evidence_hashes":[]}`
 	req := httptest.NewRequest(http.MethodPost, "/internal/radar/v1/grading-leases/"+uuid.NewString()+"/complete", bytes.NewBufferString(body))
 	req.Header.Set("Authorization", "Bearer grader-token")
 	req.Header.Set("X-Radar-Lease-Token", "lease-token")
@@ -227,12 +270,21 @@ func TestRadarGraderHandlerCompletesScoreWithIdempotentResponse(t *testing.T) {
 	r.ServeHTTP(resp, req)
 	require.Equal(t, http.StatusOK, resp.Code)
 	var envelope struct {
-		Code int           `json:"code"`
-		Data service.Score `json:"data"`
+		Code int             `json:"code"`
+		Data json.RawMessage `json:"data"`
 	}
 	require.NoError(t, json.Unmarshal(resp.Body.Bytes(), &envelope))
 	require.Equal(t, 0, envelope.Code)
-	require.Equal(t, scoreID, envelope.Data.ID)
+	var fields map[string]json.RawMessage
+	require.NoError(t, json.Unmarshal(envelope.Data, &fields))
+	require.Len(t, fields, 2)
+	var receipt struct {
+		ScoreRef    service.ScoreRef `json:"score_ref"`
+		HeadVersion int              `json:"head_version"`
+	}
+	require.NoError(t, json.Unmarshal(envelope.Data, &receipt))
+	require.Equal(t, scoreID, receipt.ScoreRef.ID)
+	require.Equal(t, 1, receipt.HeadVersion)
 }
 
 func TestRadarGraderHandlerPresignsArtifactForRunner(t *testing.T) {
@@ -304,6 +356,26 @@ func TestRadarGraderHandlerReturnsAnalysisInputsOnClaim(t *testing.T) {
 	require.Equal(t, caseID, envelope.Data.Pairs[0].CaseID)
 	require.Len(t, envelope.Data.History, 1)
 	require.Equal(t, service.FailureClassUpstream, envelope.Data.InvalidFailures[0])
+}
+
+func TestRadarGraderHandlerRejectsMismatchedFrozenAggregateInput(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	jobID := uuid.New()
+	repo := &radarGraderHandlerRepoStub{
+		workerID: uuid.New(), analysisErr: service.ErrAggregateInputMismatch,
+	}
+	h := NewRadarGraderHandler(repo, &config.Config{})
+	r := gin.New()
+	r.POST("/internal/radar/v1/analysis-jobs/:id/complete", h.CompleteAnalysisJob)
+	req := httptest.NewRequest(http.MethodPost,
+		"/internal/radar/v1/analysis-jobs/"+jobID.String()+"/complete",
+		bytes.NewBufferString(`{"lease_token":"analysis-lease-token","input_set_hash":"`+strings.Repeat("a", 64)+`","aggregate":{}}`))
+	req.Header.Set("Authorization", "Bearer statistics-token")
+	resp := httptest.NewRecorder()
+
+	r.ServeHTTP(resp, req)
+
+	require.Equal(t, http.StatusBadRequest, resp.Code)
 }
 
 func TestRadarGraderHandlerReturnsGradingEvidenceContract(t *testing.T) {

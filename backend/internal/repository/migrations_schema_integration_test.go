@@ -6,10 +6,14 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"os"
+	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 	"time"
 
+	"github.com/Wei-Shaw/sub2api/internal/service"
 	"github.com/google/uuid"
 	"github.com/stretchr/testify/require"
 )
@@ -199,37 +203,438 @@ func TestMigration197TrustedLifecycleSchema(t *testing.T) {
 		"evaluation_pair_specs",
 		"evaluation_side_specs",
 		"evaluation_pair_bindings",
+		"evaluation_worker_events",
 		"evaluation_schema_cutovers",
 		"evaluation_writer_sessions",
-		"evaluation_writer_audit_events",
-		"evaluation_worker_events",
+		"evaluation_writer_protocol_audits",
+		"evaluation_route_evidence_terminalization_outbox",
 	} {
 		requireTable(t, tx, table)
 	}
 
-	requireColumn(t, tx, "evaluation_runs", "budget_mode", "character varying", 20, false)
+	requireColumn(t, tx, "evaluation_runs", "budget_mode", "text", 0, false)
+	requireColumn(t, tx, "evaluation_runs", "paused_from_status", "character varying", 24, true)
+	requireColumn(t, tx, "evaluation_runs", "pause_reason", "text", 0, true)
 	requireColumn(t, tx, "evaluation_runs", "control_epoch", "bigint", 0, false)
 	requireColumn(t, tx, "evaluation_runs", "state_version", "bigint", 0, false)
-	requireColumn(t, tx, "evaluation_runs", "route_profile_version", "character varying", 100, false)
-	for _, table := range []string{
-		"evaluation_assignments",
-		"evaluation_grading_jobs",
-		"evaluation_analysis_jobs",
-	} {
-		requireColumn(t, tx, table, "lease_epoch", "bigint", 0, false)
-		requireColumn(t, tx, table, "worker_image_digest", "character varying", 200, false)
-		requireColumn(t, tx, table, "work_origin", "character varying", 20, false)
+	requireColumn(t, tx, "evaluation_runs", "cancelled_at", "timestamp with time zone", 0, true)
+	requireColumn(t, tx, "evaluation_runs", "cancelled_by", "bigint", 0, true)
+	requireColumn(t, tx, "evaluation_runs", "route_profile_version", "text", 0, false)
+	for _, table := range []string{"evaluation_assignments", "evaluation_grading_jobs", "evaluation_analysis_jobs"} {
+		requireColumn(t, tx, table, "lease_epoch", "bigint", 0, true)
+		requireColumn(t, tx, table, "worker_image_digest", "text", 0, true)
+		requireColumn(t, tx, table, "work_origin", "text", 0, true)
 	}
-	requireColumn(t, tx, "evaluation_score_heads", "score_created_at", "timestamp with time zone", 0, false)
 	requireColumn(t, tx, "evaluation_run_events", "transition_version", "bigint", 0, true)
 	requireColumn(t, tx, "evaluation_run_events", "from_status", "character varying", 24, true)
 	requireColumn(t, tx, "evaluation_run_events", "to_status", "character varying", 24, true)
 	requireColumn(t, tx, "evaluation_run_events", "control_epoch", "bigint", 0, false)
-	requireColumn(t, tx, "evaluation_run_events", "idempotency_key", "character", 64, true)
-	requireIndex(t, tx, "evaluation_request_manifests", "evaluation_request_manifests_manifest_sha256_key")
-	requireIndex(t, tx, "evaluation_pair_specs", "evaluation_pair_specs_run_case_sample_repeat_key")
-	requireIndex(t, tx, "evaluation_side_specs", "evaluation_side_specs_pair_side_key")
-	requireIndex(t, tx, "evaluation_pair_bindings", "evaluation_pair_bindings_pair_spec_key")
+	requireColumn(t, tx, "evaluation_run_events", "idempotency_key", "character", 64, false)
+	requireColumn(t, tx, "evaluation_score_heads", "score_created_at", "timestamp with time zone", 0, false)
+	requireCompositeForeignKey(t, tx, "evaluation_score_heads", []string{"score_id", "score_created_at"}, "evaluation_scores", []string{"id", "created_at"})
+	requireColumn(t, tx, "evaluation_route_evidence_terminalization_outbox", "control_epoch", "bigint", 0, false)
+	requireColumn(t, tx, "evaluation_route_evidence_terminalization_outbox", "idempotency_key", "character", 64, false)
+}
+
+func TestMigration198TrustedGovernanceSchema(t *testing.T) {
+	tx := testTx(t)
+
+	for _, table := range []string{
+		"evaluation_release_subjects",
+		"evaluation_release_subject_events",
+		"evaluation_gate_policy_approvals",
+		"evaluation_gate_policy_heads",
+		"evaluation_gate_policy_events",
+		"evaluation_baseline_heads",
+		"evaluation_baseline_events",
+		"evaluation_gate_decision_heads",
+		"evaluation_gate_decision_events",
+		"evaluation_gate_reevaluation_outbox",
+		"evaluation_gate_storage_modes",
+	} {
+		requireTable(t, tx, table)
+	}
+	requireColumn(t, tx, "evaluation_release_subjects", "canonical_subject_bytes", "bytea", 0, false)
+	requireColumn(t, tx, "evaluation_release_subject_events", "sequence", "bigint", 0, false)
+	requireColumn(t, tx, "evaluation_baseline_approvals", "effective_at", "timestamp with time zone", 0, false)
+	requireColumn(t, tx, "evaluation_baseline_approvals", "expires_at", "timestamp with time zone", 0, false)
+
+	requireColumns(t, tx, "evaluation_gate_decisions", []string{
+		"release_subject_hash",
+		"evidence_hash",
+		"source_watermark",
+		"supersedes_decision_id",
+		"cause_set_hash",
+	})
+	requireIndex(t, tx, "evaluation_gate_decisions", "uq_evaluation_gate_decisions_natural")
+	requireIndex(t, tx, "evaluation_gate_decisions", "uq_evaluation_gate_decisions_supersedes")
+	requireColumn(t, tx, "evaluation_gate_decision_heads", "release_subject_hash", "character", 64, false)
+	requireColumn(t, tx, "evaluation_gate_decision_heads", "decision_id", "uuid", 0, false)
+}
+
+func TestMigration198aBackfillsCanonicalReleaseSubjectBytes(t *testing.T) {
+	tx := testTx(t)
+	ctx := context.Background()
+	schema := "migration_198a_" + strings.ReplaceAll(uuid.NewString(), "-", "")
+	require.NoError(t, execRadarFixtureSQL(ctx, tx, `CREATE SCHEMA `+schema))
+	_, err := tx.ExecContext(ctx, `SELECT set_config('search_path', $1, true)`, schema+",public")
+	require.NoError(t, err)
+	require.NoError(t, execRadarFixtureSQL(ctx, tx, `
+			CREATE TABLE users (id BIGINT PRIMARY KEY);
+			CREATE TABLE evaluation_gate_policies (
+				id UUID PRIMARY KEY,
+				created_by BIGINT NOT NULL REFERENCES users(id),
+				created_at TIMESTAMPTZ NOT NULL
+			);
+			CREATE TABLE evaluation_baseline_approvals (
+				id UUID PRIMARY KEY,
+				created_at TIMESTAMPTZ NOT NULL
+			);
+			CREATE TABLE evaluation_release_subjects (
+				id UUID PRIMARY KEY,
+			run_id UUID NOT NULL,
+			subject_hash CHAR(64) NOT NULL,
+			canonical_subject JSONB NOT NULL,
+			created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+				UNIQUE (run_id, subject_hash)
+			);
+			CREATE TABLE evaluation_gate_policy_events (
+				id UUID PRIMARY KEY,
+				policy_id UUID NOT NULL REFERENCES evaluation_gate_policies(id),
+				event_type VARCHAR(32) NOT NULL,
+				policy_hash CHAR(64) NOT NULL,
+				environment VARCHAR(64) NOT NULL,
+				scope_type VARCHAR(32) NOT NULL,
+				scope_id VARCHAR(200) NOT NULL,
+				actor_id BIGINT REFERENCES users(id),
+				created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+				UNIQUE (policy_id, event_type, environment, scope_type, scope_id)
+			);
+			CREATE TABLE evaluation_baseline_events (
+				id UUID PRIMARY KEY,
+				baseline_id UUID NOT NULL,
+				event_type VARCHAR(32) NOT NULL,
+				evidence_hash CHAR(64) NOT NULL,
+				environment VARCHAR(64) NOT NULL,
+				scope_type VARCHAR(32) NOT NULL,
+				scope_id VARCHAR(200) NOT NULL,
+				actor_id BIGINT REFERENCES users(id),
+				created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+			);
+			CREATE UNIQUE INDEX uq_evaluation_baseline_events_identity
+				ON evaluation_baseline_events
+				(baseline_id, event_type, environment, scope_type, scope_id, COALESCE(actor_id, 0));
+			CREATE TABLE evaluation_gate_policy_heads (
+				environment VARCHAR(64) NOT NULL,
+				scope_type VARCHAR(32) NOT NULL,
+				scope_id VARCHAR(200) NOT NULL,
+				policy_id UUID NOT NULL,
+				event_id UUID NOT NULL,
+				updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+				PRIMARY KEY (environment, scope_type, scope_id)
+			);
+			CREATE TABLE evaluation_baseline_heads (
+				environment VARCHAR(64) NOT NULL,
+				scope_type VARCHAR(32) NOT NULL,
+				scope_id VARCHAR(200) NOT NULL,
+				model_route VARCHAR(200) NOT NULL,
+				baseline_id UUID NOT NULL,
+				event_id UUID NOT NULL,
+				updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+				PRIMARY KEY (environment, scope_type, scope_id, model_route)
+			);
+			CREATE TABLE evaluation_gate_storage_modes (
+			id SMALLINT PRIMARY KEY,
+			mode VARCHAR(24) NOT NULL
+		);
+			INSERT INTO evaluation_gate_storage_modes (id, mode) VALUES (1, 'compatibility');
+		`))
+
+	actorID := time.Now().UnixNano()
+	policyID := uuid.New()
+	require.NoError(t, execRadarFixtureSQL(ctx, tx, `INSERT INTO users (id) VALUES ($1)`, actorID))
+	require.NoError(t, execRadarFixtureSQL(ctx, tx, `
+		INSERT INTO evaluation_gate_policies (id, created_by, created_at)
+		VALUES ($1, $2, transaction_timestamp() - INTERVAL '1 day')`, policyID, actorID))
+	require.NoError(t, execRadarFixtureSQL(ctx, tx, `
+		INSERT INTO evaluation_baseline_approvals (id, created_at)
+		VALUES ($1, transaction_timestamp() - INTERVAL '1 day')`, uuid.New()))
+	require.NoError(t, execRadarFixtureSQL(ctx, tx, `
+		CREATE TRIGGER trg_evaluation_baseline_approvals_trusted_immutable
+		BEFORE UPDATE OR DELETE ON evaluation_baseline_approvals
+		FOR EACH ROW EXECUTE FUNCTION public.reject_immutable_evaluation_record()
+	`))
+
+	subject := releaseSubjectFixture()
+	canonical, err := service.CanonicalizeReleaseSubject(subject)
+	require.NoError(t, err)
+	require.NoError(t, execRadarFixtureSQL(ctx, tx, `
+		INSERT INTO evaluation_release_subjects
+			(id, run_id, subject_hash, canonical_subject)
+		VALUES ($1, $2, $3, $4::jsonb)`,
+		uuid.New(), uuid.New(), canonical.SHA256, string(canonical.Bytes)))
+
+	migrationPath := filepath.Join("..", "..", "migrations", "198a_backfill_release_subject_canonical_bytes.sql")
+	migrationSQL, err := os.ReadFile(migrationPath)
+	require.NoError(t, err)
+	require.NoError(t, execRadarFixtureSQL(ctx, tx, `SAVEPOINT invalid_canonical_backfill`))
+	require.NoError(t, execRadarFixtureSQL(ctx, tx, `UPDATE evaluation_release_subjects SET subject_hash=$1`, hashString("invalid-canonical-bytes")))
+	_, err = tx.ExecContext(ctx, string(migrationSQL))
+	require.ErrorContains(t, err, "canonical byte backfill failed hash validation")
+	require.NoError(t, execRadarFixtureSQL(ctx, tx, `ROLLBACK TO SAVEPOINT invalid_canonical_backfill`))
+	require.NoError(t, execRadarFixtureSQL(ctx, tx, `
+		CREATE TRIGGER trg_evaluation_release_subjects_trusted_immutable
+		BEFORE UPDATE OR DELETE ON evaluation_release_subjects
+		FOR EACH ROW EXECUTE FUNCTION public.reject_immutable_evaluation_record()
+	`))
+
+	_, err = tx.ExecContext(ctx, string(migrationSQL))
+	require.NoError(t, err)
+	_, err = tx.ExecContext(ctx, string(migrationSQL))
+	require.NoError(t, err, "forward migration must remain idempotent")
+
+	var stored []byte
+	var storedHash, mode string
+	require.NoError(t, tx.QueryRowContext(ctx, `
+		SELECT canonical_subject_bytes,
+		       encode(sha256(canonical_subject_bytes), 'hex')
+		FROM evaluation_release_subjects`).Scan(&stored, &storedHash))
+	require.Equal(t, []byte(canonical.Bytes), stored)
+	require.Equal(t, canonical.SHA256, storedHash)
+	require.NoError(t, tx.QueryRowContext(ctx, `SELECT mode FROM evaluation_gate_storage_modes WHERE id=1`).Scan(&mode))
+	require.Equal(t, "compatibility", mode)
+	var policyApprovals int
+	require.NoError(t, tx.QueryRowContext(ctx, `
+		SELECT COUNT(*) FROM evaluation_gate_policy_approvals
+		WHERE policy_id=$1 AND approver_id=$2 AND role='quality_admin'
+		  AND expires_at > effective_at`, policyID, actorID).Scan(&policyApprovals))
+	require.Equal(t, 1, policyApprovals)
+	var baselineValidityRows int
+	require.NoError(t, tx.QueryRowContext(ctx, `
+		SELECT COUNT(*) FROM evaluation_baseline_approvals
+		WHERE effective_at IS NOT NULL AND expires_at > effective_at`).Scan(&baselineValidityRows))
+	require.Equal(t, 1, baselineValidityRows)
+	for _, table := range []string{"evaluation_release_subject_events", "evaluation_gate_policy_approvals"} {
+		var exists bool
+		require.NoError(t, tx.QueryRowContext(ctx, `
+			SELECT to_regclass($1) IS NOT NULL`, schema+"."+table).Scan(&exists))
+		require.True(t, exists, "forward migration must create %s", table)
+	}
+	var oldPolicyUnique, oldBaselineUnique bool
+	require.NoError(t, tx.QueryRowContext(ctx, `
+		SELECT EXISTS (
+			SELECT 1 FROM pg_constraint
+			WHERE conrelid='evaluation_gate_policy_events'::regclass AND contype='u'
+		)`).Scan(&oldPolicyUnique))
+	require.False(t, oldPolicyUnique)
+	require.NoError(t, tx.QueryRowContext(ctx, `
+		SELECT to_regclass($1) IS NOT NULL`, schema+".uq_evaluation_baseline_events_identity").Scan(&oldBaselineUnique))
+	require.False(t, oldBaselineUnique)
+	for _, function := range []string{"advance_evaluation_gate_policy_head", "advance_evaluation_baseline_head"} {
+		var definition string
+		require.NoError(t, tx.QueryRowContext(ctx, `
+			SELECT pg_get_functiondef(p.oid)
+			FROM pg_proc p JOIN pg_namespace n ON n.oid=p.pronamespace
+			WHERE n.nspname=$1 AND p.proname=$2`, schema, function).Scan(&definition))
+		require.Contains(t, definition, "pg_advisory_xact_lock")
+	}
+	require.NoError(t, execRadarFixtureSQL(ctx, tx, `SAVEPOINT immutable_after_backfill`))
+	_, err = tx.ExecContext(ctx, `UPDATE evaluation_release_subjects SET canonical_subject_bytes=canonical_subject_bytes`)
+	require.Error(t, err, "forward migration must restore the immutable trigger")
+	require.NoError(t, execRadarFixtureSQL(ctx, tx, `ROLLBACK TO SAVEPOINT immutable_after_backfill`))
+
+	var nullable string
+	require.NoError(t, tx.QueryRowContext(ctx, `
+		SELECT is_nullable
+		FROM information_schema.columns
+		WHERE table_schema=$1 AND table_name='evaluation_release_subjects'
+		  AND column_name='canonical_subject_bytes'`, schema).Scan(&nullable))
+	require.Equal(t, "NO", nullable)
+}
+
+func TestMigration199EvidenceRevisionSchema(t *testing.T) {
+	tx := testTx(t)
+
+	for _, table := range []string{
+		"evaluation_request_semantics",
+		"evaluation_evidence_signing_keys",
+		"evaluation_revision_batches",
+		"evaluation_revision_batch_requirements",
+		"evaluation_score_head_events",
+		"evaluation_analysis_job_score_inputs",
+		"evaluation_analysis_job_snapshot_inputs",
+		"evaluation_aggregate_snapshot_score_inputs",
+		"evaluation_aggregate_snapshot_sources",
+		"evaluation_aggregate_heads",
+		"evaluation_outbox_events",
+		"evaluation_outbox_event_causes",
+	} {
+		requireTable(t, tx, table)
+	}
+	requireColumns(t, tx, "evaluation_route_evidence", []string{
+		"assignment_id",
+		"request_ordinal",
+		"lease_epoch",
+		"request_manifest_id",
+		"request_manifest_sha256",
+		"request_semantics_id",
+		"request_semantics_sha256",
+		"evidence_revision",
+		"terminal_at",
+		"sealed_at",
+		"payload_hash",
+		"signing_key_id",
+		"payload_hmac",
+	})
+	requireColumns(t, tx, "evaluation_grading_jobs", []string{
+		"work_origin", "revision_batch_id", "grading_input_hash",
+		"evidence_manifest_hash", "recovery_generation", "score_created_at",
+	})
+	requireColumns(t, tx, "evaluation_analysis_jobs", []string{
+		"scope", "work_origin", "revision_batch_id", "input_set_hash",
+		"input_score_refs", "input_snapshot_refs", "aggregate_revision", "cause_set_hash",
+	})
+	requireColumns(t, tx, "evaluation_aggregate_snapshots", []string{
+		"analysis_job_id", "revision_batch_id", "input_set_hash", "aggregate_revision",
+		"aggregate_hash", "score_refs", "source_head_event_ids",
+		"origin_revision_batch_ids", "cause_set_hash",
+	})
+
+	for _, table := range []string{
+		"evaluation_revision_batch_requirements",
+		"evaluation_grading_jobs",
+		"evaluation_analysis_jobs",
+		"evaluation_score_head_events",
+		"evaluation_aggregate_snapshots",
+		"evaluation_outbox_events",
+		"evaluation_outbox_event_causes",
+	} {
+		requireCompositeForeignKey(t, tx, table, []string{"revision_batch_id", "run_id"}, "evaluation_revision_batches", []string{"id", "run_id"})
+	}
+
+	requireCompositeForeignKey(t, tx, "evaluation_grading_jobs", []string{"score_id", "score_created_at"}, "evaluation_scores", []string{"id", "created_at"})
+	requireCompositeForeignKey(t, tx, "evaluation_manual_reviews", []string{"score_id", "score_created_at"}, "evaluation_scores", []string{"id", "created_at"})
+	requireCompositeForeignKey(t, tx, "evaluation_score_head_events", []string{"previous_score_id", "previous_score_created_at"}, "evaluation_scores", []string{"id", "created_at"})
+	requireCompositeForeignKey(t, tx, "evaluation_score_head_events", []string{"score_id", "score_created_at"}, "evaluation_scores", []string{"id", "created_at"})
+	requireCompositeForeignKey(t, tx, "evaluation_analysis_job_score_inputs", []string{"score_id", "score_created_at"}, "evaluation_scores", []string{"id", "created_at"})
+	requireCompositeForeignKey(t, tx, "evaluation_aggregate_snapshot_score_inputs", []string{"score_id", "score_created_at"}, "evaluation_scores", []string{"id", "created_at"})
+	requireCompositeForeignKey(t, tx, "evaluation_aggregate_heads", []string{"snapshot_id", "window_start"}, "evaluation_aggregate_snapshots", []string{"id", "window_start"})
+	requireCompositeForeignKey(t, tx, "evaluation_analysis_job_snapshot_inputs", []string{"snapshot_id", "window_start"}, "evaluation_aggregate_snapshots", []string{"id", "window_start"})
+	requireCompositeForeignKey(t, tx, "evaluation_aggregate_snapshot_sources", []string{"source_snapshot_id", "source_window_start"}, "evaluation_aggregate_snapshots", []string{"id", "window_start"})
+
+	requireIndex(t, tx, "evaluation_route_evidence", "uq_evaluation_route_evidence_assignment_ordinal")
+	requireIndex(t, tx, "evaluation_revision_batches", "uq_evaluation_revision_batches_active_run")
+	requireConstraintDefinitionContains(t, tx, "evaluation_grading_jobs", "evaluation_grading_jobs_origin_batch_check", "work_origin", "revision_batch_id")
+	requireConstraintDefinitionContains(t, tx, "evaluation_analysis_jobs", "evaluation_analysis_jobs_origin_batch_check", "work_origin", "revision_batch_id")
+}
+
+func TestMigration199EvidenceRevisionSQLIsIdempotent(t *testing.T) {
+	tx := testTx(t)
+	migrationPath := filepath.Join("..", "..", "migrations", "199_add_radar_evidence_revision_pipeline.sql")
+	migrationSQL, err := os.ReadFile(migrationPath)
+	require.NoError(t, err)
+	require.NoError(t, execRadarFixtureSQL(context.Background(), tx, string(migrationSQL)))
+}
+
+func TestMigration201RevisionBatchEventsSchema(t *testing.T) {
+	tx := testTx(t)
+	requireTable(t, tx, "evaluation_revision_batch_events")
+	requireColumns(t, tx, "evaluation_revision_batch_events", []string{
+		"id", "revision_batch_id", "run_id", "event_type", "actor_id",
+		"control_epoch", "idempotency_key", "payload", "created_at",
+	})
+	requireCompositeForeignKey(t, tx, "evaluation_revision_batch_events",
+		[]string{"revision_batch_id", "run_id"}, "evaluation_revision_batches", []string{"id", "run_id"})
+	requireIndex(t, tx, "evaluation_revision_batch_events", "idx_evaluation_revision_batch_events_approvals")
+	var immutableTrigger, writerTrigger bool
+	require.NoError(t, tx.QueryRowContext(context.Background(), `
+		SELECT EXISTS (
+			SELECT 1 FROM pg_trigger
+			WHERE tgrelid='evaluation_revision_batch_events'::regclass
+			  AND tgname='trg_evaluation_revision_batch_events_immutable'
+			  AND NOT tgisinternal
+		)`).Scan(&immutableTrigger))
+	require.True(t, immutableTrigger)
+	require.NoError(t, tx.QueryRowContext(context.Background(), `
+		SELECT EXISTS (
+			SELECT 1 FROM pg_trigger
+			WHERE tgrelid='evaluation_revision_batch_events'::regclass
+			  AND tgname='trg_evaluation_revision_batch_events_writer_protocol'
+			  AND NOT tgisinternal
+		)`).Scan(&writerTrigger))
+	require.True(t, writerTrigger)
+
+	migrationPath := filepath.Join("..", "..", "migrations", "201_add_revision_batch_events.sql")
+	migrationSQL, err := os.ReadFile(migrationPath)
+	require.NoError(t, err)
+	require.NoError(t, execRadarFixtureSQL(context.Background(), tx, string(migrationSQL)))
+}
+
+func TestMigration199GateEvidenceSchema(t *testing.T) {
+	tx := testTx(t)
+	for _, table := range []string{
+		"evaluation_reliability_snapshots",
+		"evaluation_reliability_head_events",
+		"evaluation_reliability_heads",
+		"evaluation_gate_evidence_manifests",
+		"evaluation_release_authorizations",
+		"evaluation_break_glass_requests",
+		"evaluation_release_projections",
+	} {
+		requireTable(t, tx, table)
+	}
+	requireColumns(t, tx, "evaluation_reliability_snapshots", []string{
+		"run_id", "reliability_profile_id", "slice_key", "window_start", "window_end",
+		"query_version", "source_hash", "metrics", "snapshot_hash", "fresh_until",
+	})
+	requireColumns(t, tx, "evaluation_gate_evidence_manifests", []string{
+		"canonical_manifest_bytes", "evidence_hash", "source_watermark",
+		"loader_version", "release_subject_hash", "cause_set_hash",
+	})
+	requireColumns(t, tx, "evaluation_release_authorizations", []string{
+		"decision_id", "release_subject_hash", "source_watermark", "waiver_ids",
+		"nonce", "expires_at", "consumed_at",
+	})
+	requireCompositeForeignKey(t, tx, "evaluation_reliability_head_events", []string{"snapshot_id", "run_id"}, "evaluation_reliability_snapshots", []string{"id", "run_id"})
+	requireCompositeForeignKey(t, tx, "evaluation_reliability_heads", []string{"snapshot_id", "run_id"}, "evaluation_reliability_snapshots", []string{"id", "run_id"})
+	requireCompositeForeignKey(t, tx, "evaluation_reliability_heads", []string{"head_event_id", "run_id"}, "evaluation_reliability_head_events", []string{"id", "run_id"})
+	requireCompositeForeignKey(t, tx, "evaluation_gate_evidence_manifests", []string{"release_subject_id", "run_id", "release_subject_hash"}, "evaluation_release_subjects", []string{"id", "run_id", "subject_hash"})
+	requireCompositeForeignKey(t, tx, "evaluation_release_authorizations", []string{"decision_id", "release_subject_hash"}, "evaluation_gate_decisions", []string{"id", "release_subject_hash"})
+}
+
+func requireColumns(t *testing.T, tx *sql.Tx, table string, columns []string) {
+	t.Helper()
+	for _, column := range columns {
+		var exists bool
+		err := tx.QueryRowContext(context.Background(), `
+SELECT EXISTS (
+	SELECT 1 FROM information_schema.columns
+	WHERE table_schema = 'public' AND table_name = $1 AND column_name = $2
+)`, table, column).Scan(&exists)
+		require.NoError(t, err)
+		require.True(t, exists, "expected column %s.%s to exist", table, column)
+	}
+}
+
+func requireCompositeForeignKey(t *testing.T, tx *sql.Tx, table string, columns []string, refTable string, refColumns []string) {
+	t.Helper()
+	var definitions []string
+	rows, err := tx.QueryContext(context.Background(), `
+SELECT pg_get_constraintdef(c.oid)
+FROM pg_constraint c
+JOIN pg_class tbl ON tbl.oid = c.conrelid
+JOIN pg_namespace ns ON ns.oid = tbl.relnamespace
+WHERE ns.nspname = 'public' AND tbl.relname = $1 AND c.contype = 'f'`, table)
+	require.NoError(t, err)
+	defer rows.Close()
+	for rows.Next() {
+		var definition string
+		require.NoError(t, rows.Scan(&definition))
+		definitions = append(definitions, definition)
+	}
+	require.NoError(t, rows.Err())
+	joined := strings.Join(definitions, "\n")
+	require.Contains(t, joined, fmt.Sprintf("FOREIGN KEY (%s) REFERENCES %s(%s)", strings.Join(columns, ", "), refTable, strings.Join(refColumns, ", ")))
 }
 
 func TestRadarControlPlaneConstraints(t *testing.T) {
@@ -351,6 +756,54 @@ func TestRadarControlPlaneConstraints(t *testing.T) {
 		_, err := tx.ExecContext(context.Background(),
 			"UPDATE evaluation_samples SET failure_class = 'mystery_failure' WHERE id = $1", fixture.sampleID)
 		require.Error(t, err)
+	})
+}
+
+func TestMigration197TrustedLifecycleConstraints(t *testing.T) {
+	t.Run("request manifest rejects delete", func(t *testing.T) {
+		tx := testTx(t)
+		manifestID := uuid.New()
+		manifestHash := strings.Repeat("a", 64)
+		require.NoError(t, execRadarFixtureSQL(context.Background(), tx, `
+			INSERT INTO evaluation_request_manifests (id, schema_version, interaction_type, canonical_manifest_bytes, manifest_sha256)
+			VALUES ($1, 'radar-request-manifest-v1', 'single', decode('7b7d', 'hex'), $2)`, manifestID, manifestHash))
+		_, err := tx.ExecContext(context.Background(), `DELETE FROM evaluation_request_manifests WHERE id = $1`, manifestID)
+		require.Error(t, err)
+	})
+
+	t.Run("immutable pair spec rejects update", func(t *testing.T) {
+		tx := testTx(t)
+		fixture := insertRadarControlPlaneConstraintFixture(t, tx)
+		manifestID := uuid.New()
+		pairID := uuid.New()
+		manifestHash := strings.Repeat("a", 64)
+		require.NoError(t, execRadarFixtureSQL(context.Background(), tx, `
+			INSERT INTO evaluation_request_manifests (id, schema_version, interaction_type, canonical_manifest_bytes, manifest_sha256)
+			VALUES ($1, 'radar-request-manifest-v1', 'single', decode('7b7d', 'hex'), $2)`, manifestID, manifestHash))
+		require.NoError(t, execRadarFixtureSQL(context.Background(), tx, `
+			INSERT INTO evaluation_pair_specs (
+				id, run_id, case_id, sample_index, repeat_index, request_manifest_id,
+				request_manifest_sha256, canonical_spec, pair_spec_hash
+			) VALUES ($1, $2, $3, 0, 0, $4, $5, '{}'::jsonb, $6)`,
+			pairID, fixture.runID, fixture.caseID, manifestID, manifestHash, strings.Repeat("b", 64)))
+		_, err := tx.ExecContext(context.Background(), `UPDATE evaluation_pair_specs SET canonical_spec = '{"changed":true}'::jsonb WHERE id = $1`, pairID)
+		require.Error(t, err)
+	})
+
+	t.Run("run transition without event is rejected at commit", func(t *testing.T) {
+		tx, err := integrationDB.BeginTx(context.Background(), nil)
+		require.NoError(t, err)
+		defer tx.Rollback()
+		fixture := insertRadarControlPlaneConstraintFixture(t, tx)
+		runID := uuid.New()
+		var planID uuid.UUID
+		require.NoError(t, tx.QueryRowContext(context.Background(), `SELECT plan_id FROM evaluation_runs WHERE id = $1`, fixture.runID).Scan(&planID))
+		require.NoError(t, execRadarFixtureSQL(context.Background(), tx, `
+			INSERT INTO evaluation_runs (id, plan_id, trigger_source, baseline_ref, candidate_ref, status, budget_limit, created_by)
+			VALUES ($1, $2, 'manual', '{}'::jsonb, '{}'::jsonb, 'pending', 1, $3)`, runID, planID, fixture.actorID))
+		_, err = tx.ExecContext(context.Background(), `UPDATE evaluation_runs SET status = 'running' WHERE id = $1`, runID)
+		require.NoError(t, err)
+		require.Error(t, tx.Commit())
 	})
 }
 

@@ -3,7 +3,6 @@ package admin
 import (
 	"context"
 	"database/sql"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"net/http"
@@ -216,208 +215,6 @@ func (h *RadarGovernanceHandler) StartRun(c *gin.Context) {
 	response.Accepted(c, run)
 }
 
-type radarRunActionRequest struct {
-	Reason         string `json:"reason" binding:"required"`
-	IdempotencyKey string `json:"idempotency_key" binding:"required,len=64"`
-}
-
-func (h *RadarGovernanceHandler) runAction(c *gin.Context, action func(service.RadarRunActionInput) (*service.RadarRunActionResult, error)) {
-	if _, available := h.repo.(service.RadarRunControlRepository); !available {
-		response.Error(c, http.StatusServiceUnavailable, "Radar run control is not available")
-		return
-	}
-	actorID, ok := h.require(c, service.PermissionRunControl)
-	if !ok {
-		return
-	}
-	runID, ok := parseUUIDParam(c, "id")
-	if !ok {
-		return
-	}
-	var req radarRunActionRequest
-	if !decodeJSON(c, &req) {
-		return
-	}
-	if !validWorkerIdempotencyKeyRequest(c, req.IdempotencyKey) {
-		return
-	}
-	result, err := action(service.RadarRunActionInput{
-		RunID: runID, Reason: strings.TrimSpace(req.Reason), ActorID: actorID, IdempotencyKey: req.IdempotencyKey,
-	})
-	if errors.Is(err, sql.ErrNoRows) {
-		response.NotFound(c, "Run not found")
-		return
-	}
-	if err != nil {
-		response.ErrorFrom(c, err)
-		return
-	}
-	response.Success(c, result)
-}
-
-func (h *RadarGovernanceHandler) PauseRun(c *gin.Context) {
-	h.runAction(c, func(input service.RadarRunActionInput) (*service.RadarRunActionResult, error) {
-		return h.repo.(service.RadarRunControlRepository).PauseRun(c.Request.Context(), input)
-	})
-}
-
-func (h *RadarGovernanceHandler) ResumeRun(c *gin.Context) {
-	h.runAction(c, func(input service.RadarRunActionInput) (*service.RadarRunActionResult, error) {
-		return h.repo.(service.RadarRunControlRepository).ResumeRun(c.Request.Context(), input)
-	})
-}
-
-func (h *RadarGovernanceHandler) CancelRun(c *gin.Context) {
-	h.runAction(c, func(input service.RadarRunActionInput) (*service.RadarRunActionResult, error) {
-		return h.repo.(service.RadarRunControlRepository).CancelRun(c.Request.Context(), input)
-	})
-}
-
-func (h *RadarGovernanceHandler) FenceRun(c *gin.Context) {
-	h.runAction(c, func(input service.RadarRunActionInput) (*service.RadarRunActionResult, error) {
-		return h.repo.(service.RadarRunControlRepository).FenceRun(c.Request.Context(), input)
-	})
-}
-
-type radarWorkerRegistrationRequest struct {
-	Name           string   `json:"name" binding:"required"`
-	WorkerKind     string   `json:"worker_kind" binding:"required"`
-	Region         string   `json:"region" binding:"required"`
-	ImageDigest    string   `json:"image_digest" binding:"required"`
-	Capabilities   []string `json:"capabilities"`
-	MaxConcurrency int      `json:"max_concurrency" binding:"required,gt=0,lte=1000"`
-	Token          string   `json:"token" binding:"required"`
-	IdempotencyKey string   `json:"idempotency_key" binding:"required,len=64"`
-}
-
-type radarWorkerTokenRotationRequest struct {
-	Token          string `json:"token" binding:"required"`
-	IdempotencyKey string `json:"idempotency_key" binding:"required,len=64"`
-}
-
-type radarWorkerActionRequest struct {
-	Reason         string `json:"reason" binding:"required"`
-	IdempotencyKey string `json:"idempotency_key" binding:"required,len=64"`
-}
-
-func validWorkerIdempotencyKeyRequest(c *gin.Context, value string) bool {
-	if len(value) == 64 {
-		if _, err := hex.DecodeString(value); err == nil {
-			return true
-		}
-	}
-	response.BadRequest(c, "idempotency_key must be 64 hexadecimal characters")
-	return false
-}
-
-func (h *RadarGovernanceHandler) RegisterWorker(c *gin.Context) {
-	actorID, ok := h.require(c, service.PermissionWorkerManage)
-	if !ok {
-		return
-	}
-	var req radarWorkerRegistrationRequest
-	if !decodeJSON(c, &req) {
-		return
-	}
-	if !validWorkerIdempotencyKeyRequest(c, req.IdempotencyKey) {
-		return
-	}
-	worker, err := h.repo.RegisterWorker(c.Request.Context(), service.RadarWorkerRegistrationInput{
-		Name: req.Name, WorkerKind: req.WorkerKind, Region: req.Region, ImageDigest: req.ImageDigest,
-		Capabilities: req.Capabilities, MaxConcurrency: req.MaxConcurrency, Token: req.Token,
-		ActorID: actorID, IdempotencyKey: req.IdempotencyKey,
-	})
-	if err != nil {
-		response.ErrorFrom(c, err)
-		return
-	}
-	response.Created(c, worker)
-}
-
-func (h *RadarGovernanceHandler) RotateWorkerToken(c *gin.Context) {
-	actorID, ok := h.require(c, service.PermissionWorkerManage)
-	if !ok {
-		return
-	}
-	workerID, ok := parseUUIDParam(c, "id")
-	if !ok {
-		return
-	}
-	var req radarWorkerTokenRotationRequest
-	if !decodeJSON(c, &req) {
-		return
-	}
-	if !validWorkerIdempotencyKeyRequest(c, req.IdempotencyKey) {
-		return
-	}
-	worker, err := h.repo.RotateWorkerToken(c.Request.Context(), service.RadarWorkerTokenRotationInput{
-		WorkerID: workerID, Token: req.Token, ActorID: actorID, IdempotencyKey: req.IdempotencyKey,
-	})
-	if errors.Is(err, sql.ErrNoRows) {
-		response.NotFound(c, "Worker not found")
-		return
-	}
-	if err != nil {
-		response.ErrorFrom(c, err)
-		return
-	}
-	response.Success(c, worker)
-}
-
-func (h *RadarGovernanceHandler) workerAction(c *gin.Context, action func(service.RadarWorkerActionInput) (*service.RadarWorkerActionResult, error)) {
-	actorID, ok := h.require(c, service.PermissionWorkerManage)
-	if !ok {
-		return
-	}
-	workerID, ok := parseUUIDParam(c, "id")
-	if !ok {
-		return
-	}
-	var req radarWorkerActionRequest
-	if !decodeJSON(c, &req) {
-		return
-	}
-	if !validWorkerIdempotencyKeyRequest(c, req.IdempotencyKey) {
-		return
-	}
-	result, err := action(service.RadarWorkerActionInput{
-		WorkerID: workerID, Reason: strings.TrimSpace(req.Reason), ActorID: actorID, IdempotencyKey: req.IdempotencyKey,
-	})
-	if errors.Is(err, sql.ErrNoRows) {
-		response.NotFound(c, "Worker not found")
-		return
-	}
-	if err != nil {
-		response.ErrorFrom(c, err)
-		return
-	}
-	response.Success(c, result)
-}
-
-func (h *RadarGovernanceHandler) PauseWorkerClaims(c *gin.Context) {
-	h.workerAction(c, func(input service.RadarWorkerActionInput) (*service.RadarWorkerActionResult, error) {
-		return h.repo.PauseWorkerClaims(c.Request.Context(), input)
-	})
-}
-
-func (h *RadarGovernanceHandler) ResumeWorkerClaims(c *gin.Context) {
-	h.workerAction(c, func(input service.RadarWorkerActionInput) (*service.RadarWorkerActionResult, error) {
-		return h.repo.ResumeWorkerClaims(c.Request.Context(), input)
-	})
-}
-
-func (h *RadarGovernanceHandler) DrainWorker(c *gin.Context) {
-	h.workerAction(c, func(input service.RadarWorkerActionInput) (*service.RadarWorkerActionResult, error) {
-		return h.repo.DrainWorker(c.Request.Context(), input)
-	})
-}
-
-func (h *RadarGovernanceHandler) DisableWorker(c *gin.Context) {
-	h.workerAction(c, func(input service.RadarWorkerActionInput) (*service.RadarWorkerActionResult, error) {
-		return h.repo.DisableWorker(c.Request.Context(), input)
-	})
-}
-
 type radarRoleBindingRequest struct {
 	ActorID int64             `json:"actor_id" binding:"required,gt=0"`
 	Role    service.RadarRole `json:"role" binding:"required"`
@@ -536,6 +333,7 @@ func (h *RadarGovernanceHandler) GetBaseline(c *gin.Context) {
 type radarBaselineApprovalRequest struct {
 	Role         service.RadarRole `json:"role" binding:"required"`
 	EvidenceHash string            `json:"evidence_hash" binding:"required,len=64"`
+	ExpiresAt    time.Time         `json:"expires_at" binding:"required"`
 }
 
 func (h *RadarGovernanceHandler) ApproveBaseline(c *gin.Context) {
@@ -584,6 +382,7 @@ func (h *RadarGovernanceHandler) ApproveBaseline(c *gin.Context) {
 	}
 	approval, err := h.repo.ApproveBaseline(c.Request.Context(), service.RadarBaselineApprovalInput{
 		BaselineID: baselineID, ApproverID: actorID, Role: req.Role, EvidenceHash: req.EvidenceHash,
+		EffectiveAt: time.Now().UTC(), ExpiresAt: req.ExpiresAt,
 	})
 	if err != nil {
 		response.ErrorFrom(c, err)
@@ -601,7 +400,24 @@ func (h *RadarGovernanceHandler) ActivateBaseline(c *gin.Context) {
 	if !ok {
 		return
 	}
-	baseline, err := h.repo.ActivateBaseline(c.Request.Context(), id, actorID)
+	var req struct {
+		Environment        string     `json:"environment" binding:"required"`
+		ScopeType          string     `json:"scope_type" binding:"required"`
+		ScopeID            string     `json:"scope_id" binding:"required"`
+		ExpectedBaselineID *uuid.UUID `json:"expected_baseline_id"`
+	}
+	if !decodeJSON(c, &req) {
+		return
+	}
+	baseline, err := h.repo.ActivateBaselineHead(c.Request.Context(), service.RadarBaselineActivationInput{
+		BaselineID: id,
+		Scope: service.RadarGovernanceScope{
+			Environment: req.Environment,
+			ScopeType:   req.ScopeType,
+			ScopeID:     req.ScopeID,
+		},
+		ActorID: actorID, ExpectedBaselineID: req.ExpectedBaselineID,
+	})
 	if err != nil {
 		response.ErrorFrom(c, err)
 		return
@@ -609,11 +425,79 @@ func (h *RadarGovernanceHandler) ActivateBaseline(c *gin.Context) {
 	response.Success(c, baseline)
 }
 
+type radarReleaseSubjectRequest struct {
+	RunID        uuid.UUID              `json:"run_id" binding:"required"`
+	Subject      service.ReleaseSubject `json:"subject" binding:"required"`
+	ExpectedHash string                 `json:"expected_hash"`
+}
+
+func (h *RadarGovernanceHandler) CreateReleaseSubject(c *gin.Context) {
+	if _, ok := h.require(c, service.PermissionGateDecide); !ok {
+		return
+	}
+	var req radarReleaseSubjectRequest
+	if !decodeJSON(c, &req) {
+		return
+	}
+	record, err := h.repo.CreateReleaseSubject(c.Request.Context(), service.ReleaseSubjectInput{
+		RunID: req.RunID, Subject: req.Subject, ExpectedHash: req.ExpectedHash,
+	})
+	if err != nil {
+		response.ErrorFrom(c, err)
+		return
+	}
+	response.Created(c, record)
+}
+
+func (h *RadarGovernanceHandler) ActivateReleaseSubject(c *gin.Context) {
+	actorID, ok := h.require(c, service.PermissionGateDecide)
+	if !ok {
+		return
+	}
+	id, ok := parseUUIDParam(c, "id")
+	if !ok {
+		return
+	}
+	var req struct {
+		EffectiveAt time.Time `json:"effective_at" binding:"required"`
+		ExpiresAt   time.Time `json:"expires_at" binding:"required"`
+	}
+	if !decodeJSON(c, &req) {
+		return
+	}
+	event, err := h.repo.ActivateReleaseSubject(c.Request.Context(), service.ReleaseSubjectActivationInput{
+		ReleaseSubjectID: id, ActorID: actorID, EffectiveAt: req.EffectiveAt, ExpiresAt: req.ExpiresAt,
+	})
+	if err != nil {
+		response.ErrorFrom(c, err)
+		return
+	}
+	response.Success(c, event)
+}
+
+func (h *RadarGovernanceHandler) RevokeReleaseSubject(c *gin.Context) {
+	actorID, ok := h.require(c, service.PermissionGateDecide)
+	if !ok {
+		return
+	}
+	id, ok := parseUUIDParam(c, "id")
+	if !ok {
+		return
+	}
+	event, err := h.repo.RevokeReleaseSubject(c.Request.Context(), id, actorID)
+	if err != nil {
+		response.ErrorFrom(c, err)
+		return
+	}
+	response.Success(c, event)
+}
+
 type radarGatePolicyRequest struct {
 	Version             int             `json:"version" binding:"required,gt=0"`
 	Policy              json.RawMessage `json:"policy" binding:"required"`
 	PolicyHash          string          `json:"policy_hash" binding:"required,len=64"`
 	EnforcementStartsAt time.Time       `json:"enforcement_starts_at" binding:"required"`
+	ApprovalExpiresAt   time.Time       `json:"approval_expires_at" binding:"required"`
 }
 
 func (h *RadarGovernanceHandler) CreateGatePolicy(c *gin.Context) {
@@ -627,13 +511,47 @@ func (h *RadarGovernanceHandler) CreateGatePolicy(c *gin.Context) {
 	}
 	policy, err := h.repo.CreateGatePolicy(c.Request.Context(), service.RadarGatePolicyInput{
 		Version: req.Version, Policy: rawOrEmpty(req.Policy), PolicyHash: req.PolicyHash,
-		EnforcementStartsAt: req.EnforcementStartsAt, CreatedBy: actorID,
+		EnforcementStartsAt: req.EnforcementStartsAt, ApprovalExpiresAt: req.ApprovalExpiresAt, CreatedBy: actorID,
 	})
 	if err != nil {
 		response.ErrorFrom(c, err)
 		return
 	}
 	response.Created(c, policy)
+}
+
+func (h *RadarGovernanceHandler) ActivateGatePolicy(c *gin.Context) {
+	actorID, ok := h.require(c, service.PermissionPolicyManage)
+	if !ok {
+		return
+	}
+	policyID, ok := parseUUIDParam(c, "id")
+	if !ok {
+		return
+	}
+	var req struct {
+		Environment      string     `json:"environment" binding:"required"`
+		ScopeType        string     `json:"scope_type" binding:"required"`
+		ScopeID          string     `json:"scope_id" binding:"required"`
+		ExpectedPolicyID *uuid.UUID `json:"expected_policy_id"`
+	}
+	if !decodeJSON(c, &req) {
+		return
+	}
+	head, err := h.repo.ActivateGatePolicy(c.Request.Context(), service.RadarGatePolicyActivationInput{
+		PolicyID: policyID,
+		Scope: service.RadarGovernanceScope{
+			Environment: req.Environment,
+			ScopeType:   req.ScopeType,
+			ScopeID:     req.ScopeID,
+		},
+		ActorID: actorID, ExpectedPolicyID: req.ExpectedPolicyID,
+	})
+	if err != nil {
+		response.ErrorFrom(c, err)
+		return
+	}
+	response.Success(c, head)
 }
 
 type radarGateDecisionRequest struct {
@@ -984,6 +902,320 @@ func (h *RadarGovernanceHandler) EmptyDatasets(c *gin.Context) {
 	h.projectionList(c, func(p service.RadarProjectionRepository, ctx context.Context) (any, error) {
 		return p.ListDatasets(ctx)
 	})
+}
+
+type radarWorkerRegistrationRequest struct {
+	Name           string   `json:"name" binding:"required"`
+	WorkerKind     string   `json:"worker_kind" binding:"required"`
+	Region         string   `json:"region"`
+	ImageDigest    string   `json:"image_digest"`
+	Capabilities   []string `json:"capabilities"`
+	MaxConcurrency int      `json:"max_concurrency"`
+	Token          string   `json:"token" binding:"required"`
+}
+
+type radarWorkerTokenRequest struct {
+	Token string `json:"token" binding:"required"`
+}
+
+func (h *RadarGovernanceHandler) workerRepo(c *gin.Context) (service.RadarWorkerRepository, int64, bool) {
+	actorID, ok := h.require(c, service.PermissionWorkerManage)
+	if !ok {
+		return nil, 0, false
+	}
+	repo, ok := h.repo.(service.RadarWorkerRepository)
+	if !ok || repo == nil {
+		response.Error(c, http.StatusServiceUnavailable, "Radar worker control is not available")
+		return nil, 0, false
+	}
+	key := strings.TrimSpace(c.GetHeader("Idempotency-Key"))
+	if len(key) != 64 {
+		response.BadRequest(c, "Idempotency-Key must be 64 characters")
+		return nil, 0, false
+	}
+	return repo, actorID, true
+}
+
+func (h *RadarGovernanceHandler) RegisterWorker(c *gin.Context) {
+	repo, actorID, ok := h.workerRepo(c)
+	if !ok {
+		return
+	}
+	var req radarWorkerRegistrationRequest
+	if !decodeJSON(c, &req) {
+		return
+	}
+	worker, err := repo.RegisterRadarWorker(c.Request.Context(), service.RadarWorkerRegistrationInput{Name: req.Name, WorkerKind: req.WorkerKind, Region: req.Region, ImageDigest: req.ImageDigest, Capabilities: req.Capabilities, MaxConcurrency: req.MaxConcurrency, Token: req.Token}, actorID, strings.TrimSpace(c.GetHeader("Idempotency-Key")))
+	if err != nil {
+		response.ErrorFrom(c, err)
+		return
+	}
+	response.Created(c, worker)
+}
+
+func (h *RadarGovernanceHandler) RotateWorkerToken(c *gin.Context) {
+	repo, actorID, ok := h.workerRepo(c)
+	if !ok {
+		return
+	}
+	id, ok := parseUUIDParam(c, "id")
+	if !ok {
+		return
+	}
+	var req radarWorkerTokenRequest
+	if !decodeJSON(c, &req) {
+		return
+	}
+	worker, err := repo.RotateRadarWorkerToken(c.Request.Context(), id, req.Token, actorID, strings.TrimSpace(c.GetHeader("Idempotency-Key")))
+	if err != nil {
+		response.ErrorFrom(c, err)
+		return
+	}
+	response.Success(c, worker)
+}
+
+func (h *RadarGovernanceHandler) setWorkerMode(c *gin.Context, mode service.WorkerClaimMode) {
+	repo, actorID, ok := h.workerRepo(c)
+	if !ok {
+		return
+	}
+	id, ok := parseUUIDParam(c, "id")
+	if !ok {
+		return
+	}
+	worker, err := repo.SetRadarWorkerClaimMode(c.Request.Context(), id, mode, actorID, strings.TrimSpace(c.GetHeader("Idempotency-Key")))
+	if err != nil {
+		response.ErrorFrom(c, err)
+		return
+	}
+	response.Success(c, worker)
+}
+
+func (h *RadarGovernanceHandler) PauseWorkerClaims(c *gin.Context) {
+	h.setWorkerMode(c, service.WorkerClaimsPaused)
+}
+func (h *RadarGovernanceHandler) ResumeWorkerClaims(c *gin.Context) {
+	h.setWorkerMode(c, service.WorkerClaimsOpen)
+}
+func (h *RadarGovernanceHandler) DrainWorker(c *gin.Context) {
+	h.setWorkerMode(c, service.WorkerClaimsDraining)
+}
+
+func (h *RadarGovernanceHandler) DisableWorker(c *gin.Context) {
+	repo, actorID, ok := h.workerRepo(c)
+	if !ok {
+		return
+	}
+	id, ok := parseUUIDParam(c, "id")
+	if !ok {
+		return
+	}
+	worker, err := repo.DisableRadarWorker(c.Request.Context(), id, actorID, strings.TrimSpace(c.GetHeader("Idempotency-Key")))
+	if err != nil {
+		response.ErrorFrom(c, err)
+		return
+	}
+	response.Success(c, worker)
+}
+
+type radarRunControlRequest struct {
+	Reason string `json:"reason" binding:"required"`
+}
+
+func (h *RadarGovernanceHandler) runControl(c *gin.Context, action string) {
+	actorID, ok := h.require(c, service.PermissionRunControl)
+	if !ok {
+		return
+	}
+	repo, ok := h.repo.(service.RunControlRepository)
+	if !ok {
+		response.Error(c, http.StatusServiceUnavailable, "Radar run control is not available")
+		return
+	}
+	runID, ok := parseUUIDParam(c, "id")
+	if !ok {
+		return
+	}
+	key := strings.TrimSpace(c.GetHeader("Idempotency-Key"))
+	if len(key) != 64 {
+		response.BadRequest(c, "Idempotency-Key must be 64 characters")
+		return
+	}
+	var req radarRunControlRequest
+	if !decodeJSON(c, &req) {
+		return
+	}
+	var result *service.RunControlResult
+	var err error
+	switch action {
+	case "pause":
+		result, err = repo.PauseRun(c.Request.Context(), runID, req.Reason, actorID, key)
+	case "resume":
+		result, err = repo.ResumeRun(c.Request.Context(), runID, req.Reason, actorID, key)
+	case "cancel":
+		result, err = repo.CancelRun(c.Request.Context(), runID, req.Reason, actorID, key)
+	case "fence":
+		result, err = repo.FenceRun(c.Request.Context(), runID, req.Reason, actorID, key)
+	default:
+		response.BadRequest(c, "Invalid run control action")
+		return
+	}
+	if err != nil {
+		response.ErrorFrom(c, err)
+		return
+	}
+	response.Success(c, result)
+}
+
+func (h *RadarGovernanceHandler) PauseRun(c *gin.Context)  { h.runControl(c, "pause") }
+func (h *RadarGovernanceHandler) ResumeRun(c *gin.Context) { h.runControl(c, "resume") }
+func (h *RadarGovernanceHandler) CancelRun(c *gin.Context) { h.runControl(c, "cancel") }
+func (h *RadarGovernanceHandler) FenceRun(c *gin.Context)  { h.runControl(c, "fence") }
+
+type radarRevisionBatchRequest struct {
+	RunID  uuid.UUID `json:"run_id" binding:"required"`
+	Reason string    `json:"reason" binding:"required"`
+}
+
+type radarRevisionBatchControlRequest struct {
+	Reason string `json:"reason" binding:"required"`
+}
+
+type radarCompensatingHeadRequest struct {
+	SampleID uuid.UUID        `json:"sample_id" binding:"required"`
+	GraderID string           `json:"grader_id" binding:"required"`
+	ScoreRef service.ScoreRef `json:"score_ref" binding:"required"`
+}
+
+func (h *RadarGovernanceHandler) revisionBatchRepo(c *gin.Context, permission service.RadarPermission) (service.RevisionBatchRepository, int64, string, bool) {
+	actorID, ok := h.require(c, permission)
+	if !ok {
+		return nil, 0, "", false
+	}
+	repo, ok := h.repo.(service.RevisionBatchRepository)
+	if !ok || repo == nil {
+		response.Error(c, http.StatusServiceUnavailable, "Radar revision control is not available")
+		return nil, 0, "", false
+	}
+	key := strings.TrimSpace(c.GetHeader("Idempotency-Key"))
+	if err := service.ValidateRevisionBatchIdempotencyKey(key); err != nil {
+		response.BadRequest(c, "Idempotency-Key must be 64 lowercase hexadecimal characters")
+		return nil, 0, "", false
+	}
+	return repo, actorID, key, true
+}
+
+func respondRevisionBatchError(c *gin.Context, err error) {
+	switch {
+	case errors.Is(err, service.ErrRevisionBatchInvalid):
+		response.BadRequest(c, err.Error())
+	case errors.Is(err, service.ErrRevisionBatchRunNotCompleted),
+		errors.Is(err, service.ErrRevisionBatchConflict),
+		errors.Is(err, service.ErrRevisionBatchFenced),
+		errors.Is(err, service.ErrRevisionBatchPropagationRequired),
+		errors.Is(err, service.ErrRevisionBatchNotRepairable):
+		response.Error(c, http.StatusConflict, err.Error())
+	default:
+		response.ErrorFrom(c, err)
+	}
+}
+
+func (h *RadarGovernanceHandler) CreateRevisionBatch(c *gin.Context) {
+	repo, actorID, key, ok := h.revisionBatchRepo(c, service.PermissionRunRetry)
+	if !ok {
+		return
+	}
+	var req radarRevisionBatchRequest
+	if !decodeJSON(c, &req) {
+		return
+	}
+	batch, err := repo.CreateRevisionBatch(c.Request.Context(), service.CreateRevisionBatchInput{
+		RunID: req.RunID, Reason: req.Reason, RequestedBy: actorID, IdempotencyKey: key,
+	})
+	if err != nil {
+		respondRevisionBatchError(c, err)
+		return
+	}
+	response.Created(c, batch)
+}
+
+func (h *RadarGovernanceHandler) revisionBatchControl(c *gin.Context, action string) {
+	permission := service.PermissionRunControl
+	if action == "repair" {
+		permission = service.PermissionRunRetry
+	}
+	repo, actorID, key, ok := h.revisionBatchRepo(c, permission)
+	if !ok {
+		return
+	}
+	batchID, ok := parseUUIDParam(c, "id")
+	if !ok {
+		return
+	}
+	var req radarRevisionBatchControlRequest
+	if !decodeJSON(c, &req) {
+		return
+	}
+	input := service.RevisionBatchControlInput{
+		BatchID: batchID, Reason: req.Reason, ActorID: actorID, IdempotencyKey: key,
+	}
+	var batch *service.RevisionBatch
+	var err error
+	switch action {
+	case "fence":
+		batch, err = repo.FenceRevisionBatch(c.Request.Context(), input)
+	case "resume":
+		batch, err = repo.ResumeRevisionBatch(c.Request.Context(), input)
+	case "cancel":
+		batch, err = repo.CancelRevisionBatch(c.Request.Context(), input)
+	case "repair":
+		batch, err = repo.RepairRevisionBatch(c.Request.Context(), input)
+	default:
+		response.BadRequest(c, "Invalid revision batch action")
+		return
+	}
+	if err != nil {
+		respondRevisionBatchError(c, err)
+		return
+	}
+	response.Success(c, batch)
+}
+
+func (h *RadarGovernanceHandler) FenceRevisionBatch(c *gin.Context) {
+	h.revisionBatchControl(c, "fence")
+}
+func (h *RadarGovernanceHandler) ResumeRevisionBatch(c *gin.Context) {
+	h.revisionBatchControl(c, "resume")
+}
+func (h *RadarGovernanceHandler) CancelRevisionBatch(c *gin.Context) {
+	h.revisionBatchControl(c, "cancel")
+}
+func (h *RadarGovernanceHandler) RepairRevisionBatch(c *gin.Context) {
+	h.revisionBatchControl(c, "repair")
+}
+
+func (h *RadarGovernanceHandler) ApproveCompensatingScoreHead(c *gin.Context) {
+	repo, actorID, key, ok := h.revisionBatchRepo(c, service.PermissionBaselineQualityApprove)
+	if !ok {
+		return
+	}
+	batchID, ok := parseUUIDParam(c, "id")
+	if !ok {
+		return
+	}
+	var req radarCompensatingHeadRequest
+	if !decodeJSON(c, &req) {
+		return
+	}
+	result, err := repo.ApproveCompensatingScoreHead(c.Request.Context(), service.CompensatingScoreHeadInput{
+		BatchID: batchID, SampleID: req.SampleID, GraderID: req.GraderID,
+		ScoreRef: req.ScoreRef, ActorID: actorID, IdempotencyKey: key,
+	})
+	if err != nil {
+		respondRevisionBatchError(c, err)
+		return
+	}
+	response.Success(c, result)
 }
 
 func (h *RadarGovernanceHandler) projectionList(c *gin.Context, load func(service.RadarProjectionRepository, context.Context) (any, error)) {

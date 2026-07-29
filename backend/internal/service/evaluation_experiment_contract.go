@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"regexp"
 	"sort"
 	"strings"
 
@@ -13,423 +14,350 @@ import (
 	"github.com/google/uuid"
 )
 
-const RequestManifestSchemaVersion = "radar-request-manifest-v1"
-
-type InteractionType string
-
 const (
-	InteractionSingle    InteractionType = "single"
-	InteractionMultiTurn InteractionType = "multi_turn"
-	InteractionAgent     InteractionType = "agent"
+	RequestManifestSchemaV1 = "radar-request-manifest-v1"
+	PairSpecSchemaV1        = "radar-pair-spec-v1"
+	SideSpecSchemaV1        = "radar-side-spec-v1"
 )
 
-type OrdinalPolicy string
+var sha256Pattern = regexp.MustCompile(`^[0-9a-f]{64}$`)
 
-const (
-	OrdinalPolicyExact             OrdinalPolicy = "exact"
-	OrdinalPolicyContiguousBounded OrdinalPolicy = "contiguous_bounded"
-)
-
-type SemanticsMode string
-
-const (
-	SemanticsModeExact         SemanticsMode = "exact"
-	SemanticsModeAdapterPolicy SemanticsMode = "adapter_policy"
-)
-
+// RequestManifest freezes only request-shape and semantic digest metadata.
+// Prompt and tool argument bodies deliberately have no representation here.
 type RequestManifest struct {
-	ID              uuid.UUID       `json:"-"`
-	SchemaVersion   string          `json:"schema_version"`
-	InteractionType InteractionType `json:"interaction_type"`
-	OrdinalPolicy   OrdinalPolicy   `json:"ordinal_policy"`
-	MinRequests     int             `json:"min_requests"`
-	MaxRequests     int             `json:"max_requests"`
-	RequestSlots    []RequestSlot   `json:"request_slots"`
-}
-
-type RequestManifestRecord struct {
-	ID              uuid.UUID
-	SchemaVersion   string
-	InteractionType InteractionType
-	ManifestSHA256  string
+	SchemaVersion   string        `json:"schema_version"`
+	InteractionType string        `json:"interaction_type"`
+	OrdinalPolicy   string        `json:"ordinal_policy"`
+	MinRequests     int           `json:"min_requests"`
+	MaxRequests     int           `json:"max_requests"`
+	RequestSlots    []RequestSlot `json:"request_slots"`
 }
 
 type RequestSlot struct {
-	SlotID                         string        `json:"slot_id"`
-	OrdinalMin                     int           `json:"ordinal_min"`
-	OrdinalMax                     int           `json:"ordinal_max"`
-	Phase                          string        `json:"phase"`
-	Required                       bool          `json:"required"`
-	SemanticsMode                  SemanticsMode `json:"semantics_mode"`
-	ExpectedRequestSemanticsSHA256 string        `json:"expected_request_semantics_sha256,omitempty"`
-	RequestSemanticsPolicySHA256   string        `json:"request_semantics_policy_sha256,omitempty"`
-	ToolSchemaSHA256               string        `json:"tool_schema_sha256,omitempty"`
-	AllowedToolSetSHA256           string        `json:"allowed_tool_set_sha256,omitempty"`
-	MaxOccurrences                 int           `json:"max_occurrences"`
+	SlotID                         string `json:"slot_id"`
+	OrdinalMin                     int    `json:"ordinal_min"`
+	OrdinalMax                     int    `json:"ordinal_max"`
+	Phase                          string `json:"phase"`
+	Required                       bool   `json:"required"`
+	SemanticsMode                  string `json:"semantics_mode"`
+	ExpectedRequestSemanticsSHA256 string `json:"expected_request_semantics_sha256,omitempty"`
+	RequestSemanticsPolicySHA256   string `json:"request_semantics_policy_sha256,omitempty"`
+	ToolSchemaSHA256               string `json:"tool_schema_sha256"`
+	AllowedToolSetSHA256           string `json:"allowed_tool_set_sha256"`
+	MaxOccurrences                 int    `json:"max_occurrences"`
 }
 
+type CanonicalRequestManifest struct {
+	Bytes  []byte
+	SHA256 string
+}
+
+// PairSpec contains the shared experimental conditions for a baseline and
+// candidate execution. It intentionally accepts content digests only.
 type PairSpec struct {
-	ID                            uuid.UUID
-	DatasetVersionID              uuid.UUID
-	CaseID                        uuid.UUID
-	SampleIndex                   int
-	RepeatIndex                   int
-	PromptSHA256                  string
-	ToolSchemaSHA256              string
-	ExpectedRequestManifestID     uuid.UUID
-	ExpectedRequestManifestSHA256 string
-	GraderID                      string
-	GraderVersion                 string
-	SamplingPolicy                string
-	RandomSeed                    int64
-	Region                        string
-	Protocol                      string
-	TimeBlock                     string
-	InterleaveOrder               string
-	RetryPolicy                   string
-	AllowedTreatmentFields        []string
+	DatasetVersionID              uuid.UUID `json:"dataset_version_id"`
+	CaseID                        uuid.UUID `json:"case_id"`
+	SampleIndex                   int       `json:"sample_index"`
+	RepeatIndex                   int       `json:"repeat_index"`
+	PromptSHA256                  string    `json:"prompt_sha256"`
+	ToolSchemaSHA256              string    `json:"tool_schema_sha256"`
+	ExpectedRequestManifestID     uuid.UUID `json:"expected_request_manifest_id"`
+	ExpectedRequestManifestSHA256 string    `json:"expected_request_manifest_sha256"`
+	GraderID                      string    `json:"grader_id"`
+	GraderVersion                 string    `json:"grader_version"`
+	SamplingPolicy                string    `json:"sampling_policy"`
+	RandomSeed                    string    `json:"random_seed"`
+	Region                        string    `json:"region"`
+	Protocol                      string    `json:"protocol"`
+	TimeBlock                     string    `json:"time_block"`
+	InterleaveOrder               string    `json:"interleave_order"`
+	RetryPolicy                   string    `json:"retry_policy"`
+	AllowedTreatmentFields        []string  `json:"allowed_treatment_fields"`
 }
 
 type SideSpec struct {
-	ID                       uuid.UUID
-	PairSpecID               uuid.UUID
-	SampleID                 uuid.UUID
-	Side                     string
-	ModelRoute               string
-	ModelConfigSHA256        string
-	ExpectedModelAlias       string
-	ExpectedResolvedModel    string
-	RouteProfileVersion      string
-	ProviderParametersSHA256 string
+	Side                     string `json:"side"`
+	ModelRoute               string `json:"model_route"`
+	ModelConfigSHA256        string `json:"model_config_sha256"`
+	ExpectedModelAlias       string `json:"expected_model_alias"`
+	ExpectedResolvedModel    string `json:"expected_resolved_model"`
+	RouteProfileVersion      string `json:"route_profile_version"`
+	ProviderParametersSHA256 string `json:"provider_parameters_sha256"`
+}
+
+type CanonicalContract struct {
+	Bytes  []byte
+	SHA256 string
+}
+
+type PairBindingRef struct {
+	PairSpecID      uuid.UUID
+	PairSpecHash    string
+	BaselineSideID  uuid.UUID
+	CandidateSideID uuid.UUID
+	BindingHash     string
 }
 
 type PairBinding struct {
-	ID                uuid.UUID
-	PairSpecID        uuid.UUID
-	PairSpecHash      string
-	BaselineSideID    uuid.UUID
-	BaselineSideHash  string
-	CandidateSideID   uuid.UUID
-	CandidateSideHash string
-	BindingHash       string
+	PairSpecHash          string
+	BaselineSideSpecHash  string
+	CandidateSideSpecHash string
+	BindingHash           string
 }
 
-func CanonicalRequestManifest(manifest RequestManifest) ([]byte, string, error) {
+func CanonicalizeRequestManifest(manifest RequestManifest) (CanonicalRequestManifest, error) {
 	if err := validateRequestManifest(manifest); err != nil {
-		return nil, "", err
+		return CanonicalRequestManifest{}, err
 	}
-	sorted := manifest
-	sorted.RequestSlots = append([]RequestSlot(nil), manifest.RequestSlots...)
-	sort.Slice(sorted.RequestSlots, func(i, j int) bool {
-		left, right := sorted.RequestSlots[i], sorted.RequestSlots[j]
-		if left.OrdinalMin != right.OrdinalMin {
-			return left.OrdinalMin < right.OrdinalMin
-		}
-		if left.OrdinalMax != right.OrdinalMax {
-			return left.OrdinalMax < right.OrdinalMax
-		}
-		return left.SlotID < right.SlotID
-	})
-	encoded, err := json.Marshal(sorted)
+	contract, err := canonicalizeContract(manifest)
 	if err != nil {
-		return nil, "", fmt.Errorf("marshal request manifest: %w", err)
+		return CanonicalRequestManifest{}, fmt.Errorf("canonicalize request manifest: %w", err)
 	}
-	canonical, err := jsoncanonicalizer.Transform(encoded)
+	return CanonicalRequestManifest{Bytes: contract.Bytes, SHA256: contract.SHA256}, nil
+}
+
+// DigestCanonicalJSON computes the RFC 8785 digest of JSON data without
+// exposing the canonical bytes through any experiment contract type.
+func DigestCanonicalJSON(raw []byte) (string, error) {
+	canonical, err := jsoncanonicalizer.Transform(raw)
 	if err != nil {
-		return nil, "", fmt.Errorf("canonicalize request manifest: %w", err)
+		return "", err
 	}
-	digest := sha256.Sum256(canonical)
-	return canonical, hex.EncodeToString(digest[:]), nil
+	return contractSHA256(string(canonical)), nil
+}
+
+func CanonicalizePairSpec(spec PairSpec) (CanonicalContract, error) {
+	if err := validatePairSpec(spec); err != nil {
+		return CanonicalContract{}, err
+	}
+	canonicalSpec := spec
+	canonicalSpec.AllowedTreatmentFields = canonicalTreatmentFields(spec.AllowedTreatmentFields)
+	return canonicalizeContract(canonicalSpec)
+}
+
+func CanonicalizeSideSpec(spec SideSpec) (CanonicalContract, error) {
+	if err := validateSideSpec(spec); err != nil {
+		return CanonicalContract{}, err
+	}
+	return canonicalizeContract(spec)
+}
+
+func BindEvaluationPair(pair PairSpec, baseline, candidate SideSpec) (PairBinding, error) {
+	pairContract, err := CanonicalizePairSpec(pair)
+	if err != nil {
+		return PairBinding{}, err
+	}
+	baselineContract, err := CanonicalizeSideSpec(baseline)
+	if err != nil {
+		return PairBinding{}, err
+	}
+	candidateContract, err := CanonicalizeSideSpec(candidate)
+	if err != nil {
+		return PairBinding{}, err
+	}
+	if err := validatePairTreatment(pair, baseline, candidate); err != nil {
+		return PairBinding{}, err
+	}
+	bindingHash := contractSHA256(pairContract.SHA256 + "\x00" + baselineContract.SHA256 + "\x00" + candidateContract.SHA256)
+	return PairBinding{
+		PairSpecHash:          pairContract.SHA256,
+		BaselineSideSpecHash:  baselineContract.SHA256,
+		CandidateSideSpecHash: candidateContract.SHA256,
+		BindingHash:           bindingHash,
+	}, nil
 }
 
 func validateRequestManifest(manifest RequestManifest) error {
-	if manifest.SchemaVersion != RequestManifestSchemaVersion {
-		return fmt.Errorf("unsupported request manifest schema %q", manifest.SchemaVersion)
+	if manifest.SchemaVersion != RequestManifestSchemaV1 {
+		return fmt.Errorf("unsupported request manifest schema version %q", manifest.SchemaVersion)
 	}
-	if manifest.InteractionType != InteractionSingle && manifest.InteractionType != InteractionMultiTurn && manifest.InteractionType != InteractionAgent {
-		return fmt.Errorf("invalid interaction type %q", manifest.InteractionType)
+	if manifest.InteractionType != "single" && manifest.InteractionType != "multi_turn" && manifest.InteractionType != "agent" {
+		return fmt.Errorf("invalid request manifest interaction type %q", manifest.InteractionType)
 	}
-	if manifest.OrdinalPolicy != OrdinalPolicyExact && manifest.OrdinalPolicy != OrdinalPolicyContiguousBounded {
-		return fmt.Errorf("invalid ordinal policy %q", manifest.OrdinalPolicy)
+	if manifest.OrdinalPolicy != "exact" && manifest.OrdinalPolicy != "contiguous_bounded" {
+		return fmt.Errorf("invalid request manifest ordinal policy %q", manifest.OrdinalPolicy)
 	}
 	if manifest.MinRequests < 1 || manifest.MaxRequests < manifest.MinRequests {
-		return errors.New("request count bounds are invalid")
+		return errors.New("invalid request manifest request bounds")
 	}
-	if len(manifest.RequestSlots) == 0 {
-		return errors.New("request manifest requires request slots")
+	if len(manifest.RequestSlots) == 0 || len(manifest.RequestSlots) > manifest.MaxRequests {
+		return errors.New("invalid request manifest slots")
 	}
-	if manifest.InteractionType == InteractionSingle && (manifest.OrdinalPolicy != OrdinalPolicyExact || manifest.MinRequests != 1 || manifest.MaxRequests != 1) {
-		return errors.New("single interaction requires one exact request")
+	if manifest.InteractionType == "single" && (manifest.OrdinalPolicy != "exact" || manifest.MinRequests != 1 || manifest.MaxRequests != 1 || len(manifest.RequestSlots) != 1) {
+		return errors.New("single request manifest must declare one exact request")
 	}
 
-	slots := append([]RequestSlot(nil), manifest.RequestSlots...)
-	sort.Slice(slots, func(i, j int) bool {
-		if slots[i].OrdinalMin != slots[j].OrdinalMin {
-			return slots[i].OrdinalMin < slots[j].OrdinalMin
-		}
-		return slots[i].OrdinalMax < slots[j].OrdinalMax
-	})
-	seen := make(map[string]struct{}, len(slots))
+	seenIDs := make(map[string]struct{}, len(manifest.RequestSlots))
 	previousMax := -1
-	for index, slot := range slots {
-		if strings.TrimSpace(slot.SlotID) == "" {
-			return errors.New("request slot id is required")
+	for index, slot := range manifest.RequestSlots {
+		if err := validateRequestSlot(slot); err != nil {
+			return fmt.Errorf("invalid request slot %d: %w", index, err)
 		}
-		if _, exists := seen[slot.SlotID]; exists {
-			return fmt.Errorf("duplicate request slot %q", slot.SlotID)
+		if _, exists := seenIDs[slot.SlotID]; exists {
+			return fmt.Errorf("duplicate request slot id %q", slot.SlotID)
 		}
-		seen[slot.SlotID] = struct{}{}
-		if slot.OrdinalMin < 0 || slot.OrdinalMax < slot.OrdinalMin {
-			return fmt.Errorf("request slot %q has invalid ordinal range", slot.SlotID)
+		seenIDs[slot.SlotID] = struct{}{}
+		if slot.OrdinalMin <= previousMax {
+			return errors.New("request slot ordinal ranges overlap or are unordered")
 		}
-		if index > 0 && slot.OrdinalMin <= previousMax {
-			return fmt.Errorf("request slot %q ordinal range overlap", slot.SlotID)
+		if manifest.OrdinalPolicy == "exact" && slot.OrdinalMin != slot.OrdinalMax {
+			return errors.New("exact ordinal policy requires exact request slots")
 		}
-		if index > 0 && manifest.OrdinalPolicy == OrdinalPolicyContiguousBounded && slot.OrdinalMin != previousMax+1 {
-			return fmt.Errorf("request slot %q ordinal range is not contiguous", slot.SlotID)
+		if manifest.InteractionType == "single" && (slot.OrdinalMin != 0 || slot.OrdinalMax != 0 || !slot.Required || slot.MaxOccurrences != 1) {
+			return errors.New("single request manifest must declare ordinal zero exactly once")
 		}
-		if manifest.OrdinalPolicy == OrdinalPolicyExact && slot.OrdinalMin != slot.OrdinalMax {
-			return fmt.Errorf("exact request slot %q must have one ordinal", slot.SlotID)
-		}
-		if slot.MaxOccurrences < 1 {
-			return fmt.Errorf("request slot %q max occurrences must be positive", slot.SlotID)
-		}
-		switch slot.SemanticsMode {
-		case SemanticsModeExact:
-			if !validSHA256(slot.ExpectedRequestSemanticsSHA256) || slot.RequestSemanticsPolicySHA256 != "" {
-				return fmt.Errorf("exact semantics slot %q requires expected semantics hash only", slot.SlotID)
-			}
-		case SemanticsModeAdapterPolicy:
-			if slot.ExpectedRequestSemanticsSHA256 != "" || !validSHA256(slot.RequestSemanticsPolicySHA256) {
-				return fmt.Errorf("adapter policy slot %q requires policy hash only", slot.SlotID)
-			}
-		default:
-			return fmt.Errorf("request slot %q has invalid semantics mode %q", slot.SlotID, slot.SemanticsMode)
-		}
-		for name, value := range map[string]string{
-			"tool_schema_sha256":      slot.ToolSchemaSHA256,
-			"allowed_tool_set_sha256": slot.AllowedToolSetSHA256,
-		} {
-			if value != "" && !validSHA256(value) {
-				return fmt.Errorf("request slot %q has invalid %s", slot.SlotID, name)
-			}
+		if manifest.InteractionType == "agent" && index > 0 && slot.OrdinalMin != previousMax+1 {
+			return errors.New("agent request manifest slots must be contiguous")
 		}
 		previousMax = slot.OrdinalMax
 	}
-	if manifest.OrdinalPolicy == OrdinalPolicyContiguousBounded && slots[0].OrdinalMin != 0 {
-		return errors.New("contiguous request slots must start at ordinal zero")
+	if manifest.InteractionType == "agent" && manifest.RequestSlots[0].OrdinalMin != 0 {
+		return errors.New("agent request manifest slots must begin at ordinal zero")
 	}
 	return nil
 }
 
-func CanonicalPairSpec(pair PairSpec) ([]byte, string, error) {
-	if err := validatePairSpec(pair); err != nil {
-		return nil, "", err
+func validateRequestSlot(slot RequestSlot) error {
+	if strings.TrimSpace(slot.SlotID) == "" || strings.TrimSpace(slot.Phase) == "" || slot.OrdinalMin < 0 || slot.OrdinalMax < slot.OrdinalMin || slot.MaxOccurrences < 1 {
+		return errors.New("invalid slot identity or bounds")
 	}
-	allowedTreatmentFields := append([]string(nil), pair.AllowedTreatmentFields...)
-	sort.Strings(allowedTreatmentFields)
-	payload := struct {
-		DatasetVersionID              uuid.UUID `json:"dataset_version_id"`
-		CaseID                        uuid.UUID `json:"case_id"`
-		SampleIndex                   int       `json:"sample_index"`
-		RepeatIndex                   int       `json:"repeat_index"`
-		PromptSHA256                  string    `json:"prompt_sha256"`
-		ToolSchemaSHA256              string    `json:"tool_schema_sha256"`
-		ExpectedRequestManifestID     uuid.UUID `json:"expected_request_manifest_id"`
-		ExpectedRequestManifestSHA256 string    `json:"expected_request_manifest_sha256"`
-		GraderID                      string    `json:"grader_id"`
-		GraderVersion                 string    `json:"grader_version"`
-		SamplingPolicy                string    `json:"sampling_policy"`
-		RandomSeed                    int64     `json:"random_seed"`
-		Region                        string    `json:"region"`
-		Protocol                      string    `json:"protocol"`
-		TimeBlock                     string    `json:"time_block"`
-		InterleaveOrder               string    `json:"interleave_order"`
-		RetryPolicy                   string    `json:"retry_policy"`
-		AllowedTreatmentFields        []string  `json:"allowed_treatment_fields"`
-	}{pair.DatasetVersionID, pair.CaseID, pair.SampleIndex, pair.RepeatIndex, pair.PromptSHA256, pair.ToolSchemaSHA256,
-		pair.ExpectedRequestManifestID, pair.ExpectedRequestManifestSHA256, pair.GraderID, pair.GraderVersion,
-		pair.SamplingPolicy, pair.RandomSeed, pair.Region, pair.Protocol, pair.TimeBlock, pair.InterleaveOrder,
-		pair.RetryPolicy, allowedTreatmentFields}
-	return canonicalHash(payload, "pair spec")
+	if slot.SemanticsMode == "exact" {
+		if !validSHA256(slot.ExpectedRequestSemanticsSHA256) || slot.RequestSemanticsPolicySHA256 != "" {
+			return errors.New("exact request slot requires only expected semantics hash")
+		}
+	} else if slot.SemanticsMode == "adapter_policy" {
+		if !validSHA256(slot.RequestSemanticsPolicySHA256) || slot.ExpectedRequestSemanticsSHA256 != "" {
+			return errors.New("adapter policy request slot requires only policy semantics hash")
+		}
+	} else {
+		return fmt.Errorf("invalid semantics mode %q", slot.SemanticsMode)
+	}
+	if !validSHA256(slot.ToolSchemaSHA256) || !validSHA256(slot.AllowedToolSetSHA256) {
+		return errors.New("request slot tool hashes must be SHA-256 digests")
+	}
+	return nil
 }
 
-func CanonicalSideSpec(side SideSpec) ([]byte, string, error) {
-	if err := validateSideSpec(side); err != nil {
-		return nil, "", err
+func validatePairSpec(spec PairSpec) error {
+	if spec.DatasetVersionID == uuid.Nil || spec.CaseID == uuid.Nil || spec.ExpectedRequestManifestID == uuid.Nil || spec.SampleIndex < 0 || spec.SampleIndex > 9 || spec.RepeatIndex < 0 {
+		return errors.New("invalid pair spec identity")
 	}
-	payload := struct {
-		Side                     string `json:"side"`
-		ModelRoute               string `json:"model_route"`
-		ModelConfigSHA256        string `json:"model_config_sha256"`
-		ExpectedModelAlias       string `json:"expected_model_alias"`
-		ExpectedResolvedModel    string `json:"expected_resolved_model"`
-		RouteProfileVersion      string `json:"route_profile_version"`
-		ProviderParametersSHA256 string `json:"provider_parameters_sha256"`
-	}{side.Side, side.ModelRoute, side.ModelConfigSHA256, side.ExpectedModelAlias, side.ExpectedResolvedModel, side.RouteProfileVersion, side.ProviderParametersSHA256}
-	return canonicalHash(payload, "side spec")
-}
-
-func BuildPairBinding(pair PairSpec, baseline, candidate SideSpec) (PairBinding, error) {
-	if err := validatePairSpec(pair); err != nil {
-		return PairBinding{}, err
-	}
-	if err := validateSideSpec(baseline); err != nil {
-		return PairBinding{}, fmt.Errorf("baseline side: %w", err)
-	}
-	if err := validateSideSpec(candidate); err != nil {
-		return PairBinding{}, fmt.Errorf("candidate side: %w", err)
-	}
-	if baseline.Side != "baseline" || candidate.Side != "candidate" {
-		return PairBinding{}, errors.New("pair binding requires baseline and candidate sides")
-	}
-	if baseline.ID == candidate.ID {
-		return PairBinding{}, errors.New("pair binding sides must have distinct identities")
-	}
-	if baseline.SampleID == uuid.Nil || candidate.SampleID == uuid.Nil {
-		return PairBinding{}, errors.New("pair binding sides require sample identities")
-	}
-	if baseline.SampleID == candidate.SampleID {
-		return PairBinding{}, errors.New("pair binding sides must reference distinct samples")
-	}
-	for sideName, side := range map[string]SideSpec{"baseline": baseline, "candidate": candidate} {
-		if side.PairSpecID != uuid.Nil && side.PairSpecID != pair.ID {
-			return PairBinding{}, fmt.Errorf("%s side belongs to a different pair spec", sideName)
+	for name, value := range map[string]string{
+		"prompt": spec.PromptSHA256, "tool schema": spec.ToolSchemaSHA256, "request manifest": spec.ExpectedRequestManifestSHA256,
+	} {
+		if !validSHA256(value) {
+			return fmt.Errorf("invalid pair spec %s hash", name)
 		}
 	}
-	baseKey, ok := comparisonRouteKey(baseline.ModelRoute)
-	if !ok {
-		return PairBinding{}, errors.New("baseline model route must use baseline prefix")
+	for name, value := range map[string]string{
+		"grader id": spec.GraderID, "grader version": spec.GraderVersion, "sampling policy": spec.SamplingPolicy,
+		"random seed": spec.RandomSeed, "region": spec.Region, "protocol": spec.Protocol,
+		"time block": spec.TimeBlock, "interleave order": spec.InterleaveOrder, "retry policy": spec.RetryPolicy,
+	} {
+		if strings.TrimSpace(value) == "" {
+			return fmt.Errorf("pair spec %s is required", name)
+		}
 	}
-	candidateKey, ok := comparisonRouteKey(candidate.ModelRoute)
-	if !ok || baseKey != candidateKey {
-		return PairBinding{}, errors.New("baseline and candidate comparison routes do not match")
+	allowed := make(map[string]struct{}, len(spec.AllowedTreatmentFields))
+	for _, field := range spec.AllowedTreatmentFields {
+		if _, permitted := permittedTreatmentFields[field]; !permitted {
+			return fmt.Errorf("unapproved treatment field %q", field)
+		}
+		if _, duplicate := allowed[field]; duplicate {
+			return fmt.Errorf("duplicate treatment field %q", field)
+		}
+		allowed[field] = struct{}{}
+	}
+	return nil
+}
+
+func validateSideSpec(spec SideSpec) error {
+	if spec.Side != "baseline" && spec.Side != "candidate" {
+		return fmt.Errorf("invalid side %q", spec.Side)
+	}
+	if _, ok := comparisonRouteKey(spec.Side, spec.ModelRoute); !ok {
+		return fmt.Errorf("invalid %s model route %q", spec.Side, spec.ModelRoute)
+	}
+	if !validSHA256(spec.ModelConfigSHA256) || !validSHA256(spec.ProviderParametersSHA256) {
+		return errors.New("side spec hashes must be SHA-256 digests")
+	}
+	for name, value := range map[string]string{
+		"expected model alias":    spec.ExpectedModelAlias,
+		"expected resolved model": spec.ExpectedResolvedModel,
+		"route profile version":   spec.RouteProfileVersion,
+	} {
+		if strings.TrimSpace(value) == "" {
+			return fmt.Errorf("side spec %s is required", name)
+		}
+	}
+	return nil
+}
+
+var permittedTreatmentFields = map[string]struct{}{
+	"model_config_sha256":        {},
+	"expected_model_alias":       {},
+	"expected_resolved_model":    {},
+	"provider_parameters_sha256": {},
+}
+
+func validatePairTreatment(pair PairSpec, baseline, candidate SideSpec) error {
+	if baseline.Side != "baseline" || candidate.Side != "candidate" {
+		return errors.New("pair binding requires baseline and candidate side specs")
+	}
+	baselineRoute, _ := comparisonRouteKey("baseline", baseline.ModelRoute)
+	candidateRoute, _ := comparisonRouteKey("candidate", candidate.ModelRoute)
+	if baselineRoute != candidateRoute {
+		return errors.New("pair sides must share the same comparison route")
 	}
 	allowed := make(map[string]struct{}, len(pair.AllowedTreatmentFields))
 	for _, field := range pair.AllowedTreatmentFields {
 		allowed[field] = struct{}{}
 	}
-	baseValues := sideTreatmentValues(baseline)
-	candidateValues := sideTreatmentValues(candidate)
-	for field, baseValue := range baseValues {
-		if baseValue != candidateValues[field] {
-			if _, exists := allowed[field]; !exists {
-				return PairBinding{}, fmt.Errorf("treatment field %q differs without approval", field)
+	for field, values := range map[string][2]string{
+		"model_config_sha256":        {baseline.ModelConfigSHA256, candidate.ModelConfigSHA256},
+		"expected_model_alias":       {baseline.ExpectedModelAlias, candidate.ExpectedModelAlias},
+		"expected_resolved_model":    {baseline.ExpectedResolvedModel, candidate.ExpectedResolvedModel},
+		"route_profile_version":      {baseline.RouteProfileVersion, candidate.RouteProfileVersion},
+		"provider_parameters_sha256": {baseline.ProviderParametersSHA256, candidate.ProviderParametersSHA256},
+	} {
+		if values[0] != values[1] {
+			if _, permitted := allowed[field]; !permitted {
+				return fmt.Errorf("unapproved treatment difference %q", field)
 			}
 		}
 	}
-	_, pairHash, err := CanonicalPairSpec(pair)
-	if err != nil {
-		return PairBinding{}, err
-	}
-	_, baselineHash, err := CanonicalSideSpec(baseline)
-	if err != nil {
-		return PairBinding{}, err
-	}
-	_, candidateHash, err := CanonicalSideSpec(candidate)
-	if err != nil {
-		return PairBinding{}, err
-	}
-	bindingPayload := struct {
-		PairSpecHash      string `json:"pair_spec_hash"`
-		BaselineSideHash  string `json:"baseline_side_hash"`
-		CandidateSideHash string `json:"candidate_side_hash"`
-	}{pairHash, baselineHash, candidateHash}
-	_, bindingHash, err := canonicalHash(bindingPayload, "pair binding")
-	if err != nil {
-		return PairBinding{}, err
-	}
-	return PairBinding{
-		ID:                uuid.New(),
-		PairSpecID:        pair.ID,
-		PairSpecHash:      pairHash,
-		BaselineSideID:    baseline.ID,
-		BaselineSideHash:  baselineHash,
-		CandidateSideID:   candidate.ID,
-		CandidateSideHash: candidateHash,
-		BindingHash:       bindingHash,
-	}, nil
-}
-
-func validatePairSpec(pair PairSpec) error {
-	if pair.ID == uuid.Nil || pair.DatasetVersionID == uuid.Nil || pair.CaseID == uuid.Nil || pair.ExpectedRequestManifestID == uuid.Nil {
-		return errors.New("pair spec identities are required")
-	}
-	if pair.SampleIndex < 0 || pair.RepeatIndex < 0 {
-		return errors.New("pair spec indexes must be non-negative")
-	}
-	for name, value := range map[string]string{
-		"prompt_sha256":                    pair.PromptSHA256,
-		"tool_schema_sha256":               pair.ToolSchemaSHA256,
-		"expected_request_manifest_sha256": pair.ExpectedRequestManifestSHA256,
-	} {
-		if !validSHA256(value) {
-			return fmt.Errorf("pair spec %s must be a sha256", name)
-		}
-	}
-	if strings.TrimSpace(pair.GraderID) == "" || strings.TrimSpace(pair.GraderVersion) == "" || strings.TrimSpace(pair.Region) == "" || strings.TrimSpace(pair.Protocol) == "" {
-		return errors.New("pair spec grader, region and protocol are required")
-	}
-	seen := make(map[string]struct{}, len(pair.AllowedTreatmentFields))
-	for _, field := range pair.AllowedTreatmentFields {
-		if _, exists := seen[field]; exists {
-			return fmt.Errorf("duplicate treatment field %q", field)
-		}
-		seen[field] = struct{}{}
-		if _, ok := sideTreatmentValues(SideSpec{})[field]; !ok {
-			return fmt.Errorf("unsupported treatment field %q", field)
-		}
-	}
 	return nil
 }
 
-func validateSideSpec(side SideSpec) error {
-	if side.ID == uuid.Nil || (side.Side != "baseline" && side.Side != "candidate") || strings.TrimSpace(side.ModelRoute) == "" {
-		return errors.New("side spec identity and model route are required")
-	}
-	if !validSHA256(side.ModelConfigSHA256) || !validSHA256(side.ProviderParametersSHA256) {
-		return errors.New("side spec hashes must be sha256")
-	}
-	if strings.TrimSpace(side.ExpectedModelAlias) == "" || strings.TrimSpace(side.ExpectedResolvedModel) == "" || strings.TrimSpace(side.RouteProfileVersion) == "" {
-		return errors.New("side spec model and route identity are required")
-	}
-	return nil
-}
-
-func sideTreatmentValues(side SideSpec) map[string]string {
-	return map[string]string{
-		"model_config_sha256":        side.ModelConfigSHA256,
-		"expected_model_alias":       side.ExpectedModelAlias,
-		"expected_resolved_model":    side.ExpectedResolvedModel,
-		"provider_parameters_sha256": side.ProviderParametersSHA256,
-	}
-}
-
-func comparisonRouteKey(route string) (string, bool) {
-	prefix, key, ok := strings.Cut(route, ":")
-	if !ok || key == "" || (prefix != "baseline" && prefix != "candidate") {
-		return "", false
-	}
-	return key, true
-}
-
-func validSHA256(value string) bool {
-	if len(value) != 64 {
-		return false
-	}
-	_, err := hex.DecodeString(value)
-	return err == nil
-}
-
-func canonicalHash(payload any, label string) ([]byte, string, error) {
-	encoded, err := json.Marshal(payload)
+func canonicalizeContract(value any) (CanonicalContract, error) {
+	encoded, err := json.Marshal(value)
 	if err != nil {
-		return nil, "", fmt.Errorf("marshal %s: %w", label, err)
+		return CanonicalContract{}, err
 	}
 	canonical, err := jsoncanonicalizer.Transform(encoded)
 	if err != nil {
-		return nil, "", fmt.Errorf("canonicalize %s: %w", label, err)
+		return CanonicalContract{}, err
 	}
-	digest := sha256.Sum256(canonical)
-	return canonical, hex.EncodeToString(digest[:]), nil
+	return CanonicalContract{Bytes: canonical, SHA256: contractSHA256(string(canonical))}, nil
+}
+
+func contractSHA256(value string) string {
+	digest := sha256.Sum256([]byte(value))
+	return hex.EncodeToString(digest[:])
+}
+
+func validSHA256(value string) bool {
+	return sha256Pattern.MatchString(value)
+}
+
+func comparisonRouteKey(side, route string) (string, bool) {
+	prefix := side + ":"
+	key, found := strings.CutPrefix(strings.TrimSpace(route), prefix)
+	return key, found && strings.TrimSpace(key) != ""
+}
+
+func canonicalTreatmentFields(fields []string) []string {
+	canonical := append([]string(nil), fields...)
+	sort.Strings(canonical)
+	return canonical
 }

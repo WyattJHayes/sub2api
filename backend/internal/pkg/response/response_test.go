@@ -10,7 +10,6 @@ import (
 	"testing"
 
 	errors2 "github.com/Wei-Shaw/sub2api/internal/pkg/errors"
-	"github.com/Wei-Shaw/sub2api/internal/service"
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/require"
 )
@@ -183,17 +182,6 @@ func TestErrorFrom(t *testing.T) {
 			wantBody: Response{
 				Code:    http.StatusInternalServerError,
 				Message: errors2.UnknownMessage,
-			},
-		},
-		{
-			name:         "radar_cutover_is_service_unavailable",
-			err:          service.ErrRadarCutoverActive,
-			wantWritten:  true,
-			wantHTTPCode: http.StatusServiceUnavailable,
-			wantBody: Response{
-				Code:    http.StatusServiceUnavailable,
-				Message: "Radar evaluation writes are temporarily unavailable",
-				Reason:  "radar_cutover_active",
 			},
 		},
 	}

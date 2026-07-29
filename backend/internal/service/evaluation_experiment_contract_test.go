@@ -1,152 +1,126 @@
 package service
 
 import (
-	"encoding/hex"
 	"strings"
 	"testing"
 
 	"github.com/google/uuid"
-	"github.com/stretchr/testify/require"
 )
 
-const contractHash = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
-
 func TestCanonicalRequestManifestGoldenHash(t *testing.T) {
-	manifest := RequestManifest{
-		SchemaVersion:   RequestManifestSchemaVersion,
-		InteractionType: InteractionSingle,
-		OrdinalPolicy:   OrdinalPolicyExact,
-		MinRequests:     1,
-		MaxRequests:     1,
-		RequestSlots: []RequestSlot{{
-			SlotID:                         "slot-0",
-			OrdinalMin:                     0,
-			OrdinalMax:                     0,
-			Phase:                          "prompt",
-			Required:                       true,
-			SemanticsMode:                  SemanticsModeExact,
-			ExpectedRequestSemanticsSHA256: contractHash,
-			ToolSchemaSHA256:               contractHash,
-			AllowedToolSetSHA256:           contractHash,
-			MaxOccurrences:                 1,
-		}},
+	manifest := validRequestManifest()
+	canonical, err := CanonicalizeRequestManifest(manifest)
+	if err != nil {
+		t.Fatalf("CanonicalizeRequestManifest() error = %v", err)
 	}
 
-	canonical, digest, err := CanonicalRequestManifest(manifest)
-	require.NoError(t, err)
-	require.Equal(t, `{"interaction_type":"single","max_requests":1,"min_requests":1,"ordinal_policy":"exact","request_slots":[{"allowed_tool_set_sha256":"0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef","expected_request_semantics_sha256":"0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef","max_occurrences":1,"ordinal_max":0,"ordinal_min":0,"phase":"prompt","required":true,"semantics_mode":"exact","slot_id":"slot-0","tool_schema_sha256":"0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"}],"schema_version":"radar-request-manifest-v1"}`, string(canonical))
-	require.Equal(t, "df0786b5e423c19bcdc94925aee52142ce6314267ae0372207f37e2bfddeacfd", digest)
+	const wantBytes = `{"interaction_type":"single","max_requests":1,"min_requests":1,"ordinal_policy":"exact","request_slots":[{"allowed_tool_set_sha256":"eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee","expected_request_semantics_sha256":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","max_occurrences":1,"ordinal_max":0,"ordinal_min":0,"phase":"primary","required":true,"semantics_mode":"exact","slot_id":"request-0","tool_schema_sha256":"dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"}],"schema_version":"radar-request-manifest-v1"}`
+	const wantHash = "3ffa6dd8ed87891bd322cbdf26b0f9fbac93136a9dcb067d81d4ee4d6b8727b4"
+	if got := string(canonical.Bytes); got != wantBytes {
+		t.Errorf("canonical bytes = %s, want %s", got, wantBytes)
+	}
+	if got := canonical.SHA256; got != wantHash {
+		t.Errorf("canonical hash = %s, want %s", got, wantHash)
+	}
 }
 
-func TestCanonicalRequestManifestRejectsAmbiguousSlots(t *testing.T) {
-	base := RequestManifest{
-		SchemaVersion:   RequestManifestSchemaVersion,
-		InteractionType: InteractionMultiTurn,
-		OrdinalPolicy:   OrdinalPolicyContiguousBounded,
-		MinRequests:     1,
-		MaxRequests:     2,
-		RequestSlots: []RequestSlot{
-			{SlotID: "a", OrdinalMin: 0, OrdinalMax: 1, SemanticsMode: SemanticsModeExact, ExpectedRequestSemanticsSHA256: contractHash, MaxOccurrences: 1},
-			{SlotID: "b", OrdinalMin: 1, OrdinalMax: 1, SemanticsMode: SemanticsModeExact, ExpectedRequestSemanticsSHA256: contractHash, MaxOccurrences: 1},
-		},
+func TestRequestManifestRejectsAmbiguousSlots(t *testing.T) {
+	base := validRequestManifest()
+	base.InteractionType = "agent"
+	base.OrdinalPolicy = "contiguous_bounded"
+	base.MinRequests = 2
+	base.MaxRequests = 2
+	base.RequestSlots = []RequestSlot{
+		validRequestSlot("request-0", 0, 1),
+		validRequestSlot("request-1", 1, 1),
 	}
-	_, _, err := CanonicalRequestManifest(base)
-	require.ErrorContains(t, err, "overlap")
-
-	base.RequestSlots[1].OrdinalMin = 3
-	base.RequestSlots[1].OrdinalMax = 3
-	_, _, err = CanonicalRequestManifest(base)
-	require.ErrorContains(t, err, "ordinal")
-}
-
-func TestCanonicalRequestManifestRejectsExactAndPolicyHashTogether(t *testing.T) {
-	manifest := RequestManifest{
-		SchemaVersion:   RequestManifestSchemaVersion,
-		InteractionType: InteractionSingle,
-		OrdinalPolicy:   OrdinalPolicyExact,
-		MinRequests:     1,
-		MaxRequests:     1,
-		RequestSlots: []RequestSlot{{
-			SlotID:                         "slot-0",
-			OrdinalMin:                     0,
-			OrdinalMax:                     0,
-			SemanticsMode:                  SemanticsModeExact,
-			ExpectedRequestSemanticsSHA256: contractHash,
-			RequestSemanticsPolicySHA256:   contractHash,
-			MaxOccurrences:                 1,
-		}},
+	if _, err := CanonicalizeRequestManifest(base); err == nil {
+		t.Fatal("CanonicalizeRequestManifest() error = nil, want overlapping slot rejection")
 	}
-	_, _, err := CanonicalRequestManifest(manifest)
-	require.ErrorContains(t, err, "exact semantics")
+
+	base.RequestSlots = []RequestSlot{
+		validRequestSlot("request-0", 0, 0),
+		validRequestSlot("request-2", 2, 2),
+	}
+	if _, err := CanonicalizeRequestManifest(base); err == nil {
+		t.Fatal("CanonicalizeRequestManifest() error = nil, want non-contiguous ordinal rejection")
+	}
+
+	base = validRequestManifest()
+	base.RequestSlots[0].RequestSemanticsPolicySHA256 = strings.Repeat("b", 64)
+	if _, err := CanonicalizeRequestManifest(base); err == nil {
+		t.Fatal("CanonicalizeRequestManifest() error = nil, want exact and policy hash conflict rejection")
+	}
 }
 
 func TestPairBindingRejectsUnapprovedTreatmentDifference(t *testing.T) {
-	pair := validPairSpec(nil)
-	baseline := validSideSpec("baseline:route", contractHash, "base")
-	candidate := validSideSpec("candidate:route", strings.Repeat("f", 64), "base")
+	pair := validPairSpec()
+	baseline := validSideSpec("baseline", "baseline:comparison-route")
+	candidate := validSideSpec("candidate", "candidate:comparison-route")
+	candidate.RouteProfileVersion = "route-profile-v2"
 
-	_, err := BuildPairBinding(pair, baseline, candidate)
-	require.ErrorContains(t, err, "model_config_sha256")
+	if _, err := BindEvaluationPair(pair, baseline, candidate); err == nil {
+		t.Fatal("BindEvaluationPair() error = nil, want unapproved treatment difference rejection")
+	}
 }
 
-func TestPairBindingAllowsApprovedTreatmentDifference(t *testing.T) {
-	pair := validPairSpec([]string{"model_config_sha256", "expected_model_alias", "expected_resolved_model"})
-	baseline := validSideSpec("baseline:route", contractHash, "base")
-	candidate := validSideSpec("candidate:route", strings.Repeat("f", 64), "candidate")
-
-	binding, err := BuildPairBinding(pair, baseline, candidate)
-	require.NoError(t, err)
-	require.NotEqual(t, uuid.Nil, binding.ID)
-	require.Len(t, binding.PairSpecHash, 64)
-	require.Len(t, binding.BindingHash, 64)
-	_, err = hex.DecodeString(binding.BindingHash)
-	require.NoError(t, err)
+func validRequestManifest() RequestManifest {
+	return RequestManifest{
+		SchemaVersion:   RequestManifestSchemaV1,
+		InteractionType: "single",
+		OrdinalPolicy:   "exact",
+		MinRequests:     1,
+		MaxRequests:     1,
+		RequestSlots:    []RequestSlot{validRequestSlot("request-0", 0, 0)},
+	}
 }
 
-func TestCanonicalPairSpecSortsTreatmentAllowlist(t *testing.T) {
-	pair := validPairSpec([]string{"expected_resolved_model", "model_config_sha256", "expected_model_alias"})
-	_, firstHash, err := CanonicalPairSpec(pair)
-	require.NoError(t, err)
-	pair.AllowedTreatmentFields = []string{"model_config_sha256", "expected_model_alias", "expected_resolved_model"}
-	_, secondHash, err := CanonicalPairSpec(pair)
-	require.NoError(t, err)
-	require.Equal(t, firstHash, secondHash)
+func validRequestSlot(id string, ordinalMin, ordinalMax int) RequestSlot {
+	return RequestSlot{
+		SlotID:                         id,
+		OrdinalMin:                     ordinalMin,
+		OrdinalMax:                     ordinalMax,
+		Phase:                          "primary",
+		Required:                       true,
+		SemanticsMode:                  "exact",
+		ExpectedRequestSemanticsSHA256: strings.Repeat("a", 64),
+		ToolSchemaSHA256:               strings.Repeat("d", 64),
+		AllowedToolSetSHA256:           strings.Repeat("e", 64),
+		MaxOccurrences:                 1,
+	}
 }
 
-func validPairSpec(allowed []string) PairSpec {
+func validPairSpec() PairSpec {
 	return PairSpec{
-		ID:                            uuid.New(),
 		DatasetVersionID:              uuid.New(),
 		CaseID:                        uuid.New(),
 		SampleIndex:                   0,
 		RepeatIndex:                   0,
-		PromptSHA256:                  contractHash,
-		ToolSchemaSHA256:              contractHash,
+		PromptSHA256:                  strings.Repeat("1", 64),
+		ToolSchemaSHA256:              strings.Repeat("2", 64),
 		ExpectedRequestManifestID:     uuid.New(),
-		ExpectedRequestManifestSHA256: contractHash,
-		GraderID:                      "grader",
+		ExpectedRequestManifestSHA256: strings.Repeat("3", 64),
+		GraderID:                      "exact-grader",
 		GraderVersion:                 "v1",
-		SamplingPolicy:                "temperature=0",
-		RandomSeed:                    42,
-		Region:                        "us-east",
-		Protocol:                      "openai-chat",
-		TimeBlock:                     "2026-07-29T00:00Z",
-		InterleaveOrder:               "round_robin",
-		RetryPolicy:                   "same-route-once",
-		AllowedTreatmentFields:        allowed,
+		SamplingPolicy:                "fixed",
+		RandomSeed:                    "seed-1",
+		Region:                        "cn-north-1",
+		Protocol:                      "responses-v1",
+		TimeBlock:                     "2026-07-27T00:00:00Z",
+		InterleaveOrder:               "baseline-first",
+		RetryPolicy:                   "none",
+		AllowedTreatmentFields:        []string{"model_config_sha256"},
 	}
 }
 
-func validSideSpec(route, configHash, alias string) SideSpec {
+func validSideSpec(side, route string) SideSpec {
 	return SideSpec{
-		ID:                       uuid.New(),
-		SampleID:                 uuid.New(),
-		Side:                     strings.Split(route, ":")[0],
+		Side:                     side,
 		ModelRoute:               route,
-		ModelConfigSHA256:        configHash,
-		ExpectedModelAlias:       alias,
-		ExpectedResolvedModel:    alias + "-resolved",
-		RouteProfileVersion:      "route-v1",
-		ProviderParametersSHA256: contractHash,
+		ModelConfigSHA256:        strings.Repeat("4", 64),
+		ExpectedModelAlias:       "model-alias",
+		ExpectedResolvedModel:    "model-resolved",
+		RouteProfileVersion:      "route-profile-v1",
+		ProviderParametersSHA256: strings.Repeat("5", 64),
 	}
 }

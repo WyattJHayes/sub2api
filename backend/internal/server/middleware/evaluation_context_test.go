@@ -152,14 +152,17 @@ func runEvaluationAuthRequest(t *testing.T, protocol string, isEvaluation bool, 
 		require.NoError(t, err)
 		issuedAt := time.Now().UTC().Add(-time.Minute)
 		token, err := signer.Sign(service.EvaluationContext{
-			RunID:                testEvaluationRunID,
-			SampleID:             testEvaluationSampleID,
-			DatasetVersion:       "core-v1",
-			ExpectedModelAlias:   "qwen3-coder",
-			ExpectedRouteProfile: "route-v42",
-			APIKeyID:             apiKeyID,
-			IssuedAt:             issuedAt,
-			ExpiresAt:            issuedAt.Add(5 * time.Minute),
+			RunID:                 testEvaluationRunID,
+			SampleID:              testEvaluationSampleID,
+			DatasetVersionID:      "018f4f20-3d12-7e50-9000-000000000603",
+			DatasetKey:            "core",
+			DatasetVersion:        "core-v1",
+			DatasetManifestSHA256: strings.Repeat("d", 64),
+			ExpectedModelAlias:    "qwen3-coder",
+			ExpectedRouteProfile:  "route-v42",
+			APIKeyID:              apiKeyID,
+			IssuedAt:              issuedAt,
+			ExpiresAt:             issuedAt.Add(5 * time.Minute),
 		})
 		require.NoError(t, err)
 		headerName = evaluationTokenHeader

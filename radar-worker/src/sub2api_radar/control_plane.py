@@ -21,6 +21,7 @@ from .models import (
     EvidenceReceipt,
     ExecutionEvidence,
     GradingLease,
+    ScoreReceipt,
     ScoreSubmission,
 )
 
@@ -218,8 +219,8 @@ class ControlPlaneClient:
             f"/internal/radar/v1/leases/{assignment_id}/fail",
             json_body={
                 "lease_token": token,
-                "lease_epoch": lease_epoch,
                 "failure_code": failure_code,
+                "lease_epoch": lease_epoch,
             },
             key=self._key(assignment_id, "fail"),
         )
@@ -279,8 +280,8 @@ class ControlPlaneClient:
 
     async def submit_score(
         self, lease_id: UUID, token: str, submission: ScoreSubmission, lease_epoch: int = 0
-    ) -> Mapping[str, Any]:
-        return await self._request(
+    ) -> ScoreReceipt:
+        payload = await self._request(
             "POST",
             f"/internal/radar/v1/grading-leases/{lease_id}/complete",
             json_body={
@@ -290,6 +291,7 @@ class ControlPlaneClient:
             },
             key=self._key(lease_id, "score"),
         )
+        return ScoreReceipt.model_validate(self._data(payload))
 
     async def fail_grading(
         self, lease_id: UUID, token: str, failure_code: str, lease_epoch: int = 0
@@ -299,8 +301,8 @@ class ControlPlaneClient:
             f"/internal/radar/v1/grading-leases/{lease_id}/fail",
             json_body={
                 "lease_token": token,
-                "lease_epoch": lease_epoch,
                 "failure_code": failure_code,
+                "lease_epoch": lease_epoch,
             },
             key=self._key(lease_id, "grading-fail"),
         )
@@ -325,7 +327,7 @@ class ControlPlaneClient:
             json_body={
                 "lease_token": token,
                 "lease_epoch": lease_epoch,
-                **submission.model_dump(mode="json"),
+                **submission.model_dump(mode="json", by_alias=True),
             },
             key=self._key(lease_id, "aggregate"),
         )

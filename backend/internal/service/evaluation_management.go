@@ -1,12 +1,31 @@
 package service
 
 import (
+	"context"
 	"encoding/json"
 	"time"
 
 	"github.com/google/uuid"
 	"github.com/shopspring/decimal"
 )
+
+type RunControlResult struct {
+	RunID             uuid.UUID   `json:"run_id"`
+	FromStatus        string      `json:"from_status"`
+	ToStatus          string      `json:"to_status"`
+	PreviousEpoch     int64       `json:"previous_epoch"`
+	CurrentEpoch      int64       `json:"current_epoch"`
+	AffectedWorkCount int         `json:"affected_work_count"`
+	ReplacementIDs    []uuid.UUID `json:"replacement_ids,omitempty"`
+	EventID           uuid.UUID   `json:"event_id"`
+}
+
+type RunControlRepository interface {
+	PauseRun(context.Context, uuid.UUID, string, int64, string) (*RunControlResult, error)
+	ResumeRun(context.Context, uuid.UUID, string, int64, string) (*RunControlResult, error)
+	CancelRun(context.Context, uuid.UUID, string, int64, string) (*RunControlResult, error)
+	FenceRun(context.Context, uuid.UUID, string, int64, string) (*RunControlResult, error)
+}
 
 type CreateRadarCaseInput struct {
 	CaseKey          string          `json:"case_key" binding:"required"`

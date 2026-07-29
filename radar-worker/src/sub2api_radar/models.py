@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import datetime
 from decimal import Decimal
 from enum import StrEnum
-from typing import Any, Literal
+from typing import Any
 from uuid import UUID
 
 from pydantic import AliasChoices, BaseModel, ConfigDict, Field, field_validator
@@ -71,7 +71,7 @@ class AssignmentLease(StrictModel):
     )
     lease_epoch: int = Field(default=0, ge=0)
     worker_image_digest: str = ""
-    work_origin: Literal["initial", "regrade"] = "initial"
+    work_origin: str = ""
     gateway_api_key: str = ""
     gateway_evaluation_token: str = Field(min_length=1)
     route_trace_id: str = Field(min_length=1)
@@ -116,8 +116,30 @@ class GradingLease(StrictModel):
         validation_alias=AliasChoices("lease_expires_at", "expires_at")
     )
     lease_epoch: int = Field(default=0, ge=0)
+    revision_batch_id: UUID | None = None
+    grading_input_hash: str = Field(default="", pattern=r"^$|^[0-9a-f]{64}$")
+    recovery_generation: int = Field(default=0, ge=0)
     worker_image_digest: str = ""
-    work_origin: Literal["initial", "regrade"] = "initial"
+    work_origin: str = ""
+
+
+class ScoreRef(StrictModel):
+    id: UUID = Field(
+        validation_alias=AliasChoices("score_id", "id"),
+        serialization_alias="score_id",
+    )
+    created_at: datetime = Field(
+        validation_alias=AliasChoices("score_created_at", "created_at"),
+        serialization_alias="score_created_at",
+    )
+
+
+class SnapshotRef(StrictModel):
+    id: UUID = Field(
+        validation_alias=AliasChoices("snapshot_id", "id"),
+        serialization_alias="snapshot_id",
+    )
+    window_start: datetime
 
 
 class AnalysisLease(StrictModel):
@@ -136,8 +158,14 @@ class AnalysisLease(StrictModel):
     )
     lease_epoch: int = Field(default=0, ge=0)
     worker_image_digest: str = ""
-    work_origin: Literal["initial", "regrade"] = "initial"
+    work_origin: str = ""
+    scope: str = Field(default="cell", pattern=r"^(cell|global)$")
+    input_set_hash: str = Field(default="", pattern=r"^$|^[0-9a-f]{64}$")
+    aggregate_revision: int = Field(default=0, ge=0)
+    revision_batch_id: UUID | None = None
     score_ids: tuple[UUID, ...] = ()
+    score_refs: tuple[ScoreRef, ...] = ()
+    snapshot_refs: tuple[SnapshotRef, ...] = ()
     pairs: tuple[PairedScore, ...] = ()
     history: tuple[dict[str, Any], ...] = ()
     invalid_failures: tuple[FailureClass, ...] = ()
@@ -169,9 +197,6 @@ class ExecutionEvidence(StrictModel):
 
 
 class ScoreSubmission(StrictModel):
-    sample_id: UUID
-    grader_id: str
-    grader_version: str
     score: Decimal = Field(ge=0, le=1)
     passed: bool | None = None
     failure_class: FailureClass | None = None
@@ -186,6 +211,11 @@ class ScoreSubmission(StrictModel):
             if len(value) != 64 or any(char not in "0123456789abcdef" for char in value):
                 raise ValueError("evidence hashes must be lowercase SHA-256 values")
         return values
+
+
+class ScoreReceipt(StrictModel):
+    score_ref: ScoreRef
+    head_version: int = Field(ge=1)
 
 
 class AggregateSubmission(StrictModel):
@@ -206,7 +236,10 @@ class AggregateSubmission(StrictModel):
     ewma: Decimal | None = None
     cusum: Decimal | None = None
     seed: int
+    input_set_hash: str = Field(default="", pattern=r"^$|^[0-9a-f]{64}$")
     score_ids: tuple[UUID, ...] = ()
+    score_refs: tuple[ScoreRef, ...] = ()
+    snapshot_refs: tuple[SnapshotRef, ...] = ()
     aggregate: dict[str, Any] = Field(default_factory=dict)
 
 

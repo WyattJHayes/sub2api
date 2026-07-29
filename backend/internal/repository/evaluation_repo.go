@@ -43,7 +43,7 @@ func (r *evaluationRepository) CreateRunWithMatrix(ctx context.Context, input se
 		return nil, fmt.Errorf("invalid evaluation trigger source %q", input.TriggerSource)
 	}
 
-	tx, err := beginEvaluationWriterTx(ctx, r.db, defaultEvaluationWriterIdentity("control"))
+	tx, err := beginRadarWriterTx(ctx, r.db, "api")
 	if err != nil {
 		return nil, fmt.Errorf("begin evaluation run transaction: %w", err)
 	}
@@ -130,11 +130,12 @@ func (r *evaluationRepository) CreateRunWithMatrix(ctx context.Context, input se
 		return nil, fmt.Errorf("marshal candidate reference: %w", err)
 	}
 	run := &service.EvaluationRun{
-		ID:           uuid.New(),
-		PlanID:       input.PlanID,
-		Status:       service.RunStatusPending,
-		BudgetLimit:  budgetLimit,
-		ReservedCost: totalReservation,
+		ID:             uuid.New(),
+		PlanID:         input.PlanID,
+		Status:         service.RunStatusPending,
+		BudgetLimit:    budgetLimit,
+		ReservedCost:   totalReservation,
+		ContractStatus: "pending",
 	}
 	if totalReservation.Equal(budgetLimit) {
 		run.Status = service.RunStatusBudgetPaused
@@ -142,84 +143,26 @@ func (r *evaluationRepository) CreateRunWithMatrix(ctx context.Context, input se
 	err = tx.QueryRowContext(ctx, `
 		INSERT INTO evaluation_runs (
 			id, plan_id, trigger_source, baseline_ref, candidate_ref, status,
-			budget_limit, reserved_cost, created_by
-		) VALUES ($1, $2, $3, $4::jsonb, $5::jsonb, $6, $7, $8, NULLIF($9, 0))
+			budget_limit, reserved_cost, created_by, route_profile_version
+		) VALUES ($1, $2, $3, $4::jsonb, $5::jsonb, $6, $7, $8, NULLIF($9, 0), $10)
 		RETURNING created_at`,
 		run.ID, run.PlanID, input.TriggerSource, baselineRef, candidateRef,
-		run.Status, run.BudgetLimit, run.ReservedCost, input.CreatedBy).Scan(&run.CreatedAt)
+		run.Status, run.BudgetLimit, run.ReservedCost, input.CreatedBy, radarRouteProfileVersion).Scan(&run.CreatedAt)
 	if err != nil {
 		return nil, fmt.Errorf("insert evaluation run: %w", err)
 	}
-	manifest := defaultRequestManifest(run.ID)
-	manifestBytes, manifestHash, err := service.CanonicalRequestManifest(manifest)
+
+	contracts, err := persistEvaluationExperimentContracts(ctx, tx, run.ID, run.CreatedAt, cases, matrix)
 	if err != nil {
-		return nil, fmt.Errorf("build request manifest: %w", err)
-	}
-	if _, err := tx.ExecContext(ctx, `
-		INSERT INTO evaluation_request_manifests (
-			id, schema_version, interaction_type, canonical_manifest_bytes, manifest_sha256
-		) VALUES ($1, $2, $3, $4, $5)
-		ON CONFLICT (manifest_sha256) DO NOTHING`, manifest.ID, manifest.SchemaVersion,
-		manifest.InteractionType, manifestBytes, manifestHash); err != nil {
-		return nil, fmt.Errorf("insert run request manifest: %w", err)
+		return nil, err
 	}
 	run.ContractStatus = "bound"
-	run.RequestManifestID = manifest.ID
-	run.RequestManifestSHA256 = manifestHash
-
-	for _, evaluationCase := range cases {
-		for matrixIndex, matrixEntry := range matrix {
-			for sampleIndex := 0; sampleIndex < evaluationCase.sampleCount; sampleIndex++ {
-				baselineConfig, baselineConfigHash := matrixEntry.configForSide("baseline")
-				candidateConfig, candidateConfigHash := matrixEntry.configForSide("candidate")
-				baselineSampleID, err := insertEvaluationSampleAndAssignment(
-					ctx, tx, run.ID, evaluationCase, "baseline:"+matrixEntry.route,
-					baselineConfig, baselineConfigHash, sampleIndex,
-				)
-				if err != nil {
-					return nil, err
-				}
-				candidateSampleID, err := insertEvaluationSampleAndAssignment(
-					ctx, tx, run.ID, evaluationCase, "candidate:"+matrixEntry.route,
-					candidateConfig, candidateConfigHash, sampleIndex,
-				)
-				if err != nil {
-					return nil, err
-				}
-				pair := defaultPairSpec(run, evaluationCase, manifest, matrixIndex, sampleIndex)
-				baseline := defaultSideSpec("baseline", matrixEntry.route, baselineConfigHash, baselineSampleID)
-				candidate := defaultSideSpec("candidate", matrixEntry.route, candidateConfigHash, candidateSampleID)
-				baseline.PairSpecID = pair.ID
-				candidate.PairSpecID = pair.ID
-				pairBytes, pairHash, err := service.CanonicalPairSpec(pair)
-				if err != nil {
-					return nil, err
-				}
-				baselineBytes, baselineHash, err := service.CanonicalSideSpec(baseline)
-				if err != nil {
-					return nil, err
-				}
-				candidateBytes, candidateHash, err := service.CanonicalSideSpec(candidate)
-				if err != nil {
-					return nil, err
-				}
-				binding, err := service.BuildPairBinding(pair, baseline, candidate)
-				if err != nil {
-					return nil, err
-				}
-				if err := insertPairContractTx(ctx, tx, run.ID, manifest, pair, baseline, candidate,
-					manifestBytes, manifestHash, pairBytes, pairHash, baselineBytes, baselineHash,
-					candidateBytes, candidateHash, binding, nil); err != nil {
-					return nil, err
-				}
-			}
-		}
-	}
+	run.PairBindings = contracts.Bindings
 
 	if _, err := tx.ExecContext(ctx, `
-		INSERT INTO evaluation_run_events (id, run_id, event_type, payload, actor_type, actor_ref)
-		VALUES ($1, $2, 'run_created', '{}'::jsonb, 'user', NULLIF($3, ''))`,
-		uuid.New(), run.ID, strconvFormatInt(input.CreatedBy)); err != nil {
+		INSERT INTO evaluation_run_events (id, run_id, event_type, payload, actor_type, actor_ref, control_epoch, idempotency_key)
+		VALUES ($1, $2, 'run_created', '{}'::jsonb, 'user', NULLIF($3, ''), 0, $4)`,
+		uuid.New(), run.ID, strconvFormatInt(input.CreatedBy), hashReconcileKey("run-created:"+run.ID.String())); err != nil {
 		return nil, fmt.Errorf("insert run created event: %w", err)
 	}
 	warningThreshold := budgetLimit.Mul(decimal.NewFromInt(8)).Div(decimal.NewFromInt(10))
@@ -234,69 +177,6 @@ func (r *evaluationRepository) CreateRunWithMatrix(ctx context.Context, input se
 	return run, nil
 }
 
-func defaultRequestManifest(runID uuid.UUID) service.RequestManifest {
-	semanticsHash := hashString("request:" + runID.String())
-	toolHash := hashString("{}")
-	return service.RequestManifest{
-		ID:              uuid.New(),
-		SchemaVersion:   service.RequestManifestSchemaVersion,
-		InteractionType: service.InteractionSingle,
-		OrdinalPolicy:   service.OrdinalPolicyExact,
-		MinRequests:     1,
-		MaxRequests:     1,
-		RequestSlots: []service.RequestSlot{{
-			SlotID:                         "slot-0",
-			OrdinalMin:                     0,
-			OrdinalMax:                     0,
-			Phase:                          "prompt",
-			Required:                       true,
-			SemanticsMode:                  service.SemanticsModeExact,
-			ExpectedRequestSemanticsSHA256: semanticsHash,
-			ToolSchemaSHA256:               toolHash,
-			AllowedToolSetSHA256:           toolHash,
-			MaxOccurrences:                 1,
-		}},
-	}
-}
-
-func defaultPairSpec(run *service.EvaluationRun, evaluationCase evaluationCaseForRun, manifest service.RequestManifest, repeatIndex, sampleIndex int) service.PairSpec {
-	return service.PairSpec{
-		ID:                            uuid.New(),
-		DatasetVersionID:              evaluationCase.datasetVersionID,
-		CaseID:                        evaluationCase.id,
-		SampleIndex:                   sampleIndex,
-		RepeatIndex:                   repeatIndex,
-		ExpectedRequestManifestID:     manifest.ID,
-		ExpectedRequestManifestSHA256: run.RequestManifestSHA256,
-		PromptSHA256:                  hashString("prompt:" + evaluationCase.id.String()),
-		ToolSchemaSHA256:              hashString("{}"),
-		GraderID:                      evaluationCase.graderID,
-		GraderVersion:                 evaluationCase.graderVersion,
-		SamplingPolicy:                "model-config-bound",
-		RandomSeed:                    int64(sampleIndex),
-		Region:                        "legacy-unbound",
-		Protocol:                      "openai-chat",
-		TimeBlock:                     run.CreatedAt.UTC().Format(time.RFC3339),
-		InterleaveOrder:               "round_robin",
-		RetryPolicy:                   "same-route-once",
-		AllowedTreatmentFields:        []string{"model_config_sha256"},
-	}
-}
-
-func defaultSideSpec(side, route, modelConfigHash string, sampleID uuid.UUID) service.SideSpec {
-	return service.SideSpec{
-		ID:                       uuid.New(),
-		SampleID:                 sampleID,
-		Side:                     side,
-		ModelRoute:               side + ":" + route,
-		ModelConfigSHA256:        modelConfigHash,
-		ExpectedModelAlias:       route,
-		ExpectedResolvedModel:    route,
-		RouteProfileVersion:      "legacy-unbound",
-		ProviderParametersSHA256: hashString("{}"),
-	}
-}
-
 func (r *evaluationRepository) ClaimAssignment(ctx context.Context, workerID uuid.UUID, capabilities []string, leaseTTL time.Duration) (*service.AssignmentLease, error) {
 	if r == nil || r.db == nil {
 		return nil, errors.New("nil evaluation repository")
@@ -307,29 +187,23 @@ func (r *evaluationRepository) ClaimAssignment(ctx context.Context, workerID uui
 	if leaseTTL <= 0 {
 		return nil, errors.New("evaluation lease ttl must be positive")
 	}
-	tx, err := beginEvaluationWriterTx(ctx, r.db, defaultEvaluationWriterIdentity("runner"))
+	tx, err := beginRadarWriterTx(ctx, r.db, "worker")
 	if err != nil {
 		return nil, fmt.Errorf("begin evaluation assignment claim: %w", err)
 	}
 	defer func() { _ = tx.Rollback() }()
 
 	var registeredCapabilities pq.StringArray
-	var claimMode string
+	var workerImageDigest sql.NullString
 	err = tx.QueryRowContext(ctx, `
-		SELECT capabilities, claim_mode FROM evaluation_workers
-		WHERE id = $1 AND status = 'active'
-		FOR UPDATE`, workerID).Scan(&registeredCapabilities, &claimMode)
+	SELECT capabilities, image_digest FROM evaluation_workers
+		WHERE id = $1 AND status = 'active' AND claim_mode = 'open'
+		FOR UPDATE`, workerID).Scan(&registeredCapabilities, &workerImageDigest)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, errors.New("evaluation worker is unavailable")
 	}
 	if err != nil {
 		return nil, fmt.Errorf("lock evaluation worker: %w", err)
-	}
-	if claimMode != "open" {
-		if err := tx.Commit(); err != nil {
-			return nil, fmt.Errorf("commit paused evaluation assignment claim: %w", err)
-		}
-		return nil, nil
 	}
 	authorizedCapabilities := intersectCapabilities(capabilities, registeredCapabilities)
 	if len(authorizedCapabilities) == 0 {
@@ -357,16 +231,33 @@ func (r *evaluationRepository) ClaimAssignment(ctx context.Context, workerID uui
 		if err != nil {
 			return nil, err
 		}
-		eligible, eligibilityErr := lockRunLeaseEligibility(ctx, tx, candidate.runID, candidate.priority)
-		if eligibilityErr != nil {
-			return nil, eligibilityErr
+	}
+	eligible, eligibilityErr := lockRunLeaseEligibility(ctx, tx, candidate.runID, candidate.priority)
+	if eligibilityErr != nil {
+		return nil, eligibilityErr
+	}
+	if !eligible {
+		if err := tx.Commit(); err != nil {
+			return nil, fmt.Errorf("commit ineligible evaluation assignment claim: %w", err)
 		}
-		if !eligible {
-			if err := tx.Commit(); err != nil {
-				return nil, fmt.Errorf("commit ineligible evaluation assignment claim: %w", err)
-			}
-			return nil, nil
+		return nil, nil
+	}
+	var runEpoch, runStateVersion int64
+	var runStatus service.RunStatus
+	if err := tx.QueryRowContext(ctx, `SELECT control_epoch, state_version, status FROM evaluation_runs WHERE id = $1 FOR UPDATE`, candidate.runID).Scan(&runEpoch, &runStateVersion, &runStatus); err != nil {
+		return nil, fmt.Errorf("load evaluation run lease epoch: %w", err)
+	}
+	if runStatus == service.RunStatusPaused || runStatus == service.RunStatusCancelled || runStatus == service.RunStatusCompleted || runStatus == service.RunStatusFailed {
+		if err := tx.Commit(); err != nil {
+			return nil, fmt.Errorf("commit terminal evaluation assignment claim: %w", err)
 		}
+		return nil, nil
+	}
+	if candidate.leaseEpoch != runEpoch {
+		if err := tx.Commit(); err != nil {
+			return nil, fmt.Errorf("commit stale evaluation assignment claim: %w", err)
+		}
+		return nil, nil
 	}
 	canonicalConfig, err := canonicalizeModelConfig(candidate.modelConfig)
 	if err != nil {
@@ -389,17 +280,33 @@ func (r *evaluationRepository) ClaimAssignment(ctx context.Context, workerID uui
 		ModelConfigSHA256: candidate.modelConfigSHA256,
 		Attempt:           candidate.attempt,
 		Token:             token,
+		LeaseEpoch:        runEpoch,
+		WorkerImageDigest: workerImageDigest.String,
+		WorkOrigin:        candidate.workOrigin,
 	}
 	if err := loadAssignmentExecutionContract(ctx, tx, candidate, lease); err != nil {
 		return nil, err
 	}
+	if runStatus == service.RunStatusPending {
+		transitionVersion := runStateVersion + 1
+		if _, err := tx.ExecContext(ctx, `
+			INSERT INTO evaluation_run_events
+				(id, run_id, event_type, payload, actor_type, transition_version, from_status, to_status, control_epoch, idempotency_key)
+			VALUES ($1, $2, 'run_started', jsonb_build_object('assignment_id', $3::uuid), 'system', $4, 'pending', 'running', $5, $6)
+			ON CONFLICT (idempotency_key) DO NOTHING`,
+			uuid.New(), candidate.runID, candidate.id, transitionVersion, runEpoch,
+			runTransitionIdempotencyKey(candidate.runID, transitionVersion, service.RunStatusPending, service.RunStatusRunning, runEpoch)); err != nil {
+			return nil, fmt.Errorf("record evaluation run started event: %w", err)
+		}
+	}
 	err = tx.QueryRowContext(ctx, `
 		UPDATE evaluation_assignments
 		SET status = 'leased', lease_token_hash = $2, leased_by = $3,
-			lease_expires_at = NOW() + $4::interval, heartbeat_at = NOW(), updated_at = NOW()
-		WHERE id = $1 AND status = 'pending' AND lease_epoch = $5
+			lease_expires_at = NOW() + $4::interval, heartbeat_at = NOW(), lease_epoch = $5,
+			worker_image_digest = NULLIF($6, ''), work_origin = NULLIF($7, ''), updated_at = NOW()
+		WHERE id = $1 AND status = 'pending' AND lease_epoch = $8
 		RETURNING lease_expires_at`,
-		lease.ID, tokenHash, workerID, postgresInterval(leaseTTL), candidate.leaseEpoch).Scan(&lease.ExpiresAt)
+		lease.ID, tokenHash, workerID, postgresInterval(leaseTTL), lease.LeaseEpoch, lease.WorkerImageDigest, lease.WorkOrigin, candidate.leaseEpoch).Scan(&lease.ExpiresAt)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, errors.New("evaluation assignment became unavailable while locked")
 	}
@@ -411,6 +318,14 @@ func (r *evaluationRepository) ClaimAssignment(ctx context.Context, workerID uui
 		SET status = 'leased', route_trace_id = $2, updated_at = NOW()
 		WHERE id = $1`, lease.SampleID, lease.RouteTraceID); err != nil {
 		return nil, fmt.Errorf("mark evaluation sample leased: %w", err)
+	}
+	if _, err := tx.ExecContext(ctx, `
+		UPDATE evaluation_runs
+		SET started_at = COALESCE(started_at, NOW()),
+			status = CASE WHEN status = 'pending' THEN 'running' ELSE status END,
+			updated_at = NOW()
+		WHERE id = $1`, candidate.runID); err != nil {
+		return nil, fmt.Errorf("mark evaluation run started: %w", err)
 	}
 	if _, err := tx.ExecContext(ctx, `
 		UPDATE evaluation_workers SET last_heartbeat_at = NOW(), updated_at = NOW()
@@ -470,7 +385,7 @@ func loadAssignmentExecutionContract(
 	return nil
 }
 
-func (r *evaluationRepository) RenewLease(ctx context.Context, assignmentID uuid.UUID, leaseToken string, extendBy time.Duration) (time.Time, error) {
+func (r *evaluationRepository) RenewLease(ctx context.Context, assignmentID uuid.UUID, leaseToken string, extendBy time.Duration, leaseEpoch ...int64) (time.Time, error) {
 	if r == nil || r.db == nil {
 		return time.Time{}, errors.New("nil evaluation repository")
 	}
@@ -478,20 +393,32 @@ func (r *evaluationRepository) RenewLease(ctx context.Context, assignmentID uuid
 		return time.Time{}, errors.New("evaluation lease extension must be positive")
 	}
 	var expiresAt time.Time
-	err := WithEvaluationWriterTx(ctx, r.db, defaultEvaluationWriterIdentity("runner"), func(tx *sql.Tx) error {
-		return tx.QueryRowContext(ctx, `
-		UPDATE evaluation_assignments
-		SET lease_expires_at = NOW() + $3::interval, heartbeat_at = NOW(), updated_at = NOW()
-		WHERE id = $1 AND lease_token_hash = $2 AND lease_expires_at > NOW()
-			AND status IN ('leased', 'running')
-			AND lease_epoch = (SELECT r.control_epoch FROM evaluation_assignments a JOIN evaluation_samples s ON s.id = a.sample_id JOIN evaluation_runs r ON r.id = s.run_id WHERE a.id = $1)
-		RETURNING lease_expires_at`, assignmentID, hashToken(leaseToken), postgresInterval(extendBy)).Scan(&expiresAt)
+	err := withEvaluationWriterTx(ctx, r.db, defaultEvaluationWriterIdentity("worker"), func(tx *sql.Tx) error {
+		query := `
+			UPDATE evaluation_assignments a
+			SET lease_expires_at = NOW() + $3::interval, heartbeat_at = NOW(), updated_at = NOW()
+			FROM evaluation_samples s
+			JOIN evaluation_runs r ON r.id = s.run_id
+			JOIN evaluation_workers w ON w.id = a.leased_by AND w.status = 'active'
+			WHERE a.id = $1 AND a.sample_id = s.id AND a.lease_token_hash = $2 AND a.lease_expires_at > NOW()
+				AND a.status IN ('leased', 'running') AND a.lease_epoch = r.control_epoch`
+		args := []any{assignmentID, hashToken(leaseToken), postgresInterval(extendBy)}
+		if len(leaseEpoch) > 0 && leaseEpoch[0] > 0 {
+			query += ` AND a.lease_epoch = $4`
+			args = append(args, leaseEpoch[0])
+		}
+		query += ` RETURNING lease_expires_at`
+		err := tx.QueryRowContext(ctx, query, args...).Scan(&expiresAt)
+		if errors.Is(err, sql.ErrNoRows) {
+			return service.ErrLeaseFenced
+		}
+		if err != nil {
+			return fmt.Errorf("renew evaluation assignment lease: %w", err)
+		}
+		return nil
 	})
-	if errors.Is(err, sql.ErrNoRows) {
-		return time.Time{}, service.ErrLeaseFenced
-	}
 	if err != nil {
-		return time.Time{}, fmt.Errorf("renew evaluation assignment lease: %w", err)
+		return time.Time{}, err
 	}
 	return expiresAt, nil
 }
@@ -503,30 +430,65 @@ func (r *evaluationRepository) TransitionAssignment(ctx context.Context, input s
 	if input.AssignmentID == uuid.Nil || input.LeaseToken == "" || !input.To.Valid() {
 		return errors.New("invalid evaluation assignment transition")
 	}
-	tx, err := beginEvaluationWriterTx(ctx, r.db, defaultEvaluationWriterIdentity("runner"))
+	tx, err := beginRadarWriterTx(ctx, r.db, "worker")
 	if err != nil {
 		return fmt.Errorf("begin evaluation assignment transition: %w", err)
 	}
 	defer func() { _ = tx.Rollback() }()
+	var expectedEpoch any
+	if input.LeaseEpoch > 0 {
+		expectedEpoch = input.LeaseEpoch
+	}
 
 	var sampleID uuid.UUID
+	var runID uuid.UUID
+	var releasedWorkerID uuid.UUID
+	if !assignmentLeaseActive(input.To) {
+		var leasedBy sql.NullString
+		if err := tx.QueryRowContext(ctx, `
+			SELECT a.leased_by
+			FROM evaluation_assignments a
+			JOIN evaluation_samples s ON s.id = a.sample_id
+			JOIN evaluation_runs r ON r.id = s.run_id
+			JOIN evaluation_workers w ON w.id = a.leased_by AND w.status = 'active'
+			WHERE a.id = $1 AND a.lease_token_hash = $2 AND a.lease_expires_at > NOW()
+			  AND a.status IN ('leased', 'running') AND a.lease_epoch = r.control_epoch
+			  AND ($3::bigint IS NULL OR a.lease_epoch = $3) FOR UPDATE`, input.AssignmentID, hashToken(input.LeaseToken), expectedEpoch).Scan(&leasedBy); err != nil {
+			if errors.Is(err, sql.ErrNoRows) {
+				return service.ErrLeaseFenced
+			}
+			return fmt.Errorf("load evaluation assignment worker: %w", err)
+		}
+		if leasedBy.Valid {
+			releasedWorkerID, err = uuid.Parse(leasedBy.String)
+			if err != nil {
+				return fmt.Errorf("parse evaluation assignment worker: %w", err)
+			}
+		}
+	}
 	if assignmentLeaseActive(input.To) {
 		err = tx.QueryRowContext(ctx, `
-			UPDATE evaluation_assignments
+			UPDATE evaluation_assignments a
 			SET status = $3, heartbeat_at = NOW(), started_at = COALESCE(started_at, NOW()), updated_at = NOW()
-			WHERE id = $1 AND lease_token_hash = $2 AND lease_expires_at > NOW()
-				AND status IN ('leased', 'running')
-				AND lease_epoch = (SELECT r.control_epoch FROM evaluation_assignments a JOIN evaluation_samples s ON s.id = a.sample_id JOIN evaluation_runs r ON r.id = s.run_id WHERE a.id = $1)
-			RETURNING sample_id`, input.AssignmentID, hashToken(input.LeaseToken), input.To).Scan(&sampleID)
+			FROM evaluation_samples s
+			JOIN evaluation_runs r ON r.id = s.run_id
+			JOIN evaluation_workers w ON w.id = a.leased_by AND w.status = 'active'
+			WHERE a.id = $1 AND a.sample_id = s.id AND a.lease_token_hash = $2 AND a.lease_expires_at > NOW()
+				AND a.status IN ('leased', 'running') AND a.lease_epoch = r.control_epoch
+				AND ($4::bigint IS NULL OR a.lease_epoch = $4)
+			RETURNING a.sample_id`, input.AssignmentID, hashToken(input.LeaseToken), input.To, expectedEpoch).Scan(&sampleID)
 	} else {
 		err = tx.QueryRowContext(ctx, `
-			UPDATE evaluation_assignments
+			UPDATE evaluation_assignments a
 			SET status = $3, lease_token_hash = NULL, leased_by = NULL, lease_expires_at = NULL,
 				heartbeat_at = NOW(), finished_at = NOW(), updated_at = NOW()
-			WHERE id = $1 AND lease_token_hash = $2 AND lease_expires_at > NOW()
-				AND status IN ('leased', 'running')
-				AND lease_epoch = (SELECT r.control_epoch FROM evaluation_assignments a JOIN evaluation_samples s ON s.id = a.sample_id JOIN evaluation_runs r ON r.id = s.run_id WHERE a.id = $1)
-			RETURNING sample_id`, input.AssignmentID, hashToken(input.LeaseToken), input.To).Scan(&sampleID)
+			FROM evaluation_samples s
+			JOIN evaluation_runs r ON r.id = s.run_id
+			JOIN evaluation_workers w ON w.id = a.leased_by AND w.status = 'active'
+			WHERE a.id = $1 AND a.sample_id = s.id AND a.lease_token_hash = $2 AND a.lease_expires_at > NOW()
+				AND a.status IN ('leased', 'running') AND a.lease_epoch = r.control_epoch
+				AND ($4::bigint IS NULL OR a.lease_epoch = $4)
+			RETURNING a.sample_id`, input.AssignmentID, hashToken(input.LeaseToken), input.To, expectedEpoch).Scan(&sampleID)
 	}
 	if errors.Is(err, sql.ErrNoRows) {
 		return service.ErrLeaseFenced
@@ -538,8 +500,19 @@ func (r *evaluationRepository) TransitionAssignment(ctx context.Context, input s
 		UPDATE evaluation_samples SET status = $2, updated_at = NOW() WHERE id = $1`, sampleID, input.To); err != nil {
 		return fmt.Errorf("transition evaluation sample: %w", err)
 	}
+	if err := tx.QueryRowContext(ctx, `SELECT run_id FROM evaluation_samples WHERE id = $1`, sampleID).Scan(&runID); err != nil {
+		return fmt.Errorf("load evaluation run for reconcile: %w", err)
+	}
+	if releasedWorkerID != uuid.Nil {
+		if _, err := checkRadarWorkerDrainCompletionTx(ctx, tx, releasedWorkerID, 0, "assignment:"+input.AssignmentID.String()); err != nil {
+			return err
+		}
+	}
 	if err := tx.Commit(); err != nil {
 		return fmt.Errorf("commit evaluation assignment transition: %w", err)
+	}
+	if _, err := r.ReconcileEvaluationRun(ctx, runID); err != nil {
+		return fmt.Errorf("reconcile evaluation run after assignment transition: %w", err)
 	}
 	return nil
 }
@@ -550,14 +523,16 @@ type evaluationCaseForRun struct {
 	priority         string
 	sampleCount      int
 	estimatedCost    decimal.Decimal
+	promptSpec       []byte
+	executionSpec    []byte
 	graderID         string
 	graderVersion    string
 }
 
 func loadEvaluationCases(ctx context.Context, tx *sql.Tx, planID uuid.UUID) ([]evaluationCaseForRun, error) {
 	rows, err := tx.QueryContext(ctx, `
-		SELECT c.id, c.dataset_version_id, c.priority, c.sample_count, c.estimated_cost,
-		       c.grader_id, c.grader_version
+		SELECT c.id, p.dataset_version_id, c.priority, c.sample_count, c.estimated_cost,
+			c.prompt_spec, c.execution_spec, c.grader_id, c.grader_version
 		FROM evaluation_cases c
 		JOIN evaluation_plans p ON p.dataset_version_id = c.dataset_version_id
 		WHERE p.id = $1
@@ -569,9 +544,8 @@ func loadEvaluationCases(ctx context.Context, tx *sql.Tx, planID uuid.UUID) ([]e
 	var cases []evaluationCaseForRun
 	for rows.Next() {
 		var evaluationCase evaluationCaseForRun
-		if err := rows.Scan(&evaluationCase.id, &evaluationCase.datasetVersionID, &evaluationCase.priority,
-			&evaluationCase.sampleCount, &evaluationCase.estimatedCost, &evaluationCase.graderID,
-			&evaluationCase.graderVersion); err != nil {
+		if err := rows.Scan(&evaluationCase.id, &evaluationCase.datasetVersionID, &evaluationCase.priority, &evaluationCase.sampleCount, &evaluationCase.estimatedCost,
+			&evaluationCase.promptSpec, &evaluationCase.executionSpec, &evaluationCase.graderID, &evaluationCase.graderVersion); err != nil {
 			return nil, fmt.Errorf("scan evaluation case: %w", err)
 		}
 		cases = append(cases, evaluationCase)
@@ -585,14 +559,14 @@ func loadEvaluationCases(ctx context.Context, tx *sql.Tx, planID uuid.UUID) ([]e
 func insertEvaluationSampleAndAssignment(
 	ctx context.Context,
 	tx *sql.Tx,
+	sampleID uuid.UUID,
 	runID uuid.UUID,
 	evaluationCase evaluationCaseForRun,
 	modelRoute string,
 	modelConfig []byte,
 	modelConfigSHA256 string,
 	sampleIndex int,
-) (uuid.UUID, error) {
-	sampleID := uuid.New()
+) error {
 	if _, err := tx.ExecContext(ctx, `
 		INSERT INTO evaluation_samples (
 			id, run_id, case_id, model_route, model_config, model_config_sha256,
@@ -600,22 +574,22 @@ func insertEvaluationSampleAndAssignment(
 		) VALUES ($1, $2, $3, $4, $5::jsonb, $6, $7, $8, 'pending', $9)`,
 		sampleID, runID, evaluationCase.id, modelRoute, modelConfig,
 		modelConfigSHA256, sampleIndex, evaluationCase.priority, evaluationCase.estimatedCost); err != nil {
-		return uuid.Nil, fmt.Errorf("insert evaluation sample: %w", err)
+		return fmt.Errorf("insert evaluation sample: %w", err)
 	}
 	assignmentID := uuid.New()
 	idempotencyKey := assignmentIdempotencyKey(runID, evaluationCase.id, modelRoute, sampleIndex, 1)
 	if _, err := tx.ExecContext(ctx, `
 		INSERT INTO evaluation_assignments (id, sample_id, attempt, idempotency_key, status)
 		VALUES ($1, $2, 1, $3, 'pending')`, assignmentID, sampleID, idempotencyKey); err != nil {
-		return uuid.Nil, fmt.Errorf("insert evaluation assignment: %w", err)
+		return fmt.Errorf("insert evaluation assignment: %w", err)
 	}
 	if _, err := tx.ExecContext(ctx, `
 		INSERT INTO evaluation_budget_ledger (id, run_id, sample_id, assignment_id, entry_type, amount, idempotency_key)
 		VALUES ($1, $2, $3, $4, 'reservation', $5, $6)`,
 		uuid.New(), runID, sampleID, assignmentID, evaluationCase.estimatedCost, hashString("reservation\x00"+assignmentID.String())); err != nil {
-		return uuid.Nil, fmt.Errorf("insert evaluation budget reservation: %w", err)
+		return fmt.Errorf("insert evaluation budget reservation: %w", err)
 	}
-	return sampleID, nil
+	return nil
 }
 
 type assignmentCandidate struct {
@@ -630,13 +604,15 @@ type assignmentCandidate struct {
 	sampleIndex       int
 	attempt           int
 	leaseEpoch        int64
+	workOrigin        string
 }
 
 func reclaimExpiredAssignment(ctx context.Context, tx *sql.Tx, capabilities []string) (*assignmentCandidate, error) {
 	var expired assignmentCandidate
 	err := tx.QueryRowContext(ctx, `
 		SELECT a.id, a.sample_id, s.run_id, s.case_id, s.model_route,
-			s.model_config, s.model_config_sha256, s.priority, s.sample_index, a.attempt, r.control_epoch
+			s.model_config, s.model_config_sha256, s.priority, s.sample_index, a.attempt,
+			r.control_epoch, a.work_origin
 		FROM evaluation_assignments a
 		JOIN evaluation_samples s ON s.id = a.sample_id
 		JOIN evaluation_cases c ON c.id = s.case_id
@@ -669,13 +645,15 @@ func reclaimExpiredAssignment(ctx context.Context, tx *sql.Tx, capabilities []st
 		LIMIT 1`, pq.Array(capabilities)).Scan(
 		&expired.id, &expired.sampleID, &expired.runID, &expired.caseID,
 		&expired.modelRoute, &expired.modelConfig, &expired.modelConfigSHA256,
-		&expired.priority, &expired.sampleIndex, &expired.attempt, &expired.leaseEpoch)
+		&expired.priority, &expired.sampleIndex, &expired.attempt, &expired.leaseEpoch, &expired.workOrigin)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, nil
 	}
 	if err != nil {
 		return nil, fmt.Errorf("lock expired evaluation assignment: %w", err)
 	}
+	replacementOrigin := expired.workOrigin
+	expired.workOrigin = "reclaimed"
 	eligible, err := lockRunLeaseEligibility(ctx, tx, expired.runID, expired.priority)
 	if err != nil {
 		return nil, err
@@ -696,11 +674,14 @@ func reclaimExpiredAssignment(ctx context.Context, tx *sql.Tx, capabilities []st
 	replacement.id = uuid.New()
 	replacement.attempt = nextAttempt
 	if _, err := tx.ExecContext(ctx, `
-		INSERT INTO evaluation_assignments (id, sample_id, attempt, idempotency_key, status, lease_epoch)
-		VALUES ($1, $2, $3, $4, 'pending', $5)`,
+		INSERT INTO evaluation_assignments (id, sample_id, attempt, idempotency_key, status, lease_epoch, work_origin)
+		VALUES ($1, $2, $3, $4, 'pending', $5, $6)`,
 		replacement.id, expired.sampleID, nextAttempt,
-		assignmentIdempotencyKey(expired.runID, expired.caseID, expired.modelRoute, expired.sampleIndex, nextAttempt), expired.leaseEpoch); err != nil {
+		assignmentIdempotencyKey(expired.runID, expired.caseID, expired.modelRoute, expired.sampleIndex, nextAttempt), expired.leaseEpoch, replacementOrigin); err != nil {
 		return nil, fmt.Errorf("create replacement evaluation assignment: %w", err)
+	}
+	if err := propagateAssignmentReplacement(ctx, tx, expired.runID, expired.sampleID, expired.id, replacement.id, expired.attempt); err != nil {
+		return nil, err
 	}
 	return &replacement, nil
 }
@@ -709,7 +690,8 @@ func selectPendingAssignment(ctx context.Context, tx *sql.Tx, capabilities []str
 	var candidate assignmentCandidate
 	err := tx.QueryRowContext(ctx, `
 		SELECT a.id, a.sample_id, s.run_id, s.case_id, s.model_route,
-			s.model_config, s.model_config_sha256, s.priority, s.sample_index, a.attempt, r.control_epoch
+			s.model_config, s.model_config_sha256, s.priority, s.sample_index, a.attempt,
+			r.control_epoch, a.work_origin
 		FROM evaluation_assignments a
 		JOIN evaluation_samples s ON s.id = a.sample_id
 		JOIN evaluation_cases c ON c.id = s.case_id
@@ -718,8 +700,7 @@ func selectPendingAssignment(ctx context.Context, tx *sql.Tx, capabilities []str
 		JOIN api_keys k ON k.id = p.gateway_api_key_id
 		JOIN users u ON u.id = k.user_id
 		LEFT JOIN groups g ON g.id = k.group_id
-		WHERE a.status = 'pending'
-			AND a.lease_epoch = r.control_epoch
+		WHERE a.status = 'pending' AND a.lease_epoch = r.control_epoch
 			AND c.capability_domain = ANY($1::text[])
 			AND p.enabled = TRUE
 			AND k.is_evaluation = TRUE AND k.status = 'active' AND k.deleted_at IS NULL
@@ -742,9 +723,12 @@ func selectPendingAssignment(ctx context.Context, tx *sql.Tx, capabilities []str
 		LIMIT 1`, pq.Array(capabilities)).Scan(
 		&candidate.id, &candidate.sampleID, &candidate.runID, &candidate.caseID,
 		&candidate.modelRoute, &candidate.modelConfig, &candidate.modelConfigSHA256,
-		&candidate.priority, &candidate.sampleIndex, &candidate.attempt, &candidate.leaseEpoch)
+		&candidate.priority, &candidate.sampleIndex, &candidate.attempt, &candidate.leaseEpoch, &candidate.workOrigin)
 	if err != nil {
 		return assignmentCandidate{}, err
+	}
+	if candidate.workOrigin == "" {
+		candidate.workOrigin = "initial"
 	}
 	return candidate, nil
 }

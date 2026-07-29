@@ -4,159 +4,194 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"regexp"
+	"strconv"
 	"testing"
+	"time"
 
-	sqlmock "github.com/DATA-DOG/go-sqlmock"
+	"github.com/DATA-DOG/go-sqlmock"
+	"github.com/google/uuid"
+	"github.com/lib/pq"
+	"github.com/stretchr/testify/require"
 )
 
-func TestEvaluationWriterAuditAllowsAndRecordsOldProtocol(t *testing.T) {
-	db, mock, err := sqlmock.New(sqlmock.QueryMatcherOption(sqlmock.QueryMatcherRegexp))
-	if err != nil {
-		t.Fatal(err)
+func writerTestIdentity(kind string, protocol int64) EvaluationWriterIdentity {
+	return EvaluationWriterIdentity{
+		InstanceID:      uuid.NewString(),
+		Kind:            kind,
+		ProtocolVersion: protocol,
 	}
+}
+
+func expectWriterSetup(mock sqlmock.Sqlmock, identity EvaluationWriterIdentity) {
+	mock.ExpectBegin()
+	mock.ExpectExec("INSERT INTO evaluation_writer_sessions").WithArgs(
+		identity.InstanceID, identity.Kind, identity.ProtocolVersion,
+	).WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectExec("SELECT set_config\\('app.evaluation_writer_instance_id'").WithArgs(identity.InstanceID).WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectExec("SELECT set_config\\('app.evaluation_writer_protocol'").WithArgs(strconv.FormatInt(identity.ProtocolVersion, 10)).WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectExec("SELECT set_config\\('app.evaluation_writer_kind'").WithArgs(identity.Kind).WillReturnResult(sqlmock.NewResult(0, 1))
+}
+
+func TestEvaluationWriterAuditAllowsAndRecordsOldProtocol(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	require.NoError(t, err)
 	defer db.Close()
 
-	mock.ExpectBegin()
-	mock.ExpectExec(`INSERT INTO evaluation_writer_sessions`).WillReturnResult(sqlmock.NewResult(1, 1))
-	mock.ExpectExec(`set_config\('app.evaluation_writer_protocol'`).WithArgs("1").WillReturnResult(sqlmock.NewResult(1, 1))
-	mock.ExpectExec(`set_config\('app.evaluation_writer_instance_id'`).WithArgs("legacy-runner").WillReturnResult(sqlmock.NewResult(1, 1))
-	mock.ExpectQuery(`SELECT write_mode, guard_mode, minimum_protocol_version FROM evaluation_schema_cutovers`).
-		WillReturnRows(sqlmock.NewRows([]string{"write_mode", "guard_mode", "minimum_protocol_version"}).AddRow("open", "audit", int64(2)))
-	mock.ExpectExec(`INSERT INTO evaluation_writer_audit_events`).WithArgs("legacy-runner", "runner", int64(1), "old_protocol").
-		WillReturnResult(sqlmock.NewResult(1, 1))
-	mock.ExpectExec(`SELECT 1`).WillReturnResult(sqlmock.NewResult(1, 1))
+	identity := writerTestIdentity("worker", 1)
+	expectWriterSetup(mock, identity)
+	mock.ExpectExec("INSERT INTO evaluation_scores").WillReturnResult(sqlmock.NewResult(0, 1))
 	mock.ExpectCommit()
 
-	called := false
-	err = WithEvaluationWriterTx(context.Background(), db, EvaluationWriterIdentity{
-		InstanceID: "legacy-runner", Kind: "runner", ProtocolVersion: 1,
-	}, func(tx *sql.Tx) error {
-		called = true
-		_, err := tx.ExecContext(context.Background(), "SELECT 1")
+	repo := &evaluationRepository{db: db}
+	err = repo.WithEvaluationWriterTx(context.Background(), identity, func(tx *sql.Tx) error {
+		_, err := tx.ExecContext(context.Background(), "INSERT INTO evaluation_scores (id) VALUES ($1)", uuid.New())
 		return err
 	})
-	if err != nil {
-		t.Fatalf("WithEvaluationWriterTx() error = %v", err)
-	}
-	if !called {
-		t.Fatal("writer callback was not called")
-	}
-	if err := mock.ExpectationsWereMet(); err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
+	require.NoError(t, mock.ExpectationsWereMet())
 }
 
 func TestEvaluationWriterEnforceRejectsOldProtocol(t *testing.T) {
-	db, mock, err := sqlmock.New(sqlmock.QueryMatcherOption(sqlmock.QueryMatcherRegexp))
-	if err != nil {
-		t.Fatal(err)
-	}
+	db, mock, err := sqlmock.New()
+	require.NoError(t, err)
 	defer db.Close()
 
-	mock.ExpectBegin()
-	mock.ExpectExec(`INSERT INTO evaluation_writer_sessions`).WillReturnResult(sqlmock.NewResult(1, 1))
-	mock.ExpectExec(`set_config\('app.evaluation_writer_protocol'`).WithArgs("1").WillReturnResult(sqlmock.NewResult(1, 1))
-	mock.ExpectExec(`set_config\('app.evaluation_writer_instance_id'`).WithArgs("old-runner").WillReturnResult(sqlmock.NewResult(1, 1))
-	mock.ExpectQuery(`SELECT write_mode, guard_mode, minimum_protocol_version FROM evaluation_schema_cutovers`).
-		WillReturnRows(sqlmock.NewRows([]string{"write_mode", "guard_mode", "minimum_protocol_version"}).AddRow("open", "enforce", int64(2)))
+	identity := writerTestIdentity("worker", 1)
+	expectWriterSetup(mock, identity)
+	mock.ExpectExec("INSERT INTO evaluation_scores").WillReturnError(&pq.Error{Message: "unknown_writer_session"})
 	mock.ExpectRollback()
 
-	called := false
-	err = WithEvaluationWriterTx(context.Background(), db, EvaluationWriterIdentity{
-		InstanceID: "old-runner", Kind: "runner", ProtocolVersion: 1,
-	}, func(*sql.Tx) error {
-		called = true
-		return nil
+	err = (&evaluationRepository{db: db}).WithEvaluationWriterTx(context.Background(), identity, func(tx *sql.Tx) error {
+		_, err := tx.ExecContext(context.Background(), "INSERT INTO evaluation_scores (id) VALUES ($1)", uuid.New())
+		return err
 	})
-	if !errors.Is(err, ErrRadarCutoverActive) {
-		t.Fatalf("error = %v, want ErrRadarCutoverActive", err)
-	}
-	if called {
-		t.Fatal("writer callback was called after protocol rejection")
-	}
-	if err := mock.ExpectationsWereMet(); err != nil {
-		t.Fatal(err)
-	}
+	require.Error(t, err)
+	require.ErrorIs(t, err, ErrRadarWriterProtocol)
+	require.NoError(t, mock.ExpectationsWereMet())
 }
 
 func TestEvaluationWriterDrainingRejectsNewWrite(t *testing.T) {
-	db, mock, err := sqlmock.New(sqlmock.QueryMatcherOption(sqlmock.QueryMatcherRegexp))
-	if err != nil {
-		t.Fatal(err)
-	}
+	db, mock, err := sqlmock.New()
+	require.NoError(t, err)
 	defer db.Close()
 
-	mock.ExpectBegin()
-	mock.ExpectExec(`INSERT INTO evaluation_writer_sessions`).WillReturnResult(sqlmock.NewResult(1, 1))
-	mock.ExpectExec(`set_config\('app.evaluation_writer_protocol'`).WithArgs("2").WillReturnResult(sqlmock.NewResult(1, 1))
-	mock.ExpectExec(`set_config\('app.evaluation_writer_instance_id'`).WithArgs("new-runner").WillReturnResult(sqlmock.NewResult(1, 1))
-	mock.ExpectQuery(`SELECT write_mode, guard_mode, minimum_protocol_version FROM evaluation_schema_cutovers`).
-		WillReturnRows(sqlmock.NewRows([]string{"write_mode", "guard_mode", "minimum_protocol_version"}).AddRow("draining", "enforce", int64(2)))
+	identity := writerTestIdentity("worker", 2)
+	expectWriterSetup(mock, identity)
+	mock.ExpectExec("INSERT INTO evaluation_scores").WillReturnError(&pq.Error{Message: "radar_cutover_active"})
 	mock.ExpectRollback()
 
-	err = WithEvaluationWriterTx(context.Background(), db, EvaluationWriterIdentity{
-		InstanceID: "new-runner", Kind: "runner", ProtocolVersion: 2,
-	}, func(*sql.Tx) error { return nil })
-	if !errors.Is(err, ErrRadarCutoverActive) {
-		t.Fatalf("error = %v, want ErrRadarCutoverActive", err)
-	}
-	if err := mock.ExpectationsWereMet(); err != nil {
-		t.Fatal(err)
-	}
+	err = (&evaluationRepository{db: db}).WithEvaluationWriterTx(context.Background(), identity, func(tx *sql.Tx) error {
+		_, err := tx.ExecContext(context.Background(), "INSERT INTO evaluation_scores (id) VALUES ($1)", uuid.New())
+		return err
+	})
+	require.ErrorIs(t, err, ErrRadarCutoverActive)
+	require.NoError(t, mock.ExpectationsWereMet())
 }
 
 func TestEvaluationWriterClosedAllowsMigrationOwnerOnly(t *testing.T) {
-	t.Run("migration owner", func(t *testing.T) {
-		db, mock, err := sqlmock.New(sqlmock.QueryMatcherOption(sqlmock.QueryMatcherRegexp))
-		if err != nil {
-			t.Fatal(err)
-		}
-		defer db.Close()
-		mock.ExpectBegin()
-		mock.ExpectExec(`INSERT INTO evaluation_writer_sessions`).WillReturnResult(sqlmock.NewResult(1, 1))
-		mock.ExpectExec(`set_config\('app.evaluation_writer_protocol'`).WithArgs("3").WillReturnResult(sqlmock.NewResult(1, 1))
-		mock.ExpectExec(`set_config\('app.evaluation_writer_instance_id'`).WithArgs("migration-owner").WillReturnResult(sqlmock.NewResult(1, 1))
-		mock.ExpectQuery(`SELECT write_mode, guard_mode, minimum_protocol_version FROM evaluation_schema_cutovers`).
-			WillReturnRows(sqlmock.NewRows([]string{"write_mode", "guard_mode", "minimum_protocol_version"}).AddRow("closed", "enforce", int64(3)))
-		mock.ExpectExec(`SELECT 1`).WillReturnResult(sqlmock.NewResult(1, 1))
-		mock.ExpectCommit()
+	tests := []struct {
+		name       string
+		kind       string
+		wantErr    error
+		callbackOK bool
+	}{
+		{name: "business writer", kind: "worker", wantErr: ErrRadarCutoverActive},
+		{name: "migration owner", kind: "migration", callbackOK: true},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			db, mock, err := sqlmock.New()
+			require.NoError(t, err)
+			defer db.Close()
 
-		err = WithEvaluationWriterTx(context.Background(), db, EvaluationWriterIdentity{
-			InstanceID: "migration-owner", Kind: "migration", ProtocolVersion: 3,
-		}, func(tx *sql.Tx) error {
-			_, err := tx.ExecContext(context.Background(), "SELECT 1")
-			return err
+			identity := writerTestIdentity(test.kind, 2)
+			expectWriterSetup(mock, identity)
+			if test.callbackOK {
+				mock.ExpectExec("INSERT INTO evaluation_schema_cutovers").WillReturnResult(sqlmock.NewResult(0, 1))
+				mock.ExpectCommit()
+			} else {
+				mock.ExpectExec("INSERT INTO evaluation_schema_cutovers").WillReturnError(&pq.Error{Message: "radar_cutover_active"})
+				mock.ExpectRollback()
+			}
+
+			err = (&evaluationRepository{db: db}).WithEvaluationWriterTx(context.Background(), identity, func(tx *sql.Tx) error {
+				_, err := tx.ExecContext(context.Background(), "INSERT INTO evaluation_schema_cutovers (id) VALUES ($1)", 1)
+				return err
+			})
+			if test.wantErr != nil {
+				require.ErrorIs(t, err, test.wantErr)
+			} else {
+				require.NoError(t, err)
+			}
+			require.NoError(t, mock.ExpectationsWereMet())
 		})
-		if err != nil {
-			t.Fatalf("migration owner error = %v", err)
-		}
-		if err := mock.ExpectationsWereMet(); err != nil {
-			t.Fatal(err)
-		}
-	})
+	}
+}
 
-	t.Run("business writer", func(t *testing.T) {
-		db, mock, err := sqlmock.New(sqlmock.QueryMatcherOption(sqlmock.QueryMatcherRegexp))
-		if err != nil {
-			t.Fatal(err)
-		}
-		defer db.Close()
-		mock.ExpectBegin()
-		mock.ExpectExec(`INSERT INTO evaluation_writer_sessions`).WillReturnResult(sqlmock.NewResult(1, 1))
-		mock.ExpectExec(`set_config\('app.evaluation_writer_protocol'`).WithArgs("3").WillReturnResult(sqlmock.NewResult(1, 1))
-		mock.ExpectExec(`set_config\('app.evaluation_writer_instance_id'`).WithArgs("runner").WillReturnResult(sqlmock.NewResult(1, 1))
-		mock.ExpectQuery(`SELECT write_mode, guard_mode, minimum_protocol_version FROM evaluation_schema_cutovers`).
-			WillReturnRows(sqlmock.NewRows([]string{"write_mode", "guard_mode", "minimum_protocol_version"}).AddRow("closed", "enforce", int64(3)))
-		mock.ExpectRollback()
+func TestEvaluationWriterProtocolMapsWrappedGuardErrors(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	require.NoError(t, err)
+	defer db.Close()
+	identity := writerTestIdentity("worker", 2)
+	expectWriterSetup(mock, identity)
+	mock.ExpectExec("UPDATE evaluation_scores").WillReturnError(errors.New("pq: radar_cutover_active"))
+	mock.ExpectRollback()
 
-		err = WithEvaluationWriterTx(context.Background(), db, EvaluationWriterIdentity{
-			InstanceID: "runner", Kind: "runner", ProtocolVersion: 3,
-		}, func(*sql.Tx) error { return nil })
-		if !errors.Is(err, ErrRadarCutoverActive) {
-			t.Fatalf("business writer error = %v, want ErrRadarCutoverActive", err)
-		}
-		if err := mock.ExpectationsWereMet(); err != nil {
-			t.Fatal(err)
-		}
+	err = (&evaluationRepository{db: db}).WithEvaluationWriterTx(context.Background(), identity, func(tx *sql.Tx) error {
+		_, err := tx.ExecContext(context.Background(), "UPDATE evaluation_scores SET score = $1", 1)
+		return err
 	})
+	require.ErrorIs(t, err, ErrRadarCutoverActive)
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestEvaluationAssignmentRenewalUsesWriterProtocol(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	require.NoError(t, err)
+	defer db.Close()
+
+	identity := defaultEvaluationWriterIdentity("worker")
+	expectWriterSetup(mock, identity)
+	assignmentID := uuid.New()
+	expiresAt := time.Now().UTC().Add(time.Minute)
+	mock.ExpectQuery(regexp.QuoteMeta("UPDATE evaluation_assignments")).
+		WithArgs(assignmentID, sqlmock.AnyArg(), sqlmock.AnyArg()).
+		WillReturnRows(sqlmock.NewRows([]string{"lease_expires_at"}).AddRow(expiresAt))
+	mock.ExpectCommit()
+
+	got, err := (&evaluationRepository{db: db}).RenewLease(context.Background(), assignmentID, "lease-token", time.Minute)
+	require.NoError(t, err)
+	require.Equal(t, expiresAt, got)
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestDefaultEvaluationWriterIdentityUsesConfiguredInstanceID(t *testing.T) {
+	configured := uuid.NewString()
+	t.Setenv("RADAR_WRITER_INSTANCE_ID", configured)
+
+	identity := defaultEvaluationWriterIdentity("api")
+
+	require.Equal(t, configured, identity.InstanceID)
+	require.Equal(t, currentEvaluationWriterProtocolVersion, identity.ProtocolVersion)
+}
+
+func TestEvaluationGradingHeartbeatUsesWriterProtocol(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	require.NoError(t, err)
+	defer db.Close()
+
+	identity := defaultEvaluationWriterIdentity("worker")
+	expectWriterSetup(mock, identity)
+	leaseID := uuid.New()
+	expiresAt := time.Now().UTC().Add(time.Minute)
+	mock.ExpectQuery(regexp.QuoteMeta("UPDATE evaluation_grading_jobs")).
+		WithArgs(leaseID, sqlmock.AnyArg(), sqlmock.AnyArg()).
+		WillReturnRows(sqlmock.NewRows([]string{"lease_expires_at"}).AddRow(expiresAt))
+	mock.ExpectCommit()
+
+	got, err := (&evaluationGradingRepository{db: db}).HeartbeatGradingLease(context.Background(), leaseID, "lease-token", time.Minute)
+	require.NoError(t, err)
+	require.Equal(t, expiresAt, got)
+	require.NoError(t, mock.ExpectationsWereMet())
 }

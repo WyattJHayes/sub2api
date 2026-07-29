@@ -13,6 +13,7 @@ import (
 	"github.com/Wei-Shaw/sub2api/internal/service"
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
+	"github.com/shopspring/decimal"
 )
 
 const (
@@ -143,6 +144,7 @@ func (h *RadarGraderHandler) ClaimAssignment(c *gin.Context) {
 			_ = h.runner.FailAssignment(
 				c.Request.Context(), lease.ID, lease.Token,
 				string(service.FailureClassInfrastructure), "evaluation_context_signing_failed",
+				lease.LeaseEpoch,
 			)
 		}
 		gatewayModelAlias, aliasErr := radarGatewayModelAlias(lease)
@@ -229,6 +231,7 @@ func (h *RadarGraderHandler) HeartbeatAssignment(c *gin.Context) {
 	var req struct {
 		LeaseToken   string `json:"lease_token"`
 		LeaseSeconds int    `json:"lease_seconds"`
+		LeaseEpoch   int64  `json:"lease_epoch"`
 	}
 	if c.Request.ContentLength != 0 {
 		if err := c.ShouldBindJSON(&req); err != nil {
@@ -244,7 +247,7 @@ func (h *RadarGraderHandler) HeartbeatAssignment(c *gin.Context) {
 		response.BadRequest(c, "lease token is required")
 		return
 	}
-	expires, err := runner.RenewAssignmentLease(c.Request.Context(), id, leaseToken, radarLeaseTTL(req.LeaseSeconds))
+	expires, err := runner.RenewAssignmentLease(c.Request.Context(), id, leaseToken, radarLeaseTTL(req.LeaseSeconds), req.LeaseEpoch)
 	if err != nil {
 		h.writeWorkerError(c, err)
 		return
@@ -265,6 +268,7 @@ func (h *RadarGraderHandler) SubmitEvidence(c *gin.Context) {
 		LeaseToken string          `json:"lease_token"`
 		SampleID   uuid.UUID       `json:"sample_id"`
 		Evidence   json.RawMessage `json:"evidence"`
+		LeaseEpoch int64           `json:"lease_epoch"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
 		response.BadRequest(c, "invalid evidence submission")
@@ -278,7 +282,7 @@ func (h *RadarGraderHandler) SubmitEvidence(c *gin.Context) {
 		response.BadRequest(c, "lease token is required")
 		return
 	}
-	receipt, err := runner.SubmitEvidence(c.Request.Context(), service.EvidenceSubmission{AssignmentID: id, SampleID: req.SampleID, Evidence: req.Evidence}, leaseToken)
+	receipt, err := runner.SubmitEvidence(c.Request.Context(), service.EvidenceSubmission{AssignmentID: id, SampleID: req.SampleID, Evidence: req.Evidence, LeaseEpoch: req.LeaseEpoch}, leaseToken)
 	if err != nil {
 		h.writeWorkerError(c, err)
 		return
@@ -305,6 +309,7 @@ func (h *RadarGraderHandler) PresignArtifact(c *gin.Context) {
 		MIMEType   string `json:"mime_type"`
 		Bytes      int64  `json:"bytes"`
 		SHA256     string `json:"sha256"`
+		LeaseEpoch int64  `json:"lease_epoch"`
 	}
 	if err := c.ShouldBindJSON(&request); err != nil {
 		response.BadRequest(c, "invalid artifact presign request")
@@ -318,7 +323,7 @@ func (h *RadarGraderHandler) PresignArtifact(c *gin.Context) {
 		response.BadRequest(c, "lease token is required")
 		return
 	}
-	upload, err := artifactRepo.PresignArtifact(c.Request.Context(), id, leaseToken, service.ArtifactPresignRequest{MIMEType: request.MIMEType, Bytes: request.Bytes, SHA256: request.SHA256})
+	upload, err := artifactRepo.PresignArtifact(c.Request.Context(), id, leaseToken, service.ArtifactPresignRequest{MIMEType: request.MIMEType, Bytes: request.Bytes, SHA256: request.SHA256, LeaseEpoch: request.LeaseEpoch})
 	if err != nil {
 		h.writeWorkerError(c, err)
 		return
@@ -346,6 +351,7 @@ func (h *RadarGraderHandler) ConfirmArtifact(c *gin.Context) {
 		ObjectKey  string    `json:"object_key"`
 		SHA256     string    `json:"sha256"`
 		Bytes      int64     `json:"bytes"`
+		LeaseEpoch int64     `json:"lease_epoch"`
 	}
 	if err := c.ShouldBindJSON(&request); err != nil {
 		response.BadRequest(c, "invalid artifact confirmation request")
@@ -359,7 +365,7 @@ func (h *RadarGraderHandler) ConfirmArtifact(c *gin.Context) {
 		response.BadRequest(c, "lease token is required")
 		return
 	}
-	receipt, err := artifactRepo.ConfirmArtifact(c.Request.Context(), id, leaseToken, service.ArtifactConfirmation{ArtifactID: request.ArtifactID, ObjectKey: request.ObjectKey, SHA256: request.SHA256, Bytes: request.Bytes})
+	receipt, err := artifactRepo.ConfirmArtifact(c.Request.Context(), id, leaseToken, service.ArtifactConfirmation{ArtifactID: request.ArtifactID, ObjectKey: request.ObjectKey, SHA256: request.SHA256, Bytes: request.Bytes, LeaseEpoch: request.LeaseEpoch})
 	if err != nil {
 		h.writeWorkerError(c, err)
 		return
@@ -378,6 +384,7 @@ func (h *RadarGraderHandler) CompleteAssignment(c *gin.Context) {
 	}
 	var req struct {
 		LeaseToken string `json:"lease_token"`
+		LeaseEpoch int64  `json:"lease_epoch"`
 	}
 	if c.Request.ContentLength != 0 {
 		if err := c.ShouldBindJSON(&req); err != nil {
@@ -393,7 +400,7 @@ func (h *RadarGraderHandler) CompleteAssignment(c *gin.Context) {
 		response.BadRequest(c, "lease token is required")
 		return
 	}
-	if err := runner.CompleteAssignment(c.Request.Context(), id, leaseToken); err != nil {
+	if err := runner.CompleteAssignment(c.Request.Context(), id, leaseToken, req.LeaseEpoch); err != nil {
 		h.writeWorkerError(c, err)
 		return
 	}
@@ -413,6 +420,7 @@ func (h *RadarGraderHandler) FailAssignment(c *gin.Context) {
 		LeaseToken   string `json:"lease_token"`
 		FailureClass string `json:"failure_class"`
 		FailureCode  string `json:"failure_code"`
+		LeaseEpoch   int64  `json:"lease_epoch"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
 		response.BadRequest(c, "invalid failure request")
@@ -426,7 +434,7 @@ func (h *RadarGraderHandler) FailAssignment(c *gin.Context) {
 		response.BadRequest(c, "lease token is required")
 		return
 	}
-	if err := runner.FailAssignment(c.Request.Context(), id, leaseToken, req.FailureClass, req.FailureCode); err != nil {
+	if err := runner.FailAssignment(c.Request.Context(), id, leaseToken, req.FailureClass, req.FailureCode, req.LeaseEpoch); err != nil {
 		h.writeWorkerError(c, err)
 		return
 	}
@@ -467,6 +475,7 @@ func (h *RadarGraderHandler) HeartbeatGradingLease(c *gin.Context) {
 	var request struct {
 		LeaseSeconds int    `json:"lease_seconds"`
 		LeaseToken   string `json:"lease_token"`
+		LeaseEpoch   int64  `json:"lease_epoch"`
 	}
 	if c.Request.ContentLength != 0 {
 		if err := c.ShouldBindJSON(&request); err != nil {
@@ -482,7 +491,7 @@ func (h *RadarGraderHandler) HeartbeatGradingLease(c *gin.Context) {
 		response.BadRequest(c, "lease token is required")
 		return
 	}
-	expires, err := h.repo.HeartbeatGradingLease(c.Request.Context(), leaseID, leaseToken, radarLeaseTTL(request.LeaseSeconds))
+	expires, err := h.repo.HeartbeatGradingLease(c.Request.Context(), leaseID, leaseToken, radarLeaseTTL(request.LeaseSeconds), request.LeaseEpoch)
 	if err != nil {
 		h.writeWorkerError(c, err)
 		return
@@ -505,8 +514,14 @@ func (h *RadarGraderHandler) CompleteGradingLease(c *gin.Context) {
 		return
 	}
 	var request struct {
-		LeaseToken string `json:"lease_token"`
-		service.ScoreSubmission
+		LeaseToken     string               `json:"lease_token"`
+		Score          decimal.Decimal      `json:"score"`
+		Passed         *bool                `json:"passed,omitempty"`
+		FailureClass   service.FailureClass `json:"failure_class,omitempty"`
+		FailureCode    string               `json:"failure_code,omitempty"`
+		Explanation    string               `json:"explanation,omitempty"`
+		EvidenceHashes []string             `json:"evidence_hashes"`
+		LeaseEpoch     int64                `json:"lease_epoch"`
 	}
 	if err := c.ShouldBindJSON(&request); err != nil {
 		response.BadRequest(c, "invalid score submission")
@@ -520,12 +535,21 @@ func (h *RadarGraderHandler) CompleteGradingLease(c *gin.Context) {
 		response.BadRequest(c, "lease token is required")
 		return
 	}
-	score, err := h.repo.SubmitScore(c.Request.Context(), leaseID, leaseToken, request.ScoreSubmission)
+	score, err := h.repo.SubmitScore(c.Request.Context(), leaseID, leaseToken, service.ScoreSubmission{
+		Score: request.Score, Passed: request.Passed, FailureClass: request.FailureClass,
+		FailureCode: request.FailureCode, Explanation: request.Explanation,
+		EvidenceHashes: request.EvidenceHashes, LeaseEpoch: request.LeaseEpoch,
+	})
 	if err != nil {
 		h.writeWorkerError(c, err)
 		return
 	}
-	response.Success(c, score)
+	response.Success(c, struct {
+		ScoreRef    service.ScoreRef `json:"score_ref"`
+		HeadVersion int              `json:"head_version"`
+	}{
+		ScoreRef: score.Ref, HeadVersion: score.HeadVersion,
+	})
 }
 
 func (h *RadarGraderHandler) CompleteGrading(c *gin.Context) {
@@ -550,6 +574,7 @@ func (h *RadarGraderHandler) FailGradingLease(c *gin.Context) {
 		FailureClass string `json:"failure_class"`
 		FailureCode  string `json:"failure_code"`
 		LeaseToken   string `json:"lease_token"`
+		LeaseEpoch   int64  `json:"lease_epoch"`
 	}
 	if err := c.ShouldBindJSON(&request); err != nil {
 		response.BadRequest(c, "invalid grading failure request")
@@ -563,7 +588,7 @@ func (h *RadarGraderHandler) FailGradingLease(c *gin.Context) {
 		response.BadRequest(c, "lease token is required")
 		return
 	}
-	if err := h.repo.FailGradingLease(c.Request.Context(), leaseID, leaseToken, request.FailureClass, request.FailureCode); err != nil {
+	if err := h.repo.FailGradingLease(c.Request.Context(), leaseID, leaseToken, request.FailureClass, request.FailureCode, request.LeaseEpoch); err != nil {
 		h.writeWorkerError(c, err)
 		return
 	}
@@ -652,7 +677,12 @@ func (h *RadarGraderHandler) writeWorkerError(c *gin.Context, err error) {
 		response.Forbidden(c, "worker kind is not authorized")
 	case errors.Is(err, service.ErrLeaseFenced), errors.Is(err, service.ErrGradingLeaseFenced), errors.Is(err, service.ErrAnalysisJobFenced):
 		response.Error(c, http.StatusConflict, "worker lease fenced")
-	case errors.Is(err, service.ErrEvidenceMismatch), errors.Is(err, service.ErrGraderIdentityMismatch), errors.Is(err, service.ErrAggregateRunMismatch), errors.Is(err, service.ErrScoreSubmissionInvalid):
+	case errors.Is(err, service.ErrRouteEvidenceNotSealed):
+		c.Header("Retry-After", "1")
+		response.Error(c, http.StatusServiceUnavailable, "route evidence is still sealing")
+	case errors.Is(err, service.ErrEvidenceMismatch), errors.Is(err, service.ErrGraderIdentityMismatch),
+		errors.Is(err, service.ErrAggregateRunMismatch), errors.Is(err, service.ErrAggregateInputMismatch),
+		errors.Is(err, service.ErrScoreSubmissionInvalid):
 		response.BadRequest(c, err.Error())
 	case errors.Is(err, service.ErrArtifactInvalid), errors.Is(err, service.ErrArtifactNotFound), errors.Is(err, service.ErrArtifactObjectMismatch):
 		response.BadRequest(c, err.Error())

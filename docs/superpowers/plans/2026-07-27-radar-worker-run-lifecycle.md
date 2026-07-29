@@ -66,7 +66,7 @@ requireTable(t, db, "evaluation_pair_bindings")
 
 - [ ] **Step 2: 运行测试并确认 RED**
 
-Run: `cd backend && go test ./internal/repository -run TestMigration197TrustedLifecycleSchema -count=1`
+Run: `cd backend && go test -tags integration ./internal/repository -run TestMigration197TrustedLifecycleSchema -count=1`
 
 Expected: FAIL，首个缺失对象为 migration 197 表或列。
 
@@ -102,7 +102,7 @@ ALTER TABLE evaluation_score_heads
 
 - [ ] **Step 5: 运行 schema 与约束测试并确认 GREEN**
 
-Run: `cd backend && go test ./internal/repository -run 'TestMigration197|TestEvaluationScoreHeadRef' -count=1`
+Run: `cd backend && go test -tags integration ./internal/repository -run 'TestMigration197|TestEvaluationScoreHeadRef' -count=1`
 
 Expected: PASS。
 

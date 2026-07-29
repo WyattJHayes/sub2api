@@ -6,10 +6,12 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/http"
 	"strconv"
 	"strings"
 	"time"
 
+	infraerrors "github.com/Wei-Shaw/sub2api/internal/pkg/errors"
 	"github.com/Wei-Shaw/sub2api/internal/service"
 	"github.com/google/uuid"
 	"github.com/lib/pq"
@@ -94,7 +96,7 @@ func (r *radarGovernanceRepository) Require(ctx context.Context, actorID int64, 
 func radarPermissions(role service.RadarRole) []service.RadarPermission {
 	all := map[service.RadarRole][]service.RadarPermission{
 		service.RoleViewer:         {service.PermissionView},
-		service.RoleTestOperator:   {service.PermissionView, service.PermissionRunStart, service.PermissionRunRetry, service.PermissionRunControl, service.PermissionWorkerManage},
+		service.RoleTestOperator:   {service.PermissionView, service.PermissionRunStart, service.PermissionRunRetry, service.PermissionWorkerManage},
 		service.RoleQualityAdmin:   {service.PermissionView, service.PermissionDatasetManage, service.PermissionDatasetPublish, service.PermissionPolicyManage, service.PermissionBaselineQualityApprove},
 		service.RoleReleaseManager: {service.PermissionView, service.PermissionGateDecide, service.PermissionGateWaive, service.PermissionBaselineReleaseApprove},
 		service.RolePlatformAdmin:  {service.PermissionView, service.PermissionRoleManage, service.PermissionRouteAction, service.PermissionEvaluationKeyManage},
@@ -109,7 +111,7 @@ func (r *radarGovernanceRepository) EnableEvaluationKey(ctx context.Context, key
 	if keyID <= 0 || actorID <= 0 {
 		return nil, errors.New("evaluation API key and actor are required")
 	}
-	tx, err := beginEvaluationWriterTx(ctx, r.db, defaultEvaluationWriterIdentity("control"))
+	tx, err := beginRadarWriterTx(ctx, r.db, "api")
 	if err != nil {
 		return nil, fmt.Errorf("begin evaluation API key enablement: %w", err)
 	}
@@ -177,19 +179,25 @@ func (r *radarGovernanceRepository) CreateRoleBinding(ctx context.Context, input
 	id := uuid.New()
 	var out service.RadarRoleBinding
 	var createdBy sql.NullInt64
-	err := WithEvaluationWriterTx(ctx, r.db, defaultEvaluationWriterIdentity("control"), func(tx *sql.Tx) error {
-		return tx.QueryRowContext(ctx, `
+	tx, err := beginRadarWriterTx(ctx, r.db, "api")
+	if err != nil {
+		return nil, fmt.Errorf("begin create radar role binding: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+	err = tx.QueryRowContext(ctx, `
 		INSERT INTO evaluation_role_bindings (id, actor_id, role, scope, created_by)
 		VALUES ($1, $2, $3, $4::jsonb, $5)
 		ON CONFLICT (actor_id, role, md5(scope::text)) WHERE enabled DO UPDATE SET enabled = TRUE
 		RETURNING id, actor_id, role, scope, enabled, created_by, created_at, disabled_at`, id, input.ActorID, input.Role, string(input.Scope), input.CreatedBy).
-			Scan(&out.ID, &out.ActorID, &out.Role, &out.Scope, &out.Enabled, &createdBy, &out.CreatedAt, &out.DisabledAt)
-	})
+		Scan(&out.ID, &out.ActorID, &out.Role, &out.Scope, &out.Enabled, &createdBy, &out.CreatedAt, &out.DisabledAt)
 	if err != nil {
 		return nil, fmt.Errorf("create radar role binding: %w", err)
 	}
 	if createdBy.Valid {
 		out.CreatedBy = &createdBy.Int64
+	}
+	if err := tx.Commit(); err != nil {
+		return nil, fmt.Errorf("commit create radar role binding: %w", err)
 	}
 	return &out, nil
 }
@@ -198,17 +206,20 @@ func (r *radarGovernanceRepository) DisableRoleBinding(ctx context.Context, id u
 	if err := r.valid(); err != nil {
 		return err
 	}
-	var result sql.Result
-	err := WithEvaluationWriterTx(ctx, r.db, defaultEvaluationWriterIdentity("control"), func(tx *sql.Tx) error {
-		var err error
-		result, err = tx.ExecContext(ctx, `UPDATE evaluation_role_bindings SET enabled = FALSE, disabled_at = COALESCE(disabled_at, NOW()) WHERE id = $1 AND enabled = TRUE`, id)
-		return err
-	})
+	tx, err := beginRadarWriterTx(ctx, r.db, "api")
+	if err != nil {
+		return fmt.Errorf("begin disable radar role binding: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+	result, err := tx.ExecContext(ctx, `UPDATE evaluation_role_bindings SET enabled = FALSE, disabled_at = COALESCE(disabled_at, NOW()) WHERE id = $1 AND enabled = TRUE`, id)
 	if err != nil {
 		return fmt.Errorf("disable radar role binding: %w", err)
 	}
 	if n, _ := result.RowsAffected(); n == 0 {
 		return sql.ErrNoRows
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit disable radar role binding: %w", err)
 	}
 	return nil
 }
@@ -254,11 +265,22 @@ func (r *radarGovernanceRepository) ProposeBaseline(ctx context.Context, input s
 	}
 	id := uuid.New()
 	var b service.RadarBaseline
-	err := WithEvaluationWriterTx(ctx, r.db, defaultEvaluationWriterIdentity("control"), func(tx *sql.Tx) error {
-		return tx.QueryRowContext(ctx, `INSERT INTO evaluation_baselines (id, model_route, run_id, dataset_manifest_sha256, evidence_hash, route_profile_version, policy_version, proposed_by) VALUES ($1,$2,$3,$4,$5,$6,$7,$8) RETURNING id,model_route,run_id,dataset_manifest_sha256,evidence_hash,route_profile_version,policy_version,status,proposed_by,proposed_at,activated_at,retired_at`, id, input.ModelRoute, input.RunID, input.DatasetManifestSHA256, input.EvidenceHash, input.RouteProfileVersion, input.PolicyVersion, input.ProposedBy).Scan(&b.ID, &b.ModelRoute, &b.RunID, &b.DatasetManifestSHA256, &b.EvidenceHash, &b.RouteProfileVersion, &b.PolicyVersion, &b.Status, &b.ProposedBy, &b.ProposedAt, &b.ActivatedAt, &b.RetiredAt)
-	})
+	tx, err := beginRadarWriterTx(ctx, r.db, "api")
+	if err != nil {
+		return nil, fmt.Errorf("begin propose radar baseline: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+	err = tx.QueryRowContext(ctx, `INSERT INTO evaluation_baselines (id, model_route, run_id, dataset_manifest_sha256, evidence_hash, route_profile_version, policy_version, proposed_by) VALUES ($1,$2,$3,$4,$5,$6,$7,$8) RETURNING id,model_route,run_id,dataset_manifest_sha256,evidence_hash,route_profile_version,policy_version,status,proposed_by,proposed_at,activated_at,retired_at`, id, input.ModelRoute, input.RunID, input.DatasetManifestSHA256, input.EvidenceHash, input.RouteProfileVersion, input.PolicyVersion, input.ProposedBy).Scan(&b.ID, &b.ModelRoute, &b.RunID, &b.DatasetManifestSHA256, &b.EvidenceHash, &b.RouteProfileVersion, &b.PolicyVersion, &b.Status, &b.ProposedBy, &b.ProposedAt, &b.ActivatedAt, &b.RetiredAt)
 	if err != nil {
 		return nil, fmt.Errorf("propose radar baseline: %w", err)
+	}
+	if _, err := tx.ExecContext(ctx, `
+		INSERT INTO evaluation_baseline_events (id, baseline_id, event_type, evidence_hash, actor_id)
+		VALUES ($1, $2, 'proposed', $3, $4)`, uuid.New(), b.ID, b.EvidenceHash, input.ProposedBy); err != nil {
+		return nil, fmt.Errorf("record radar baseline proposal: %w", err)
+	}
+	if err := tx.Commit(); err != nil {
+		return nil, fmt.Errorf("commit propose radar baseline: %w", err)
 	}
 	return &b, nil
 }
@@ -268,7 +290,13 @@ func (r *radarGovernanceRepository) GetBaseline(ctx context.Context, id uuid.UUI
 		return nil, err
 	}
 	var b service.RadarBaseline
-	err := r.db.QueryRowContext(ctx, `SELECT id,model_route,run_id,dataset_manifest_sha256,evidence_hash,route_profile_version,policy_version,status,proposed_by,proposed_at,activated_at,retired_at FROM evaluation_baselines WHERE id=$1`, id).Scan(&b.ID, &b.ModelRoute, &b.RunID, &b.DatasetManifestSHA256, &b.EvidenceHash, &b.RouteProfileVersion, &b.PolicyVersion, &b.Status, &b.ProposedBy, &b.ProposedAt, &b.ActivatedAt, &b.RetiredAt)
+	err := r.db.QueryRowContext(ctx, `
+		SELECT b.id,b.model_route,b.run_id,b.dataset_manifest_sha256,b.evidence_hash,b.route_profile_version,
+		       b.policy_version,CASE WHEN EXISTS (SELECT 1 FROM evaluation_baseline_heads h WHERE h.baseline_id=b.id) THEN 'active' ELSE b.status END,
+		       b.proposed_by,b.proposed_at,
+		       COALESCE(b.activated_at,(SELECT MIN(e.created_at) FROM evaluation_baseline_events e WHERE e.baseline_id=b.id AND e.event_type='activated')),
+		       b.retired_at
+		FROM evaluation_baselines b WHERE b.id=$1`, id).Scan(&b.ID, &b.ModelRoute, &b.RunID, &b.DatasetManifestSHA256, &b.EvidenceHash, &b.RouteProfileVersion, &b.PolicyVersion, &b.Status, &b.ProposedBy, &b.ProposedAt, &b.ActivatedAt, &b.RetiredAt)
 	if err != nil {
 		return nil, err
 	}
@@ -280,49 +308,53 @@ func (r *radarGovernanceRepository) ApproveBaseline(ctx context.Context, input s
 		return nil, err
 	}
 	id := uuid.New()
+	if input.EffectiveAt.IsZero() {
+		input.EffectiveAt = time.Now().UTC()
+	}
+	if !input.ExpiresAt.After(input.EffectiveAt) {
+		return nil, errors.New("baseline approval expiry must follow its effective time")
+	}
 	var a service.RadarBaselineApproval
-	err := WithEvaluationWriterTx(ctx, r.db, defaultEvaluationWriterIdentity("control"), func(tx *sql.Tx) error {
-		return tx.QueryRowContext(ctx, `INSERT INTO evaluation_baseline_approvals (id,baseline_id,approver_id,role,evidence_hash) VALUES ($1,$2,$3,$4,$5) ON CONFLICT (baseline_id,approver_id,role) DO UPDATE SET evidence_hash=EXCLUDED.evidence_hash RETURNING id,baseline_id,approver_id,role,evidence_hash,created_at`, id, input.BaselineID, input.ApproverID, input.Role, input.EvidenceHash).Scan(&a.ID, &a.BaselineID, &a.ApproverID, &a.Role, &a.EvidenceHash, &a.CreatedAt)
-	})
+	tx, err := beginRadarWriterTx(ctx, r.db, "api")
+	if err != nil {
+		return nil, fmt.Errorf("begin approve radar baseline: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+	err = tx.QueryRowContext(ctx, `INSERT INTO evaluation_baseline_approvals (id,baseline_id,approver_id,role,evidence_hash,effective_at,expires_at) VALUES ($1,$2,$3,$4,$5,$6,$7) ON CONFLICT (baseline_id,approver_id,role) DO NOTHING RETURNING id,baseline_id,approver_id,role,evidence_hash,effective_at,expires_at,created_at`, id, input.BaselineID, input.ApproverID, input.Role, input.EvidenceHash, input.EffectiveAt, input.ExpiresAt).Scan(&a.ID, &a.BaselineID, &a.ApproverID, &a.Role, &a.EvidenceHash, &a.EffectiveAt, &a.ExpiresAt, &a.CreatedAt)
+	if errors.Is(err, sql.ErrNoRows) {
+		err = tx.QueryRowContext(ctx, `SELECT id,baseline_id,approver_id,role,evidence_hash,effective_at,expires_at,created_at FROM evaluation_baseline_approvals WHERE baseline_id=$1 AND approver_id=$2 AND role=$3`, input.BaselineID, input.ApproverID, input.Role).Scan(&a.ID, &a.BaselineID, &a.ApproverID, &a.Role, &a.EvidenceHash, &a.EffectiveAt, &a.ExpiresAt, &a.CreatedAt)
+		if err == nil && (a.EvidenceHash != input.EvidenceHash || !a.ExpiresAt.Equal(input.ExpiresAt)) {
+			return nil, errors.New("baseline approval already exists with different evidence")
+		}
+	}
 	if err != nil {
 		return nil, fmt.Errorf("approve radar baseline: %w", err)
+	}
+	if _, err := tx.ExecContext(ctx, `
+		INSERT INTO evaluation_baseline_events (id, baseline_id, event_type, evidence_hash, actor_id)
+		VALUES ($1, $2, 'approved', $3, $4)
+		ON CONFLICT DO NOTHING`, uuid.New(), a.BaselineID, a.EvidenceHash, a.ApproverID); err != nil {
+		return nil, fmt.Errorf("record radar baseline approval: %w", err)
+	}
+	if err := tx.Commit(); err != nil {
+		return nil, fmt.Errorf("commit approve radar baseline: %w", err)
 	}
 	return &a, nil
 }
 
 func (r *radarGovernanceRepository) ActivateBaseline(ctx context.Context, baselineID uuid.UUID, actorID int64) (*service.RadarBaseline, error) {
-	if err := r.valid(); err != nil {
+	if _, err := r.ActivateBaselineHead(ctx, service.RadarBaselineActivationInput{
+		BaselineID: baselineID,
+		Scope: service.RadarGovernanceScope{
+			Environment: "production",
+			ScopeType:   "global",
+			ScopeID:     service.GlobalReleaseScopeID,
+		},
+		ActorID: actorID,
+	}); err != nil {
 		return nil, err
 	}
-	tx, err := beginEvaluationWriterTx(ctx, r.db, defaultEvaluationWriterIdentity("control"))
-	if err != nil {
-		return nil, err
-	}
-	defer tx.Rollback()
-	var quality, release int
-	if err := tx.QueryRowContext(ctx, `SELECT COUNT(*) FILTER (WHERE role='quality_admin'), COUNT(*) FILTER (WHERE role='release_manager') FROM evaluation_baseline_approvals WHERE baseline_id=$1`, baselineID).Scan(&quality, &release); err != nil {
-		return nil, err
-	}
-	if quality == 0 || release == 0 {
-		return nil, errors.New("baseline requires quality_admin and release_manager approvals")
-	}
-	var b service.RadarBaseline
-	var oldID uuid.UUID
-	if err := tx.QueryRowContext(ctx, `SELECT model_route FROM evaluation_baselines WHERE id=$1 FOR UPDATE`, baselineID).Scan(&b.ModelRoute); err != nil {
-		return nil, err
-	}
-	_ = actorID
-	if err := tx.QueryRowContext(ctx, `UPDATE evaluation_baselines SET status='retired', retired_at=NOW() WHERE model_route=$1 AND status='active' AND id<>$2 RETURNING id`, b.ModelRoute, baselineID).Scan(&oldID); err != nil && !errors.Is(err, sql.ErrNoRows) {
-		return nil, err
-	}
-	err = tx.QueryRowContext(ctx, `UPDATE evaluation_baselines SET status='active', activated_at=COALESCE(activated_at,NOW()) WHERE id=$1 RETURNING id,model_route,run_id,dataset_manifest_sha256,evidence_hash,route_profile_version,policy_version,status,proposed_by,proposed_at,activated_at,retired_at`, baselineID).Scan(&b.ID, &b.ModelRoute, &b.RunID, &b.DatasetManifestSHA256, &b.EvidenceHash, &b.RouteProfileVersion, &b.PolicyVersion, &b.Status, &b.ProposedBy, &b.ProposedAt, &b.ActivatedAt, &b.RetiredAt)
-	if err != nil {
-		return nil, err
-	}
-	if err := tx.Commit(); err != nil {
-		return nil, err
-	}
-	return &b, nil
+	return r.GetBaseline(ctx, baselineID)
 }
 
 func (r *radarGovernanceRepository) CreateGatePolicy(ctx context.Context, input service.RadarGatePolicyInput) (*service.RadarGatePolicyRecord, error) {
@@ -330,14 +362,702 @@ func (r *radarGovernanceRepository) CreateGatePolicy(ctx context.Context, input 
 		return nil, err
 	}
 	id := uuid.New()
+	if !input.ApprovalExpiresAt.After(input.EnforcementStartsAt) {
+		return nil, errors.New("gate policy approval must outlive enforcement start")
+	}
 	var p service.RadarGatePolicyRecord
-	err := WithEvaluationWriterTx(ctx, r.db, defaultEvaluationWriterIdentity("control"), func(tx *sql.Tx) error {
-		return tx.QueryRowContext(ctx, `INSERT INTO evaluation_gate_policies (id,version,policy,policy_hash,enforcement_starts_at,created_by) VALUES ($1,$2,$3::jsonb,$4,$5,$6) ON CONFLICT (version) DO UPDATE SET policy=EXCLUDED.policy,policy_hash=EXCLUDED.policy_hash RETURNING id,version,policy,policy_hash,enforcement_starts_at,created_by,created_at,retired_at`, id, input.Version, string(input.Policy), input.PolicyHash, input.EnforcementStartsAt, input.CreatedBy).Scan(&p.ID, &p.Version, &p.Policy, &p.PolicyHash, &p.EnforcementStartsAt, &p.CreatedBy, &p.CreatedAt, &p.RetiredAt)
-	})
+	tx, err := beginRadarWriterTx(ctx, r.db, "api")
+	if err != nil {
+		return nil, fmt.Errorf("begin create radar gate policy: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+	err = tx.QueryRowContext(ctx, `INSERT INTO evaluation_gate_policies (id,version,policy,policy_hash,enforcement_starts_at,created_by) VALUES ($1,$2,$3::jsonb,$4,$5,$6) ON CONFLICT (version) DO NOTHING RETURNING id,version,policy,policy_hash,enforcement_starts_at,created_by,created_at,retired_at`, id, input.Version, string(input.Policy), input.PolicyHash, input.EnforcementStartsAt, input.CreatedBy).Scan(&p.ID, &p.Version, &p.Policy, &p.PolicyHash, &p.EnforcementStartsAt, &p.CreatedBy, &p.CreatedAt, &p.RetiredAt)
+	if errors.Is(err, sql.ErrNoRows) {
+		err = tx.QueryRowContext(ctx, `SELECT id,version,policy,policy_hash,enforcement_starts_at,created_by,created_at,retired_at FROM evaluation_gate_policies WHERE version=$1`, input.Version).Scan(&p.ID, &p.Version, &p.Policy, &p.PolicyHash, &p.EnforcementStartsAt, &p.CreatedBy, &p.CreatedAt, &p.RetiredAt)
+		if err == nil && (p.PolicyHash != input.PolicyHash || string(p.Policy) != string(input.Policy)) {
+			return nil, errors.New("gate policy version already exists with different content")
+		}
+	}
 	if err != nil {
 		return nil, fmt.Errorf("create radar gate policy: %w", err)
 	}
+	var approvalEffectiveAt, approvalExpiresAt time.Time
+	err = tx.QueryRowContext(ctx, `
+		INSERT INTO evaluation_gate_policy_approvals
+			(id,policy_id,approver_id,role,effective_at,expires_at)
+		VALUES ($1,$2,$3,'quality_admin',$4,$5)
+		ON CONFLICT (policy_id,approver_id,role) DO NOTHING
+		RETURNING effective_at,expires_at`, uuid.New(), p.ID, input.CreatedBy, input.EnforcementStartsAt, input.ApprovalExpiresAt).Scan(&approvalEffectiveAt, &approvalExpiresAt)
+	if errors.Is(err, sql.ErrNoRows) {
+		err = tx.QueryRowContext(ctx, `
+			SELECT effective_at,expires_at FROM evaluation_gate_policy_approvals
+			WHERE policy_id=$1 AND approver_id=$2 AND role='quality_admin'`, p.ID, input.CreatedBy).Scan(&approvalEffectiveAt, &approvalExpiresAt)
+	}
+	if err != nil {
+		return nil, fmt.Errorf("record gate policy approval: %w", err)
+	}
+	if !approvalEffectiveAt.Equal(input.EnforcementStartsAt) || !approvalExpiresAt.Equal(input.ApprovalExpiresAt) {
+		return nil, errors.New("gate policy approval already exists with different validity")
+	}
+	if _, err := tx.ExecContext(ctx, `
+		INSERT INTO evaluation_gate_policy_events (id, policy_id, event_type, policy_hash, actor_id)
+		VALUES ($1, $2, 'created', $3, $4)
+		ON CONFLICT (policy_id, event_type, environment, scope_type, scope_id) DO NOTHING`, uuid.New(), p.ID, p.PolicyHash, p.CreatedBy); err != nil {
+		return nil, fmt.Errorf("record radar gate policy creation: %w", err)
+	}
+	if err := tx.Commit(); err != nil {
+		return nil, fmt.Errorf("commit create radar gate policy: %w", err)
+	}
 	return &p, nil
+}
+
+func (r *radarGovernanceRepository) CreateReleaseSubject(ctx context.Context, input service.ReleaseSubjectInput) (*service.ReleaseSubjectRecord, error) {
+	if err := r.valid(); err != nil {
+		return nil, err
+	}
+	if input.RunID == uuid.Nil {
+		return nil, errors.New("release subject run is required")
+	}
+	canonical, err := service.CanonicalizeReleaseSubject(input.Subject)
+	if err != nil {
+		return nil, err
+	}
+	if expected := strings.TrimSpace(input.ExpectedHash); expected != "" && expected != canonical.SHA256 {
+		return nil, errors.New("release subject hash does not match canonical subject")
+	}
+	tx, err := beginRadarWriterTx(ctx, r.db, "api")
+	if err != nil {
+		return nil, fmt.Errorf("begin create release subject: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+	validBinding, err := validateFrozenReleaseSubjectBinding(ctx, tx, input.RunID, canonical.Subject)
+	if err != nil {
+		return nil, fmt.Errorf("validate frozen run binding: %w", err)
+	}
+	if !validBinding {
+		return nil, errors.New("release subject does not match frozen run binding")
+	}
+	record := &service.ReleaseSubjectRecord{ID: uuid.New(), RunID: input.RunID, SubjectHash: canonical.SHA256, Subject: canonical.Subject}
+	var raw []byte
+	err = tx.QueryRowContext(ctx, `
+		INSERT INTO evaluation_release_subjects (id, run_id, subject_hash, canonical_subject, canonical_subject_bytes)
+		VALUES ($1, $2, $3, $4::jsonb, $5)
+		ON CONFLICT (run_id, subject_hash) DO NOTHING
+		RETURNING canonical_subject_bytes, created_at`, record.ID, record.RunID, record.SubjectHash, string(canonical.Bytes), []byte(canonical.Bytes)).Scan(&raw, &record.CreatedAt)
+	if errors.Is(err, sql.ErrNoRows) {
+		err = tx.QueryRowContext(ctx, `
+			SELECT id, canonical_subject_bytes, created_at
+			FROM evaluation_release_subjects WHERE run_id=$1 AND subject_hash=$2`, record.RunID, record.SubjectHash).Scan(&record.ID, &raw, &record.CreatedAt)
+	}
+	if err != nil {
+		return nil, fmt.Errorf("persist release subject: %w", err)
+	}
+	if err := json.Unmarshal(raw, &record.Subject); err != nil {
+		return nil, fmt.Errorf("decode release subject: %w", err)
+	}
+	if err := tx.Commit(); err != nil {
+		return nil, fmt.Errorf("commit release subject: %w", err)
+	}
+	return record, nil
+}
+
+func validateFrozenReleaseSubjectBinding(ctx context.Context, tx *sql.Tx, runID uuid.UUID, subject service.ReleaseSubject) (bool, error) {
+	var valid bool
+	err := tx.QueryRowContext(ctx, `
+		WITH frozen_run_binding AS (
+			SELECT r.status, r.route_profile_version, dv.manifest_sha256
+			FROM evaluation_runs r
+			JOIN evaluation_plans p ON p.id = r.plan_id
+			JOIN evaluation_dataset_versions dv ON dv.id = p.dataset_version_id
+			WHERE r.id = $1
+		), pair_binding_counts AS (
+			SELECT COUNT(*) AS pair_count,
+			       COUNT(pb.id) AS binding_count
+			FROM evaluation_pair_specs ps
+			LEFT JOIN evaluation_pair_bindings pb ON pb.pair_spec_id = ps.id
+			WHERE ps.run_id = $1
+		), baseline_binding AS (
+			SELECT b.id, b.model_route
+			FROM evaluation_baselines b
+			JOIN evaluation_baseline_heads h
+			  ON h.baseline_id = b.id
+			 AND h.environment = $11 AND h.scope_type = $12 AND h.scope_id = $13
+			 AND h.model_route = b.model_route
+			WHERE b.id = $2 AND b.dataset_manifest_sha256 = $4
+			  AND b.route_profile_version = $5 AND b.retired_at IS NULL
+		)
+		SELECT EXISTS (
+			SELECT 1
+			FROM frozen_run_binding fr, pair_binding_counts pc, baseline_binding bb
+			WHERE fr.status = 'completed'
+			  AND fr.manifest_sha256 = $4
+			  AND fr.route_profile_version = $5
+			  AND pc.pair_count > 0 AND pc.pair_count = pc.binding_count
+			  AND EXISTS (
+				SELECT 1
+				FROM evaluation_pair_bindings pb
+				JOIN evaluation_pair_specs ps ON ps.id = pb.pair_spec_id
+				JOIN evaluation_side_specs baseline_ss
+				  ON baseline_ss.id = pb.baseline_side_spec_id
+				 AND baseline_ss.pair_spec_id = pb.pair_spec_id
+				JOIN evaluation_side_specs candidate_ss
+				  ON candidate_ss.id = pb.candidate_side_spec_id
+				 AND candidate_ss.pair_spec_id = pb.pair_spec_id
+				WHERE ps.run_id = $1
+				  AND baseline_ss.side = 'baseline'
+				  AND candidate_ss.side = 'candidate'
+				  AND baseline_ss.canonical_spec->>'model_route' = 'baseline:' || bb.model_route
+			  )
+			  AND NOT EXISTS (
+				SELECT 1
+				FROM evaluation_side_specs ss
+				JOIN evaluation_pair_specs ps ON ps.id = ss.pair_spec_id
+				WHERE ps.run_id = $1
+				  AND ss.canonical_spec->>'route_profile_version' IS DISTINCT FROM $5
+			  )
+			  AND NOT EXISTS (
+				SELECT 1
+				FROM evaluation_pair_bindings pb
+				JOIN evaluation_pair_specs ps ON ps.id = pb.pair_spec_id
+				JOIN evaluation_side_specs baseline_ss
+				  ON baseline_ss.id = pb.baseline_side_spec_id
+				 AND baseline_ss.pair_spec_id = pb.pair_spec_id
+				JOIN evaluation_side_specs candidate_ss
+				  ON candidate_ss.id = pb.candidate_side_spec_id
+				 AND candidate_ss.pair_spec_id = pb.pair_spec_id
+				WHERE ps.run_id = $1
+				  AND baseline_ss.side = 'baseline'
+				  AND candidate_ss.side = 'candidate'
+				  AND baseline_ss.canonical_spec->>'model_route' = 'baseline:' || bb.model_route
+				  AND (
+					candidate_ss.canonical_spec->>'model_route' IS DISTINCT FROM 'candidate:' || bb.model_route OR
+					candidate_ss.canonical_spec->>'model_config_sha256' IS DISTINCT FROM $3
+				  )
+			  )
+			  AND ARRAY(SELECT DISTINCT a.worker_image_digest FROM evaluation_assignments a
+				JOIN evaluation_samples s ON s.id=a.sample_id
+				WHERE s.run_id=$1 AND a.worker_image_digest IS NOT NULL ORDER BY 1) = $6::text[]
+			  AND ARRAY(SELECT DISTINCT g.worker_image_digest FROM evaluation_grading_jobs g
+				WHERE g.run_id=$1 AND g.worker_image_digest IS NOT NULL ORDER BY 1) = $7::text[]
+			  AND ARRAY(SELECT DISTINCT j.worker_image_digest FROM evaluation_analysis_jobs j
+				WHERE j.run_id=$1 AND j.worker_image_digest IS NOT NULL ORDER BY 1) = $8::text[]
+			  AND EXISTS (SELECT 1 FROM evaluation_analysis_jobs j WHERE j.run_id=$1)
+			  AND NOT EXISTS (SELECT 1 FROM evaluation_analysis_jobs j WHERE j.run_id=$1 AND j.analysis_version <> $9)
+			  AND ARRAY(SELECT DISTINCT ps.canonical_spec->>'region' FROM evaluation_pair_specs ps
+				WHERE ps.run_id=$1 ORDER BY 1) = $10::text[]
+		)`, runID, subject.BaselineID, subject.CandidateModelConfigSHA256,
+		subject.DatasetManifestSHA256, subject.RouteProfileVersion,
+		pq.Array(subject.RunnerImageDigests), pq.Array(subject.GraderImageDigests),
+		pq.Array(subject.StatisticsImageDigests), subject.AnalysisVersion,
+		pq.Array(subject.RegionSet), subject.DeploymentEnvironment, subject.ScopeType, subject.ScopeID).Scan(&valid)
+	return valid, err
+}
+
+func (r *radarGovernanceRepository) ActivateReleaseSubject(ctx context.Context, input service.ReleaseSubjectActivationInput) (*service.ReleaseSubjectEvent, error) {
+	if input.ReleaseSubjectID == uuid.Nil || input.ActorID <= 0 || !input.ExpiresAt.After(input.EffectiveAt) {
+		return nil, errors.New("valid release subject activation is required")
+	}
+	return r.appendReleaseSubjectEvent(ctx, input.ReleaseSubjectID, input.ActorID, "activated", input.EffectiveAt, &input.ExpiresAt)
+}
+
+func (r *radarGovernanceRepository) RevokeReleaseSubject(ctx context.Context, subjectID uuid.UUID, actorID int64) (*service.ReleaseSubjectEvent, error) {
+	if subjectID == uuid.Nil || actorID <= 0 {
+		return nil, errors.New("release subject and actor are required")
+	}
+	now := time.Now().UTC()
+	return r.appendReleaseSubjectEvent(ctx, subjectID, actorID, "revoked", now, nil)
+}
+
+func (r *radarGovernanceRepository) appendReleaseSubjectEvent(ctx context.Context, subjectID uuid.UUID, actorID int64, eventType string, effectiveAt time.Time, expiresAt *time.Time) (*service.ReleaseSubjectEvent, error) {
+	if err := r.valid(); err != nil {
+		return nil, err
+	}
+	tx, err := beginRadarWriterTx(ctx, r.db, "api")
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = tx.Rollback() }()
+	if _, err := tx.ExecContext(ctx, `SELECT pg_advisory_xact_lock(hashtextextended($1,0))`, "release-subject:"+subjectID.String()); err != nil {
+		return nil, err
+	}
+	event := &service.ReleaseSubjectEvent{ID: uuid.New(), ReleaseSubjectID: subjectID, EventType: eventType, ActorID: actorID, EffectiveAt: effectiveAt, ExpiresAt: expiresAt}
+	err = tx.QueryRowContext(ctx, `
+		INSERT INTO evaluation_release_subject_events
+			(id,release_subject_id,event_type,actor_id,effective_at,expires_at)
+		SELECT $1,rs.id,$2,$3,$4,$5 FROM evaluation_release_subjects rs WHERE rs.id=$6
+		RETURNING created_at`, event.ID, eventType, actorID, effectiveAt, expiresAt, subjectID).Scan(&event.CreatedAt)
+	if err != nil {
+		return nil, err
+	}
+	if err := tx.Commit(); err != nil {
+		return nil, err
+	}
+	return event, nil
+}
+
+func (r *radarGovernanceRepository) ActivateGatePolicy(ctx context.Context, input service.RadarGatePolicyActivationInput) (*service.RadarGatePolicyHead, error) {
+	if err := r.valid(); err != nil {
+		return nil, err
+	}
+	if input.PolicyID == uuid.Nil || input.ActorID <= 0 {
+		return nil, errors.New("policy and activation actor are required")
+	}
+	scope, err := service.CanonicalizeGovernanceScope(input.Scope)
+	if err != nil {
+		return nil, err
+	}
+	tx, err := beginRadarWriterTx(ctx, r.db, "api")
+	if err != nil {
+		return nil, fmt.Errorf("begin activate gate policy: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+	if _, err := tx.ExecContext(ctx, `SELECT pg_advisory_xact_lock(hashtextextended($1, 0))`, "policy:"+scope.Environment+":"+scope.ScopeType+":"+scope.ScopeID); err != nil {
+		return nil, fmt.Errorf("lock gate policy lineage: %w", err)
+	}
+	var policyHash string
+	var eligible bool
+	if err := tx.QueryRowContext(ctx, `
+		SELECT p.policy_hash,
+		       p.enforcement_starts_at <= transaction_timestamp() AND p.retired_at IS NULL
+		       AND EXISTS (
+			 SELECT 1 FROM evaluation_gate_policy_approvals a
+			 JOIN evaluation_role_bindings rb
+			   ON rb.actor_id=a.approver_id AND rb.role=a.role AND rb.enabled=TRUE AND rb.scope='{}'::jsonb
+			 WHERE a.policy_id=p.id AND a.effective_at <= transaction_timestamp()
+			   AND a.expires_at > transaction_timestamp()
+		       )
+		FROM evaluation_gate_policies p WHERE p.id=$1`, input.PolicyID).Scan(&policyHash, &eligible); err != nil {
+		return nil, fmt.Errorf("load gate policy version: %w", err)
+	}
+	if !eligible {
+		return nil, errors.New("gate policy is outside its activation window")
+	}
+	head := &service.RadarGatePolicyHead{Scope: scope}
+	err = tx.QueryRowContext(ctx, `
+		SELECT policy_id,event_id,updated_at FROM evaluation_gate_policy_heads
+		WHERE environment=$1 AND scope_type=$2 AND scope_id=$3`, scope.Environment, scope.ScopeType, scope.ScopeID).Scan(&head.PolicyID, &head.EventID, &head.UpdatedAt)
+	if err == nil && head.PolicyID == input.PolicyID {
+		if commitErr := tx.Commit(); commitErr != nil {
+			return nil, commitErr
+		}
+		return head, nil
+	}
+	if err != nil && !errors.Is(err, sql.ErrNoRows) {
+		return nil, fmt.Errorf("load current gate policy head: %w", err)
+	}
+	var current any
+	if err == nil {
+		current = head.PolicyID
+		if input.ExpectedPolicyID == nil || *input.ExpectedPolicyID != head.PolicyID {
+			return nil, service.ErrGovernanceHeadConflict
+		}
+	} else if input.ExpectedPolicyID != nil {
+		return nil, service.ErrGovernanceHeadConflict
+	}
+	head.EventID = uuid.New()
+	if _, err := tx.ExecContext(ctx, `
+		INSERT INTO evaluation_gate_policy_events
+			(id,policy_id,event_type,policy_hash,environment,scope_type,scope_id,actor_id)
+		VALUES ($1,$2,'activated',$3,$4,$5,$6,$7)`, head.EventID, input.PolicyID, policyHash, scope.Environment, scope.ScopeType, scope.ScopeID, input.ActorID); err != nil {
+		return nil, fmt.Errorf("record gate policy activation: %w", err)
+	}
+	var advanced bool
+	if err := tx.QueryRowContext(ctx, `SELECT advance_evaluation_gate_policy_head($1,$2,$3,$4,$5,$6)`,
+		scope.Environment, scope.ScopeType, scope.ScopeID, input.PolicyID, head.EventID, current).Scan(&advanced); err != nil {
+		return nil, fmt.Errorf("advance gate policy head: %w", err)
+	}
+	if !advanced {
+		return nil, service.ErrGovernanceHeadConflict
+	}
+	if err := enqueueGovernanceReevaluation(ctx, tx, "policy_head", input.PolicyID, head.EventID, scope, ""); err != nil {
+		return nil, err
+	}
+	head.PolicyID = input.PolicyID
+	if err := tx.QueryRowContext(ctx, `SELECT updated_at FROM evaluation_gate_policy_heads WHERE environment=$1 AND scope_type=$2 AND scope_id=$3`, scope.Environment, scope.ScopeType, scope.ScopeID).Scan(&head.UpdatedAt); err != nil {
+		return nil, err
+	}
+	if err := tx.Commit(); err != nil {
+		return nil, fmt.Errorf("commit gate policy activation: %w", err)
+	}
+	return head, nil
+}
+
+func (r *radarGovernanceRepository) ActivateBaselineHead(ctx context.Context, input service.RadarBaselineActivationInput) (*service.RadarBaselineHead, error) {
+	if err := r.valid(); err != nil {
+		return nil, err
+	}
+	if input.BaselineID == uuid.Nil || input.ActorID <= 0 {
+		return nil, errors.New("baseline and activation actor are required")
+	}
+	scope, err := service.CanonicalizeGovernanceScope(input.Scope)
+	if err != nil {
+		return nil, err
+	}
+	tx, err := beginRadarWriterTx(ctx, r.db, "api")
+	if err != nil {
+		return nil, fmt.Errorf("begin activate baseline head: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+	var quality, release, approvers int
+	if err := tx.QueryRowContext(ctx, `
+		SELECT COUNT(*) FILTER (WHERE a.role='quality_admin'), COUNT(*) FILTER (WHERE a.role='release_manager'),
+		       COUNT(DISTINCT a.approver_id)
+		FROM evaluation_baseline_approvals a
+		JOIN evaluation_role_bindings rb
+		  ON rb.actor_id=a.approver_id AND rb.role=a.role AND rb.enabled=TRUE AND rb.scope='{}'::jsonb
+		WHERE a.baseline_id=$1 AND a.effective_at <= transaction_timestamp()
+		  AND a.expires_at > transaction_timestamp()`, input.BaselineID).Scan(&quality, &release, &approvers); err != nil {
+		return nil, err
+	}
+	if quality == 0 || release == 0 || approvers < 2 {
+		return nil, errors.New("baseline requires distinct quality_admin and release_manager approvals")
+	}
+	head := &service.RadarBaselineHead{Scope: scope, BaselineID: input.BaselineID}
+	var evidenceHash string
+	if err := tx.QueryRowContext(ctx, `SELECT model_route,evidence_hash FROM evaluation_baselines WHERE id=$1`, input.BaselineID).Scan(&head.ModelRoute, &evidenceHash); err != nil {
+		return nil, fmt.Errorf("load baseline version: %w", err)
+	}
+	lineage := "baseline:" + scope.Environment + ":" + scope.ScopeType + ":" + scope.ScopeID + ":" + head.ModelRoute
+	if _, err := tx.ExecContext(ctx, `SELECT pg_advisory_xact_lock(hashtextextended($1, 0))`, lineage); err != nil {
+		return nil, fmt.Errorf("lock baseline lineage: %w", err)
+	}
+	var current any
+	var currentID uuid.UUID
+	err = tx.QueryRowContext(ctx, `
+		SELECT baseline_id,event_id,updated_at FROM evaluation_baseline_heads
+		WHERE environment=$1 AND scope_type=$2 AND scope_id=$3 AND model_route=$4`, scope.Environment, scope.ScopeType, scope.ScopeID, head.ModelRoute).Scan(&currentID, &head.EventID, &head.UpdatedAt)
+	if err == nil && currentID == input.BaselineID {
+		if commitErr := tx.Commit(); commitErr != nil {
+			return nil, commitErr
+		}
+		return head, nil
+	}
+	if err != nil && !errors.Is(err, sql.ErrNoRows) {
+		return nil, fmt.Errorf("load current baseline head: %w", err)
+	}
+	if err == nil {
+		current = currentID
+		if input.ExpectedBaselineID == nil || *input.ExpectedBaselineID != currentID {
+			return nil, service.ErrGovernanceHeadConflict
+		}
+	} else if input.ExpectedBaselineID != nil {
+		return nil, service.ErrGovernanceHeadConflict
+	}
+	head.EventID = uuid.New()
+	if _, err := tx.ExecContext(ctx, `
+		INSERT INTO evaluation_baseline_events
+			(id,baseline_id,event_type,evidence_hash,environment,scope_type,scope_id,actor_id)
+		VALUES ($1,$2,'activated',$3,$4,$5,$6,$7)`, head.EventID, input.BaselineID, evidenceHash, scope.Environment, scope.ScopeType, scope.ScopeID, input.ActorID); err != nil {
+		return nil, fmt.Errorf("record baseline activation: %w", err)
+	}
+	var advanced bool
+	if err := tx.QueryRowContext(ctx, `SELECT advance_evaluation_baseline_head($1,$2,$3,$4,$5,$6,$7)`,
+		scope.Environment, scope.ScopeType, scope.ScopeID, head.ModelRoute, input.BaselineID, head.EventID, current).Scan(&advanced); err != nil {
+		return nil, fmt.Errorf("advance baseline head: %w", err)
+	}
+	if !advanced {
+		return nil, service.ErrGovernanceHeadConflict
+	}
+	if err := enqueueGovernanceReevaluation(ctx, tx, "baseline_head", input.BaselineID, head.EventID, scope, head.ModelRoute); err != nil {
+		return nil, err
+	}
+	if err := tx.QueryRowContext(ctx, `SELECT updated_at FROM evaluation_baseline_heads WHERE environment=$1 AND scope_type=$2 AND scope_id=$3 AND model_route=$4`, scope.Environment, scope.ScopeType, scope.ScopeID, head.ModelRoute).Scan(&head.UpdatedAt); err != nil {
+		return nil, err
+	}
+	if err := tx.Commit(); err != nil {
+		return nil, fmt.Errorf("commit baseline activation: %w", err)
+	}
+	return head, nil
+}
+
+func enqueueGovernanceReevaluation(ctx context.Context, tx *sql.Tx, causeType string, causeID, eventID uuid.UUID, scope service.RadarGovernanceScope, modelRoute string) error {
+	_, err := tx.ExecContext(ctx, `
+		INSERT INTO evaluation_gate_reevaluation_outbox (id,run_id,cause_type,cause_id,idempotency_key,payload)
+		SELECT gen_random_uuid(),rs.run_id,$1,$2,
+		       md5(rs.run_id::text || ':' || $3::text || ':a') || md5(rs.run_id::text || ':' || $3::text || ':b'),
+		       jsonb_build_object('event_id',$3,'environment',$4::text,'scope_type',$5::text,'scope_id',$6::text,'model_route',NULLIF($7::text,''))
+		FROM evaluation_release_subjects rs
+		JOIN LATERAL (
+			SELECT e.event_type,e.effective_at,e.expires_at
+			FROM evaluation_release_subject_events e
+			WHERE e.release_subject_id=rs.id
+			  AND e.effective_at <= transaction_timestamp()
+			ORDER BY e.sequence DESC LIMIT 1
+		) active_release ON active_release.event_type='activated'
+		 AND active_release.expires_at > transaction_timestamp()
+		WHERE rs.canonical_subject->>'deployment_environment'=$4::text
+		  AND ($5::text='global' OR (rs.canonical_subject->>'scope_type'=$5::text AND rs.canonical_subject->>'scope_id'=$6::text))
+		  AND ($7::text='' OR EXISTS (
+			SELECT 1 FROM evaluation_baselines b
+			WHERE b.id=(rs.canonical_subject->>'baseline_id')::uuid AND b.model_route=$7::text
+		  ))
+		ON CONFLICT (idempotency_key) DO NOTHING`, causeType, causeID, eventID, scope.Environment, scope.ScopeType, scope.ScopeID, modelRoute)
+	if err != nil {
+		return fmt.Errorf("enqueue governance reevaluation: %w", err)
+	}
+	return nil
+}
+
+func (r *radarGovernanceRepository) RotateEvidenceSigningKey(ctx context.Context, input service.RotateEvidenceSigningKeyInput) (*service.EvidenceSigningKeyRecord, error) {
+	input.KeyReference = strings.TrimSpace(input.KeyReference)
+	if err := r.valid(); err != nil {
+		return nil, err
+	}
+	if input.ID == uuid.Nil || input.ExpectedActiveKeyID == uuid.Nil || input.ID == input.ExpectedActiveKeyID ||
+		input.KeyReference == "" || input.ExpectedActiveStateEpoch < 1 {
+		return nil, service.ErrEvidenceSigningKeyTransition
+	}
+	tx, err := beginRadarWriterTx(ctx, r.db, "api")
+	if err != nil {
+		return nil, fmt.Errorf("begin evidence signing key rotation: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+	active, err := loadActiveEvidenceSigningKeyForUpdate(ctx, tx)
+	if err != nil {
+		return nil, err
+	}
+	if active.ID != input.ExpectedActiveKeyID || active.StateEpoch != input.ExpectedActiveStateEpoch {
+		return nil, service.ErrEvidenceSigningKeyConflict
+	}
+	previous, err := updateEvidenceSigningKeyState(ctx, tx, active.ID, active.StateEpoch, service.EvidenceSigningKeyVerifyOnly)
+	if err != nil {
+		return nil, err
+	}
+	if err := enqueueEvidenceSigningKeyReevaluation(ctx, tx, previous); err != nil {
+		return nil, err
+	}
+	record := &service.EvidenceSigningKeyRecord{}
+	if err := scanEvidenceSigningKey(tx.QueryRowContext(ctx, `
+		INSERT INTO evaluation_evidence_signing_keys (id, key_reference, status, state_epoch)
+		VALUES ($1, $2, 'active', 1)
+		RETURNING id, key_reference, status, state_epoch, created_at, updated_at, revoked_at`, input.ID, input.KeyReference), record); err != nil {
+		return nil, fmt.Errorf("insert active evidence signing key: %w", err)
+	}
+	if err := tx.Commit(); err != nil {
+		return nil, fmt.Errorf("commit evidence signing key rotation: %w", err)
+	}
+	return record, nil
+}
+
+func (r *radarGovernanceRepository) TransitionEvidenceSigningKey(ctx context.Context, input service.TransitionEvidenceSigningKeyInput) (*service.EvidenceSigningKeyRecord, error) {
+	if err := r.valid(); err != nil {
+		return nil, err
+	}
+	if input.ID == uuid.Nil || input.ExpectedStateEpoch < 1 ||
+		(input.Status != service.EvidenceSigningKeyVerifyOnly && input.Status != service.EvidenceSigningKeyRevoked) {
+		return nil, service.ErrEvidenceSigningKeyTransition
+	}
+	tx, err := beginRadarWriterTx(ctx, r.db, "api")
+	if err != nil {
+		return nil, fmt.Errorf("begin evidence signing key transition: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+	current := &service.EvidenceSigningKeyRecord{}
+	if err := scanEvidenceSigningKey(tx.QueryRowContext(ctx, `
+		SELECT id, key_reference, status, state_epoch, created_at, updated_at, revoked_at
+		FROM evaluation_evidence_signing_keys WHERE id=$1 FOR UPDATE`, input.ID), current); err != nil {
+		return nil, fmt.Errorf("lock evidence signing key: %w", err)
+	}
+	if current.StateEpoch != input.ExpectedStateEpoch {
+		return nil, service.ErrEvidenceSigningKeyConflict
+	}
+	if current.Status == input.Status {
+		if err := tx.Commit(); err != nil {
+			return nil, err
+		}
+		return current, nil
+	}
+	if current.Status == service.EvidenceSigningKeyRevoked ||
+		(current.Status == service.EvidenceSigningKeyVerifyOnly && input.Status != service.EvidenceSigningKeyRevoked) {
+		return nil, service.ErrEvidenceSigningKeyTransition
+	}
+	record, err := updateEvidenceSigningKeyState(ctx, tx, current.ID, current.StateEpoch, input.Status)
+	if err != nil {
+		return nil, err
+	}
+	if err := enqueueEvidenceSigningKeyReevaluation(ctx, tx, record); err != nil {
+		return nil, err
+	}
+	if record.Status == service.EvidenceSigningKeyRevoked {
+		if err := observeRevokedEvidenceSigningKeyAlerts(ctx, tx, record); err != nil {
+			return nil, err
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return nil, fmt.Errorf("commit evidence signing key transition: %w", err)
+	}
+	return record, nil
+}
+
+type evidenceSigningKeyScanner interface {
+	Scan(...any) error
+}
+
+func scanEvidenceSigningKey(scanner evidenceSigningKeyScanner, record *service.EvidenceSigningKeyRecord) error {
+	var status string
+	var revokedAt sql.NullTime
+	if err := scanner.Scan(&record.ID, &record.KeyReference, &status, &record.StateEpoch, &record.CreatedAt, &record.UpdatedAt, &revokedAt); err != nil {
+		return err
+	}
+	record.Status = service.EvidenceSigningKeyStatus(status)
+	if revokedAt.Valid {
+		record.RevokedAt = &revokedAt.Time
+	}
+	return nil
+}
+
+func loadActiveEvidenceSigningKeyForUpdate(ctx context.Context, tx *sql.Tx) (*service.EvidenceSigningKeyRecord, error) {
+	record := &service.EvidenceSigningKeyRecord{}
+	if err := scanEvidenceSigningKey(tx.QueryRowContext(ctx, `
+		SELECT id, key_reference, status, state_epoch, created_at, updated_at, revoked_at
+		FROM evaluation_evidence_signing_keys WHERE status='active' FOR UPDATE`), record); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, service.ErrEvidenceSigningKeyUnavailable
+		}
+		return nil, fmt.Errorf("lock active evidence signing key: %w", err)
+	}
+	return record, nil
+}
+
+func updateEvidenceSigningKeyState(ctx context.Context, tx *sql.Tx, keyID uuid.UUID, expectedEpoch int64, status service.EvidenceSigningKeyStatus) (*service.EvidenceSigningKeyRecord, error) {
+	record := &service.EvidenceSigningKeyRecord{}
+	query := `
+		UPDATE evaluation_evidence_signing_keys
+		SET status=$2::text, state_epoch=state_epoch+1,
+			revoked_at=CASE WHEN $2::text='revoked' THEN transaction_timestamp() ELSE NULL END,
+			updated_at=transaction_timestamp()
+		WHERE id=$1 AND state_epoch=$3
+		RETURNING id, key_reference, status, state_epoch, created_at, updated_at, revoked_at`
+	if status == service.EvidenceSigningKeyVerifyOnly {
+		query = `
+			UPDATE evaluation_evidence_signing_keys
+			SET status='verify_only', state_epoch=state_epoch+1, revoked_at=NULL, updated_at=transaction_timestamp()
+			WHERE id=$1 AND state_epoch=$2
+			RETURNING id, key_reference, status, state_epoch, created_at, updated_at, revoked_at`
+	}
+	var err error
+	if status == service.EvidenceSigningKeyVerifyOnly {
+		err = scanEvidenceSigningKey(tx.QueryRowContext(ctx, query, keyID, expectedEpoch), record)
+	} else {
+		err = scanEvidenceSigningKey(tx.QueryRowContext(ctx, query, keyID, string(status), expectedEpoch), record)
+	}
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, service.ErrEvidenceSigningKeyConflict
+	}
+	if err != nil {
+		return nil, fmt.Errorf("transition evidence signing key: %w", err)
+	}
+	return record, nil
+}
+
+func enqueueEvidenceSigningKeyReevaluation(ctx context.Context, tx *sql.Tx, record *service.EvidenceSigningKeyRecord) error {
+	_, err := tx.ExecContext(ctx, `
+		INSERT INTO evaluation_gate_reevaluation_outbox
+			(id, run_id, cause_type, cause_id, idempotency_key, payload)
+		SELECT gen_random_uuid(), affected.run_id, 'evidence', $1,
+		       md5(affected.run_id::text || ':evidence-signing-key:' || $1::text || ':' || $3::text || ':a') ||
+		       md5(affected.run_id::text || ':evidence-signing-key:' || $1::text || ':' || $3::text || ':b'),
+		       jsonb_build_object('signing_key_id', $1::uuid, 'status', $2::text, 'state_epoch', $3::bigint)
+		FROM (
+			SELECT DISTINCT evaluation_run_id AS run_id
+			FROM evaluation_route_evidence WHERE signing_key_id=$1
+		) affected
+		ON CONFLICT (idempotency_key) DO NOTHING`, record.ID, string(record.Status), record.StateEpoch)
+	if err != nil {
+		return fmt.Errorf("enqueue evidence signing key reevaluation: %w", err)
+	}
+	rows, err := tx.QueryContext(ctx, `
+		SELECT DISTINCT evaluation_run_id
+		FROM evaluation_route_evidence WHERE signing_key_id=$1
+		ORDER BY evaluation_run_id`, record.ID)
+	if err != nil {
+		return fmt.Errorf("load signing key affected runs: %w", err)
+	}
+	var runIDs []uuid.UUID
+	for rows.Next() {
+		var runID uuid.UUID
+		if err := rows.Scan(&runID); err != nil {
+			rows.Close()
+			return fmt.Errorf("scan signing key affected run: %w", err)
+		}
+		runIDs = append(runIDs, runID)
+	}
+	if err := rows.Close(); err != nil {
+		return fmt.Errorf("close signing key affected runs: %w", err)
+	}
+	payload, err := json.Marshal(struct {
+		SigningKeyID uuid.UUID                        `json:"signing_key_id"`
+		Status       service.EvidenceSigningKeyStatus `json:"status"`
+		StateEpoch   int64                            `json:"state_epoch"`
+	}{record.ID, record.Status, record.StateEpoch})
+	if err != nil {
+		return fmt.Errorf("marshal signing key state outbox payload: %w", err)
+	}
+	sourceID := record.ID.String() + ":" + fmt.Sprint(record.StateEpoch)
+	sourceHash := hashString(strings.Join([]string{
+		"evidence-signing-key-state", record.ID.String(), string(record.Status), fmt.Sprint(record.StateEpoch),
+	}, "\x00"))
+	for _, runID := range runIDs {
+		if _, err := enqueueEvaluationOutbox(ctx, tx, service.EnqueueEvaluationOutboxInput{
+			EventType: "gate_reevaluation", RunID: runID,
+			ScopeKey: "signing-key/" + record.ID.String(), AnalysisVersion: "evidence-signing-key-v1",
+			SourceType: "evidence_signing_key_state", SourceID: sourceID,
+			SourceHash: sourceHash, Payload: payload,
+		}); err != nil {
+			return fmt.Errorf("enqueue unified signing key reevaluation: %w", err)
+		}
+	}
+	return nil
+}
+
+func observeRevokedEvidenceSigningKeyAlerts(ctx context.Context, tx *sql.Tx, record *service.EvidenceSigningKeyRecord) error {
+	_, err := tx.ExecContext(ctx, `
+		WITH affected AS (
+			SELECT DISTINCT regexp_replace(s.model_route, '^(baseline|candidate):', '') AS model_route,
+			       c.capability_domain
+			FROM evaluation_route_evidence e
+			JOIN evaluation_assignments a ON a.id=e.assignment_id
+			JOIN evaluation_samples s ON s.id=a.sample_id
+			JOIN evaluation_cases c ON c.id=s.case_id
+			WHERE e.signing_key_id=$1
+		), policy AS (
+			SELECT COALESCE(MAX(version), 1) AS policy_version FROM evaluation_gate_policies
+		), updated AS (
+			UPDATE evaluation_alerts alerts
+			SET status='open', acknowledged_at=NULL, resolved_at=NULL,
+			    first_seen_at=CASE WHEN alerts.status='resolved' THEN transaction_timestamp() ELSE alerts.first_seen_at END
+			FROM affected, policy
+			WHERE alerts.model_route=affected.model_route
+			  AND alerts.capability_domain=affected.capability_domain
+			  AND alerts.cause='insufficient_evidence'
+			  AND alerts.policy_version=policy.policy_version
+			RETURNING alerts.id
+		), inserted AS (
+			INSERT INTO evaluation_alerts
+				(id, model_route, capability_domain, cause, policy_version, status, severity, first_seen_at)
+			SELECT gen_random_uuid(), affected.model_route, affected.capability_domain,
+			       'insufficient_evidence', policy.policy_version, 'open', 'P0', transaction_timestamp()
+			FROM affected, policy
+			WHERE NOT EXISTS (
+				SELECT 1 FROM evaluation_alerts alerts
+				WHERE alerts.model_route=affected.model_route
+				  AND alerts.capability_domain=affected.capability_domain
+				  AND alerts.cause='insufficient_evidence'
+				  AND alerts.policy_version=policy.policy_version
+			)
+			RETURNING id
+		), alert_ids AS (
+			SELECT id FROM updated UNION ALL SELECT id FROM inserted
+		)
+		INSERT INTO evaluation_alert_events (id, alert_id, kind, payload)
+		SELECT gen_random_uuid(), id, 'observed',
+		       jsonb_build_object('reason_code', 'evidence_signing_key_revoked',
+		                          'signing_key_id', $1::uuid, 'state_epoch', $2::bigint)
+		FROM alert_ids`, record.ID, record.StateEpoch)
+	if err != nil {
+		return fmt.Errorf("observe revoked evidence signing key alerts: %w", err)
+	}
+	return nil
 }
 
 func (r *radarGovernanceRepository) RecordGateDecision(ctx context.Context, input service.RadarGateDecisionInput) (*service.RadarGateDecisionRecord, error) {
@@ -346,13 +1066,150 @@ func (r *radarGovernanceRepository) RecordGateDecision(ctx context.Context, inpu
 	}
 	id := uuid.New()
 	var d service.RadarGateDecisionRecord
-	err := WithEvaluationWriterTx(ctx, r.db, defaultEvaluationWriterIdentity("control"), func(tx *sql.Tx) error {
-		return tx.QueryRowContext(ctx, `INSERT INTO evaluation_gate_decisions (id,run_id,baseline_id,policy_id,status,rule_ids,evidence,evidence_hash) VALUES ($1,$2,$3,$4,$5,$6,$7::jsonb,$8) ON CONFLICT (run_id,policy_id) DO UPDATE SET status=EXCLUDED.status,rule_ids=EXCLUDED.rule_ids,evidence=EXCLUDED.evidence,evidence_hash=EXCLUDED.evidence_hash RETURNING id,run_id,baseline_id,policy_id,status,rule_ids,evidence,evidence_hash,created_at`, id, input.RunID, input.BaselineID, input.PolicyID, input.Status, pq.Array(input.RuleIDs), string(input.Evidence), input.EvidenceHash).Scan(&d.ID, &d.RunID, &d.BaselineID, &d.PolicyID, &d.Status, &pqStringArray{&d.RuleIDs}, &d.Evidence, &d.EvidenceHash, &d.CreatedAt)
-	})
+	tx, err := beginRadarWriterTx(ctx, r.db, "api")
+	if err != nil {
+		return nil, fmt.Errorf("begin record radar gate decision: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+	if input.ReleaseSubjectHash == "" {
+		input.ReleaseSubjectHash = strings.Repeat("0", 64)
+	}
+	if input.CauseSetHash == "" {
+		input.CauseSetHash = strings.Repeat("0", 64)
+	}
+	if len(input.SourceWatermark) == 0 {
+		input.SourceWatermark = json.RawMessage(`{}`)
+	}
+	err = tx.QueryRowContext(ctx, `
+		INSERT INTO evaluation_gate_decisions
+			(id,run_id,baseline_id,policy_id,status,rule_ids,evidence,evidence_hash,release_subject_hash,source_watermark,supersedes_decision_id,cause_set_hash)
+		VALUES ($1,$2,$3,$4,$5,$6,$7::jsonb,$8,$9,$10::jsonb,$11,$12)
+		ON CONFLICT (run_id,policy_id,evidence_hash) DO NOTHING
+		RETURNING id,run_id,baseline_id,policy_id,status,rule_ids,evidence,evidence_hash,release_subject_hash,source_watermark,supersedes_decision_id,cause_set_hash,created_at`,
+		id, input.RunID, input.BaselineID, input.PolicyID, input.Status, pq.Array(input.RuleIDs), string(input.Evidence), input.EvidenceHash,
+		input.ReleaseSubjectHash, string(input.SourceWatermark), input.SupersedesDecisionID, input.CauseSetHash).Scan(
+		&d.ID, &d.RunID, &d.BaselineID, &d.PolicyID, &d.Status, &pqStringArray{&d.RuleIDs}, &d.Evidence, &d.EvidenceHash,
+		&d.ReleaseSubjectHash, &d.SourceWatermark, &d.SupersedesDecisionID, &d.CauseSetHash, &d.CreatedAt)
+	if errors.Is(err, sql.ErrNoRows) {
+		err = tx.QueryRowContext(ctx, `
+			SELECT id,run_id,baseline_id,policy_id,status,rule_ids,evidence,evidence_hash,release_subject_hash,source_watermark,supersedes_decision_id,cause_set_hash,created_at
+			FROM evaluation_gate_decisions WHERE run_id=$1 AND policy_id=$2 AND evidence_hash=$3`, input.RunID, input.PolicyID, input.EvidenceHash).Scan(
+			&d.ID, &d.RunID, &d.BaselineID, &d.PolicyID, &d.Status, &pqStringArray{&d.RuleIDs}, &d.Evidence, &d.EvidenceHash,
+			&d.ReleaseSubjectHash, &d.SourceWatermark, &d.SupersedesDecisionID, &d.CauseSetHash, &d.CreatedAt)
+	}
 	if err != nil {
 		return nil, fmt.Errorf("record radar gate decision: %w", err)
 	}
+	if _, err := tx.ExecContext(ctx, `
+		INSERT INTO evaluation_gate_decision_events (id, decision_id, event_type, supersedes_decision_id, source_watermark)
+		VALUES ($1, $2, 'recorded', $3, $4::jsonb)
+		ON CONFLICT DO NOTHING`, uuid.New(), d.ID, d.SupersedesDecisionID, string(d.SourceWatermark)); err != nil {
+		return nil, fmt.Errorf("record radar gate decision event: %w", err)
+	}
+	current, err := advanceRadarGateDecisionHead(ctx, tx, &d)
+	if err != nil {
+		return nil, err
+	}
+	if current {
+		if err := reconcileRevisionBatchesForGateDecision(ctx, tx, &d); err != nil {
+			return nil, err
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return nil, fmt.Errorf("commit record radar gate decision: %w", err)
+	}
 	return &d, nil
+}
+
+func advanceRadarGateDecisionHead(ctx context.Context, tx *sql.Tx, decision *service.RadarGateDecisionRecord) (bool, error) {
+	if decision == nil {
+		return false, service.ErrRevisionBatchInvalid
+	}
+	lockKey := strings.Join([]string{
+		"gate-decision-head", decision.RunID.String(), decision.PolicyID.String(), decision.ReleaseSubjectHash,
+	}, ":")
+	if _, err := tx.ExecContext(ctx, `SELECT pg_advisory_xact_lock(hashtextextended($1,0))`, lockKey); err != nil {
+		return false, fmt.Errorf("lock radar gate decision head: %w", err)
+	}
+	var currentID uuid.UUID
+	err := tx.QueryRowContext(ctx, `
+		SELECT decision_id FROM evaluation_gate_decision_heads
+		WHERE run_id=$1 AND policy_id=$2 AND release_subject_hash=$3
+		FOR UPDATE`, decision.RunID, decision.PolicyID, decision.ReleaseSubjectHash).Scan(&currentID)
+	if errors.Is(err, sql.ErrNoRows) {
+		if decision.SupersedesDecisionID != nil {
+			return false, infraerrors.Conflict("GATE_DECISION_HEAD_CONFLICT", "gate decision cannot supersede a missing head")
+		}
+		if _, err := tx.ExecContext(ctx, `SELECT set_config('app.evaluation_head_cas','1',true)`); err != nil {
+			return false, fmt.Errorf("enable radar gate decision head mutation: %w", err)
+		}
+		if _, err := tx.ExecContext(ctx, `
+			INSERT INTO evaluation_gate_decision_heads (
+				run_id, policy_id, release_subject_hash, decision_id
+			) VALUES ($1,$2,$3,$4)`, decision.RunID, decision.PolicyID,
+			decision.ReleaseSubjectHash, decision.ID); err != nil {
+			return false, fmt.Errorf("insert radar gate decision head: %w", err)
+		}
+		return true, nil
+	}
+	if err != nil {
+		return false, fmt.Errorf("load radar gate decision head: %w", err)
+	}
+	if currentID == decision.ID {
+		return true, nil
+	}
+	if decision.SupersedesDecisionID == nil || *decision.SupersedesDecisionID != currentID {
+		return false, nil
+	}
+	if _, err := tx.ExecContext(ctx, `SELECT set_config('app.evaluation_head_cas','1',true)`); err != nil {
+		return false, fmt.Errorf("enable radar gate decision head mutation: %w", err)
+	}
+	if _, err := tx.ExecContext(ctx, `
+		UPDATE evaluation_gate_decision_heads
+		SET decision_id=$4, updated_at=transaction_timestamp()
+		WHERE run_id=$1 AND policy_id=$2 AND release_subject_hash=$3`,
+		decision.RunID, decision.PolicyID, decision.ReleaseSubjectHash, decision.ID); err != nil {
+		return false, fmt.Errorf("advance radar gate decision head: %w", err)
+	}
+	return true, nil
+}
+
+func reconcileRevisionBatchesForGateDecision(ctx context.Context, tx *sql.Tx, decision *service.RadarGateDecisionRecord) error {
+	rows, err := tx.QueryContext(ctx, `
+		SELECT DISTINCT batch.id
+		FROM evaluation_revision_batches batch
+		JOIN evaluation_revision_batch_requirements requirement
+		  ON requirement.revision_batch_id=batch.id AND requirement.run_id=batch.run_id
+		WHERE batch.run_id=$1 AND batch.status IN ('pending','running','blocked')
+		  AND requirement.requirement_type='gate'
+		  AND requirement.status='completed'
+		  AND requirement.cause_set_hash=$2
+		ORDER BY batch.id`, decision.RunID, decision.CauseSetHash)
+	if err != nil {
+		return fmt.Errorf("load revision batches for Gate decision: %w", err)
+	}
+	var batchIDs []uuid.UUID
+	for rows.Next() {
+		var batchID uuid.UUID
+		if err := rows.Scan(&batchID); err != nil {
+			rows.Close()
+			return fmt.Errorf("scan revision batch for Gate decision: %w", err)
+		}
+		batchIDs = append(batchIDs, batchID)
+	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return fmt.Errorf("iterate revision batches for Gate decision: %w", err)
+	}
+	if err := rows.Close(); err != nil {
+		return fmt.Errorf("close revision batches for Gate decision: %w", err)
+	}
+	for _, batchID := range batchIDs {
+		if err := reconcileRevisionBatch(ctx, tx, batchID); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // pqStringArray lets sql.Scan populate []string without exposing pq types in the service package.
@@ -371,7 +1228,7 @@ func (r *radarGovernanceRepository) WaiveGateDecision(ctx context.Context, input
 	if err := r.valid(); err != nil {
 		return nil, err
 	}
-	tx, err := beginEvaluationWriterTx(ctx, r.db, defaultEvaluationWriterIdentity("control"))
+	tx, err := beginRadarWriterTx(ctx, r.db, "api")
 	if err != nil {
 		return nil, err
 	}
@@ -380,9 +1237,6 @@ func (r *radarGovernanceRepository) WaiveGateDecision(ctx context.Context, input
 	var w service.RadarGateWaiverRecord
 	err = tx.QueryRowContext(ctx, `INSERT INTO evaluation_gate_waivers (id,decision_id,business_reason,risk_owner_user_id,mitigation,retest_plan,expires_at,approved_by) VALUES ($1,$2,$3,$4,$5,$6,$7,$8) RETURNING id,decision_id,business_reason,risk_owner_user_id,mitigation,retest_plan,expires_at,approved_by,created_at`, id, input.DecisionID, input.BusinessReason, input.RiskOwnerUserID, input.Mitigation, input.RetestPlan, input.ExpiresAt, input.ApprovedBy).Scan(&w.ID, &w.DecisionID, &w.BusinessReason, &w.RiskOwnerUserID, &w.Mitigation, &w.RetestPlan, &w.ExpiresAt, &w.ApprovedBy, &w.CreatedAt)
 	if err != nil {
-		return nil, err
-	}
-	if _, err = tx.ExecContext(ctx, `UPDATE evaluation_gate_decisions SET status='waived' WHERE id=$1`, input.DecisionID); err != nil {
 		return nil, err
 	}
 	if err = tx.Commit(); err != nil {
@@ -395,7 +1249,7 @@ func (r *radarGovernanceRepository) ObserveAlert(ctx context.Context, input serv
 	if err := r.valid(); err != nil {
 		return nil, err
 	}
-	tx, err := beginEvaluationWriterTx(ctx, r.db, defaultEvaluationWriterIdentity("control"))
+	tx, err := beginRadarWriterTx(ctx, r.db, "api")
 	if err != nil {
 		return nil, err
 	}
@@ -426,7 +1280,7 @@ func (r *radarGovernanceRepository) transitionAlert(ctx context.Context, id uuid
 	if err := r.valid(); err != nil {
 		return err
 	}
-	tx, err := beginEvaluationWriterTx(ctx, r.db, defaultEvaluationWriterIdentity("control"))
+	tx, err := beginRadarWriterTx(ctx, r.db, "api")
 	if err != nil {
 		return err
 	}
@@ -448,7 +1302,7 @@ func (r *radarGovernanceRepository) RecordAlertRecovery(ctx context.Context, id,
 	if err := r.valid(); err != nil {
 		return err
 	}
-	tx, err := beginEvaluationWriterTx(ctx, r.db, defaultEvaluationWriterIdentity("control"))
+	tx, err := beginRadarWriterTx(ctx, r.db, "api")
 	if err != nil {
 		return err
 	}
@@ -475,11 +1329,17 @@ func (r *radarGovernanceRepository) RecordAttribution(ctx context.Context, input
 	}
 	id := uuid.New()
 	var a service.RadarAttributionRecord
-	err := WithEvaluationWriterTx(ctx, r.db, defaultEvaluationWriterIdentity("control"), func(tx *sql.Tx) error {
-		return tx.QueryRowContext(ctx, `INSERT INTO evaluation_attributions (id,alert_id,cause,confidence,route_slices,evidence_hash) VALUES ($1,$2,$3,$4,$5::jsonb,$6) RETURNING id,alert_id,cause,confidence,route_slices,evidence_hash,created_at`, id, input.AlertID, input.Cause, input.Confidence, string(input.RouteSlices), input.EvidenceHash).Scan(&a.ID, &a.AlertID, &a.Cause, &a.Confidence, &a.RouteSlices, &a.EvidenceHash, &a.CreatedAt)
-	})
+	tx, err := beginRadarWriterTx(ctx, r.db, "api")
+	if err != nil {
+		return nil, fmt.Errorf("begin record radar attribution: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+	err = tx.QueryRowContext(ctx, `INSERT INTO evaluation_attributions (id,alert_id,cause,confidence,route_slices,evidence_hash) VALUES ($1,$2,$3,$4,$5::jsonb,$6) RETURNING id,alert_id,cause,confidence,route_slices,evidence_hash,created_at`, id, input.AlertID, input.Cause, input.Confidence, string(input.RouteSlices), input.EvidenceHash).Scan(&a.ID, &a.AlertID, &a.Cause, &a.Confidence, &a.RouteSlices, &a.EvidenceHash, &a.CreatedAt)
 	if err != nil {
 		return nil, err
+	}
+	if err := tx.Commit(); err != nil {
+		return nil, fmt.Errorf("commit record radar attribution: %w", err)
 	}
 	return &a, nil
 }
@@ -573,34 +1433,15 @@ func (r *radarGovernanceRepository) ListRuns(ctx context.Context) ([]service.Rad
 		return nil, err
 	}
 	rows, err := r.db.QueryContext(ctx, `
-		SELECT r.id, r.plan_id, r.trigger_source, r.status, r.created_at, r.started_at, r.finished_at,
-			CASE
-				WHEN contract.manifest_id IS NULL THEN 'legacy-unbound'
-				WHEN contract.pair_count = contract.binding_count AND contract.pair_count > 0 THEN 'bound'
-				ELSE 'incomplete'
-			END AS contract_status,
-			contract.manifest_id, contract.manifest_sha256
-		FROM evaluation_runs r
-		LEFT JOIN LATERAL (
-			SELECT
-				(SELECT ps.request_manifest_id
-				 FROM evaluation_pair_specs ps
-				 WHERE ps.run_id = r.id
-				 ORDER BY ps.created_at, ps.id
-				 LIMIT 1) AS manifest_id,
-				(SELECT ps.request_manifest_sha256
-				 FROM evaluation_pair_specs ps
-				 WHERE ps.run_id = r.id
-				 ORDER BY ps.created_at, ps.id
-				 LIMIT 1) AS manifest_sha256,
-				(SELECT COUNT(*) FROM evaluation_pair_specs ps WHERE ps.run_id = r.id) AS pair_count,
-				(SELECT COUNT(*)
-				 FROM evaluation_pair_specs ps
-				 JOIN evaluation_pair_bindings pb ON pb.pair_spec_id = ps.id
-				 WHERE ps.run_id = r.id) AS binding_count
-		) contract ON TRUE
-		ORDER BY r.created_at DESC
-		LIMIT 200`)
+		SELECT r.id, r.plan_id, r.trigger_source, r.status,
+			CASE WHEN EXISTS (SELECT 1 FROM evaluation_pair_specs p WHERE p.run_id = r.id)
+				AND (SELECT COUNT(*) FROM evaluation_pair_specs p WHERE p.run_id = r.id) =
+					(SELECT COUNT(*) FROM evaluation_pair_bindings b JOIN evaluation_pair_specs p ON p.id = b.pair_spec_id WHERE p.run_id = r.id)
+				AND (SELECT COUNT(*) FROM evaluation_side_specs s JOIN evaluation_pair_specs p ON p.id = s.pair_spec_id WHERE p.run_id = r.id) =
+					2 * (SELECT COUNT(*) FROM evaluation_pair_specs p WHERE p.run_id = r.id)
+				THEN 'bound' ELSE 'legacy-unbound' END AS contract_status,
+			r.created_at, r.started_at, r.finished_at
+		FROM evaluation_runs r ORDER BY r.created_at DESC LIMIT 200`)
 	if err != nil {
 		return nil, fmt.Errorf("list radar runs: %w", err)
 	}
@@ -608,13 +1449,8 @@ func (r *radarGovernanceRepository) ListRuns(ctx context.Context) ([]service.Rad
 	var out []service.RadarRunProjection
 	for rows.Next() {
 		var item service.RadarRunProjection
-		var manifestHash sql.NullString
-		if err := rows.Scan(&item.ID, &item.PlanID, &item.TriggerSource, &item.Status, &item.CreatedAt, &item.StartedAt, &item.FinishedAt,
-			&item.ContractStatus, &item.RequestManifestID, &manifestHash); err != nil {
+		if err := rows.Scan(&item.ID, &item.PlanID, &item.TriggerSource, &item.Status, &item.ContractStatus, &item.CreatedAt, &item.StartedAt, &item.FinishedAt); err != nil {
 			return nil, err
-		}
-		if manifestHash.Valid {
-			item.RequestManifestSHA256 = manifestHash.String
 		}
 		out = append(out, item)
 	}
@@ -665,7 +1501,7 @@ func (r *radarGovernanceRepository) ListWorkers(ctx context.Context) ([]service.
 	if err := r.valid(); err != nil {
 		return nil, err
 	}
-	rows, err := r.db.QueryContext(ctx, `SELECT id, name, worker_kind, status, claim_mode, region, image_digest, last_heartbeat_at, capabilities FROM evaluation_workers ORDER BY name`)
+	rows, err := r.db.QueryContext(ctx, `SELECT id, name, worker_kind, status, last_heartbeat_at, capabilities FROM evaluation_workers ORDER BY name`)
 	if err != nil {
 		return nil, fmt.Errorf("list radar workers: %w", err)
 	}
@@ -674,7 +1510,7 @@ func (r *radarGovernanceRepository) ListWorkers(ctx context.Context) ([]service.
 	for rows.Next() {
 		var item service.RadarWorkerProjection
 		var capabilities pq.StringArray
-		if err := rows.Scan(&item.ID, &item.Name, &item.WorkerKind, &item.Status, &item.ClaimMode, &item.Region, &item.ImageDigest, &item.LastHeartbeatAt, &capabilities); err != nil {
+		if err := rows.Scan(&item.ID, &item.Name, &item.WorkerKind, &item.Status, &item.LastHeartbeatAt, &capabilities); err != nil {
 			return nil, err
 		}
 		item.Capabilities = []string(capabilities)
@@ -684,6 +1520,305 @@ func (r *radarGovernanceRepository) ListWorkers(ctx context.Context) ([]service.
 		out = append(out, item)
 	}
 	return out, rows.Err()
+}
+
+func normalizeWorkerCapabilities(values []string) []string {
+	seen := make(map[string]struct{}, len(values))
+	for _, value := range values {
+		value = strings.TrimSpace(value)
+		if value != "" {
+			seen[value] = struct{}{}
+		}
+	}
+	out := make([]string, 0, len(seen))
+	for value := range seen {
+		out = append(out, value)
+	}
+	for i := 1; i < len(out); i++ {
+		for j := i; j > 0 && out[j] < out[j-1]; j-- {
+			out[j], out[j-1] = out[j-1], out[j]
+		}
+	}
+	return out
+}
+
+func workerFingerprint(token string) string { return hashString(strings.TrimSpace(token))[:12] }
+
+func validateWorkerRegistration(input service.RadarWorkerRegistrationInput) error {
+	if strings.TrimSpace(input.Name) == "" || strings.TrimSpace(input.WorkerKind) == "" || strings.TrimSpace(input.Token) == "" {
+		return infraerrors.New(http.StatusBadRequest, "WORKER_INVALID", "worker name, kind and token are required")
+	}
+	if input.WorkerKind != "runner" && input.WorkerKind != "grader" && input.WorkerKind != "statistics" {
+		return infraerrors.New(http.StatusBadRequest, "WORKER_INVALID", "unsupported worker kind")
+	}
+	if input.MaxConcurrency <= 0 {
+		input.MaxConcurrency = 1
+	}
+	if input.MaxConcurrency > 1000 {
+		return infraerrors.New(http.StatusBadRequest, "WORKER_INVALID", "max concurrency is too large")
+	}
+	return nil
+}
+
+func scanRadarWorker(row interface{ Scan(...any) error }) (*service.RadarWorkerRecord, error) {
+	var worker service.RadarWorkerRecord
+	var capabilities pq.StringArray
+	if err := row.Scan(&worker.ID, &worker.Name, &worker.WorkerKind, &worker.Status, &worker.ClaimMode, &worker.TokenEpoch, &worker.TokenFingerprint, &worker.Region, &worker.ImageDigest, &capabilities, &worker.MaxConcurrency, &worker.CreatedAt, &worker.UpdatedAt); err != nil {
+		return nil, err
+	}
+	worker.Capabilities = []string(capabilities)
+	return &worker, nil
+}
+
+func loadRadarWorkerEventReplay(ctx context.Context, tx *sql.Tx, key string, workerID uuid.UUID, eventType, payloadKey, payloadValue string) (*service.RadarWorkerRecord, bool, error) {
+	var eventWorkerID uuid.UUID
+	var existingType string
+	var payload []byte
+	err := tx.QueryRowContext(ctx, `SELECT worker_id, event_type, payload FROM evaluation_worker_events WHERE idempotency_key = $1 FOR UPDATE`, key).Scan(&eventWorkerID, &existingType, &payload)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, false, nil
+	}
+	if err != nil {
+		return nil, false, fmt.Errorf("load radar worker idempotency event: %w", err)
+	}
+	if (workerID != uuid.Nil && eventWorkerID != workerID) || existingType != eventType {
+		return nil, false, infraerrors.Conflict("WORKER_IDEMPOTENCY_CONFLICT", "idempotency key belongs to another worker action")
+	}
+	if payloadKey != "" {
+		var body map[string]any
+		if err := json.Unmarshal(payload, &body); err != nil || strings.TrimSpace(fmt.Sprint(body[payloadKey])) != payloadValue {
+			return nil, false, infraerrors.Conflict("WORKER_IDEMPOTENCY_CONFLICT", "idempotency key was reused with different parameters")
+		}
+	}
+	if workerID == uuid.Nil {
+		workerID = eventWorkerID
+	}
+	worker, err := scanRadarWorker(tx.QueryRowContext(ctx, `SELECT id, name, worker_kind, status, claim_mode, token_epoch, token_fingerprint, region, image_digest, capabilities, max_concurrency, created_at, updated_at FROM evaluation_workers WHERE id = $1 FOR UPDATE`, workerID))
+	if err != nil {
+		return nil, false, fmt.Errorf("load radar worker idempotent result: %w", err)
+	}
+	return worker, true, nil
+}
+
+func countRadarWorkerActiveLeasesTx(ctx context.Context, tx *sql.Tx, workerID uuid.UUID) (int, error) {
+	var count int
+	err := tx.QueryRowContext(ctx, `SELECT (SELECT COUNT(*) FROM evaluation_assignments WHERE leased_by=$1 AND lease_expires_at > NOW()) + (SELECT COUNT(*) FROM evaluation_grading_jobs WHERE leased_by=$1 AND lease_expires_at > NOW()) + (SELECT COUNT(*) FROM evaluation_analysis_jobs WHERE leased_by=$1 AND lease_expires_at > NOW())`, workerID).Scan(&count)
+	if err != nil {
+		return 0, fmt.Errorf("count radar worker active leases: %w", err)
+	}
+	return count, nil
+}
+
+// checkRadarWorkerDrainCompletionTx is shared by control actions and lease
+// release paths. The deterministic event key makes repeated checks harmless.
+func checkRadarWorkerDrainCompletionTx(ctx context.Context, tx *sql.Tx, workerID uuid.UUID, actorID int64, baseKey string) (int, error) {
+	var mode service.WorkerClaimMode
+	var status string
+	if err := tx.QueryRowContext(ctx, `SELECT claim_mode, status FROM evaluation_workers WHERE id = $1 FOR UPDATE`, workerID).Scan(&mode, &status); err != nil {
+		return 0, fmt.Errorf("load radar worker drain state: %w", err)
+	}
+	count, err := countRadarWorkerActiveLeasesTx(ctx, tx, workerID)
+	if err != nil {
+		return 0, err
+	}
+	if status == "active" && mode == service.WorkerClaimsDraining && count == 0 {
+		var actor any
+		if actorID > 0 {
+			actor = actorID
+		}
+		if _, err := tx.ExecContext(ctx, `INSERT INTO evaluation_worker_events (id, worker_id, event_type, idempotency_key, actor_id, payload) VALUES ($1,$2,'drain_completed',$3,$4,jsonb_build_object('active_lease_count',0)) ON CONFLICT (idempotency_key) DO NOTHING`, uuid.New(), workerID, hashString(strings.TrimSpace(baseKey)+":drain_completed"), actor); err != nil {
+			return 0, fmt.Errorf("record radar worker drain completion: %w", err)
+		}
+	}
+	return count, nil
+}
+
+func (r *radarGovernanceRepository) RegisterRadarWorker(ctx context.Context, input service.RadarWorkerRegistrationInput, actorID int64, idempotencyKey string) (*service.RadarWorkerRecord, error) {
+	if err := r.valid(); err != nil {
+		return nil, err
+	}
+	input.Token = strings.TrimSpace(input.Token)
+	if err := validateWorkerRegistration(input); err != nil {
+		return nil, err
+	}
+	idempotencyKey = strings.TrimSpace(idempotencyKey)
+	if len(idempotencyKey) != 64 {
+		return nil, infraerrors.New(http.StatusBadRequest, "IDEMPOTENCY_KEY_INVALID", "idempotency key must be 64 characters")
+	}
+	input.Name, input.WorkerKind, input.Region, input.ImageDigest = strings.TrimSpace(input.Name), strings.TrimSpace(input.WorkerKind), strings.TrimSpace(input.Region), strings.TrimSpace(input.ImageDigest)
+	if input.MaxConcurrency <= 0 {
+		input.MaxConcurrency = 1
+	}
+	caps := normalizeWorkerCapabilities(input.Capabilities)
+	tx, err := beginRadarWriterTx(ctx, r.db, "api")
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = tx.Rollback() }()
+	if replay, found, err := loadRadarWorkerEventReplay(ctx, tx, idempotencyKey, uuid.Nil, "registered", "name", input.Name); err != nil {
+		return nil, err
+	} else if found {
+		if replay.TokenFingerprint != workerFingerprint(input.Token) {
+			return nil, infraerrors.Conflict("WORKER_IDEMPOTENCY_CONFLICT", "idempotency key was reused with different credentials")
+		}
+		return replay, tx.Commit()
+	}
+	var existing service.RadarWorkerRecord
+	var existingCaps pq.StringArray
+	var existingHash string
+	err = tx.QueryRowContext(ctx, `SELECT id, name, worker_kind, region, image_digest, capabilities, token_hash, status, claim_mode, token_epoch, token_fingerprint, max_concurrency, created_at, updated_at FROM evaluation_workers WHERE name = $1 FOR UPDATE`, input.Name).Scan(&existing.ID, &existing.Name, &existing.WorkerKind, &existing.Region, &existing.ImageDigest, &existingCaps, &existingHash, &existing.Status, &existing.ClaimMode, &existing.TokenEpoch, &existing.TokenFingerprint, &existing.MaxConcurrency, &existing.CreatedAt, &existing.UpdatedAt)
+	if err == nil {
+		existing.Capabilities = []string(existingCaps)
+		if existingHash != hashString(input.Token) || existing.WorkerKind != input.WorkerKind || existing.Region != input.Region || existing.ImageDigest != input.ImageDigest || strings.Join(existing.Capabilities, "\x00") != strings.Join(caps, "\x00") {
+			return nil, infraerrors.Conflict("WORKER_IDENTITY_CONFLICT", "worker identity already exists with different credentials or metadata")
+		}
+		if err := tx.Commit(); err != nil {
+			return nil, err
+		}
+		return &existing, nil
+	}
+	if !errors.Is(err, sql.ErrNoRows) {
+		return nil, fmt.Errorf("load radar worker: %w", err)
+	}
+	var tokenOwner uuid.UUID
+	if tokenErr := tx.QueryRowContext(ctx, `SELECT id FROM evaluation_workers WHERE token_hash = $1 FOR UPDATE`, hashString(input.Token)).Scan(&tokenOwner); tokenErr == nil {
+		return nil, infraerrors.Conflict("WORKER_IDENTITY_CONFLICT", "worker token is already registered to another identity")
+	} else if !errors.Is(tokenErr, sql.ErrNoRows) {
+		return nil, fmt.Errorf("check radar worker token: %w", tokenErr)
+	}
+	worker := &service.RadarWorkerRecord{}
+	err = tx.QueryRowContext(ctx, `INSERT INTO evaluation_workers (id, name, worker_kind, region, image_digest, capabilities, max_concurrency, token_hash, token_fingerprint, token_epoch, status, claim_mode) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,0,'active','open') RETURNING id, name, worker_kind, status, claim_mode, token_epoch, token_fingerprint, region, image_digest, capabilities, max_concurrency, created_at, updated_at`, uuid.New(), input.Name, input.WorkerKind, input.Region, input.ImageDigest, pq.Array(caps), input.MaxConcurrency, hashString(input.Token), workerFingerprint(input.Token)).Scan(&worker.ID, &worker.Name, &worker.WorkerKind, &worker.Status, &worker.ClaimMode, &worker.TokenEpoch, &worker.TokenFingerprint, &worker.Region, &worker.ImageDigest, &existingCaps, &worker.MaxConcurrency, &worker.CreatedAt, &worker.UpdatedAt)
+	if err != nil {
+		return nil, fmt.Errorf("register radar worker: %w", err)
+	}
+	worker.Capabilities = []string(existingCaps)
+	if _, err := tx.ExecContext(ctx, `INSERT INTO evaluation_worker_events (id, worker_id, event_type, idempotency_key, actor_id, payload) VALUES ($1,$2,'registered',$3,$4,jsonb_build_object('token_fingerprint',$5,'worker_kind',$6,'name',$7))`, uuid.New(), worker.ID, idempotencyKey, actorID, worker.TokenFingerprint, worker.WorkerKind, worker.Name); err != nil {
+		return nil, fmt.Errorf("audit radar worker registration: %w", err)
+	}
+	if err := tx.Commit(); err != nil {
+		return nil, err
+	}
+	return worker, nil
+}
+
+func (r *radarGovernanceRepository) RotateRadarWorkerToken(ctx context.Context, workerID uuid.UUID, token string, actorID int64, idempotencyKey string) (*service.RadarWorkerRecord, error) {
+	if err := r.valid(); err != nil {
+		return nil, err
+	}
+	token = strings.TrimSpace(token)
+	idempotencyKey = strings.TrimSpace(idempotencyKey)
+	if workerID == uuid.Nil || token == "" || len(idempotencyKey) != 64 {
+		return nil, infraerrors.New(http.StatusBadRequest, "WORKER_INVALID", "worker, token and 64 character idempotency key are required")
+	}
+	tx, err := beginRadarWriterTx(ctx, r.db, "api")
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = tx.Rollback() }()
+	if replay, found, err := loadRadarWorkerEventReplay(ctx, tx, idempotencyKey, workerID, "token_rotated", "token_fingerprint", workerFingerprint(token)); err != nil {
+		return nil, err
+	} else if found {
+		return replay, tx.Commit()
+	}
+	var tokenOwner uuid.UUID
+	if err := tx.QueryRowContext(ctx, `SELECT id FROM evaluation_workers WHERE token_hash = $1 FOR UPDATE`, hashString(token)).Scan(&tokenOwner); err == nil {
+		return nil, infraerrors.Conflict("WORKER_TOKEN_CONFLICT", "worker token is already registered")
+	} else if !errors.Is(err, sql.ErrNoRows) {
+		return nil, fmt.Errorf("check radar worker token: %w", err)
+	}
+	worker, err := scanRadarWorker(tx.QueryRowContext(ctx, `UPDATE evaluation_workers SET token_hash=$1, token_fingerprint=$2, token_epoch=token_epoch+1, updated_at=NOW() WHERE id=$3 AND status='active' RETURNING id, name, worker_kind, status, claim_mode, token_epoch, token_fingerprint, region, image_digest, capabilities, max_concurrency, created_at, updated_at`, hashString(token), workerFingerprint(token), workerID))
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, infraerrors.New(http.StatusConflict, "WORKER_UNAVAILABLE", "worker is unavailable")
+		}
+		return nil, err
+	}
+	if _, err := tx.ExecContext(ctx, `INSERT INTO evaluation_worker_events (id, worker_id, event_type, idempotency_key, actor_id, payload) VALUES ($1,$2,'token_rotated',$3,$4,jsonb_build_object('token_fingerprint',$5,'token_epoch',$6))`, uuid.New(), workerID, idempotencyKey, actorID, worker.TokenFingerprint, worker.TokenEpoch); err != nil {
+		return nil, err
+	}
+	if err := tx.Commit(); err != nil {
+		return nil, err
+	}
+	return worker, nil
+}
+
+func (r *radarGovernanceRepository) SetRadarWorkerClaimMode(ctx context.Context, workerID uuid.UUID, mode service.WorkerClaimMode, actorID int64, idempotencyKey string) (*service.RadarWorkerRecord, error) {
+	if err := r.valid(); err != nil {
+		return nil, err
+	}
+	if workerID == uuid.Nil || len(strings.TrimSpace(idempotencyKey)) != 64 {
+		return nil, infraerrors.New(http.StatusBadRequest, "WORKER_INVALID", "worker and 64 character idempotency key are required")
+	}
+	idempotencyKey = strings.TrimSpace(idempotencyKey)
+	eventType := map[service.WorkerClaimMode]string{service.WorkerClaimsOpen: "claims_resumed", service.WorkerClaimsPaused: "claims_paused", service.WorkerClaimsDraining: "draining"}[mode]
+	if eventType == "" {
+		return nil, infraerrors.New(http.StatusBadRequest, "WORKER_INVALID", "unsupported worker claim mode")
+	}
+	tx, err := beginRadarWriterTx(ctx, r.db, "api")
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = tx.Rollback() }()
+	if replay, found, err := loadRadarWorkerEventReplay(ctx, tx, idempotencyKey, workerID, eventType, "claim_mode", string(mode)); err != nil {
+		return nil, err
+	} else if found {
+		return replay, tx.Commit()
+	}
+	worker, err := scanRadarWorker(tx.QueryRowContext(ctx, `UPDATE evaluation_workers SET claim_mode=$1, drain_requested_at=CASE WHEN $1='draining' THEN COALESCE(drain_requested_at,NOW()) ELSE NULL END, updated_at=NOW() WHERE id=$2 AND status='active' RETURNING id, name, worker_kind, status, claim_mode, token_epoch, token_fingerprint, region, image_digest, capabilities, max_concurrency, created_at, updated_at`, mode, workerID))
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, infraerrors.New(http.StatusConflict, "WORKER_UNAVAILABLE", "worker is unavailable")
+		}
+		return nil, err
+	}
+	if _, err := tx.ExecContext(ctx, `INSERT INTO evaluation_worker_events (id, worker_id, event_type, idempotency_key, actor_id, payload) VALUES ($1,$2,$3,$4,$5,jsonb_build_object('claim_mode',$6))`, uuid.New(), workerID, eventType, idempotencyKey, actorID, mode); err != nil {
+		return nil, err
+	}
+	if mode == service.WorkerClaimsDraining {
+		var err error
+		worker.ActiveLeaseCount, err = checkRadarWorkerDrainCompletionTx(ctx, tx, workerID, actorID, idempotencyKey)
+		if err != nil {
+			return nil, err
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return nil, err
+	}
+	return worker, nil
+}
+
+func (r *radarGovernanceRepository) DisableRadarWorker(ctx context.Context, workerID uuid.UUID, actorID int64, idempotencyKey string) (*service.RadarWorkerRecord, error) {
+	if err := r.valid(); err != nil {
+		return nil, err
+	}
+	if workerID == uuid.Nil || len(strings.TrimSpace(idempotencyKey)) != 64 {
+		return nil, infraerrors.New(http.StatusBadRequest, "WORKER_INVALID", "worker and 64 character idempotency key are required")
+	}
+	tx, err := beginRadarWriterTx(ctx, r.db, "api")
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = tx.Rollback() }()
+	idempotencyKey = strings.TrimSpace(idempotencyKey)
+	if replay, found, err := loadRadarWorkerEventReplay(ctx, tx, idempotencyKey, workerID, "disabled", "", ""); err != nil {
+		return nil, err
+	} else if found {
+		return replay, tx.Commit()
+	}
+	worker, err := scanRadarWorker(tx.QueryRowContext(ctx, `UPDATE evaluation_workers SET status='disabled', disabled_at=NOW(), updated_at=NOW() WHERE id=$1 RETURNING id, name, worker_kind, status, claim_mode, token_epoch, token_fingerprint, region, image_digest, capabilities, max_concurrency, created_at, updated_at`, workerID))
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, infraerrors.New(http.StatusConflict, "WORKER_UNAVAILABLE", "worker is unavailable")
+		}
+		return nil, err
+	}
+	if _, err := tx.ExecContext(ctx, `INSERT INTO evaluation_worker_events (id, worker_id, event_type, idempotency_key, actor_id, payload) VALUES ($1,$2,'disabled',$3,$4,jsonb_build_object('token_fingerprint',$5))`, uuid.New(), workerID, idempotencyKey, actorID, worker.TokenFingerprint); err != nil {
+		return nil, err
+	}
+	if err := tx.Commit(); err != nil {
+		return nil, err
+	}
+	return worker, nil
 }
 
 func (r *radarGovernanceRepository) ListDatasets(ctx context.Context) ([]service.RadarDatasetProjection, error) {
@@ -713,3 +1848,5 @@ func (r *radarGovernanceRepository) ListDatasets(ctx context.Context) ([]service
 
 // Avoid an accidental unused import when a build tags out pq in downstream tools.
 var _ = strings.TrimSpace
+
+var _ service.RadarWorkerRepository = (*radarGovernanceRepository)(nil)

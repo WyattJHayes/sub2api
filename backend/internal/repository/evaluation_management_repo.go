@@ -118,7 +118,7 @@ func (r *radarGovernanceRepository) CreateDataset(ctx context.Context, input ser
 	if err != nil {
 		return nil, err
 	}
-	tx, err := beginEvaluationWriterTx(ctx, r.db, defaultEvaluationWriterIdentity("control"))
+	tx, err := beginRadarWriterTx(ctx, r.db, "api")
 	if err != nil {
 		return nil, fmt.Errorf("begin evaluation dataset creation: %w", err)
 	}
@@ -166,17 +166,15 @@ func (r *radarGovernanceRepository) PublishDataset(ctx context.Context, datasetI
 		return nil, errors.New("evaluation dataset and actor are required")
 	}
 	record := &service.RadarDatasetRecord{ID: datasetID}
-	err := WithEvaluationWriterTx(ctx, r.db, defaultEvaluationWriterIdentity("control"), func(tx *sql.Tx) error {
-		return tx.QueryRowContext(ctx, `
+	err := r.db.QueryRowContext(ctx, `
 		UPDATE evaluation_dataset_versions d
 		SET status = 'published', published_at = NOW(), updated_at = NOW()
 		WHERE d.id = $1 AND d.status = 'draft'
 		RETURNING d.dataset_key, d.version, d.manifest_sha256, d.source_type, d.status,
 		          (SELECT COUNT(*) FROM evaluation_cases c WHERE c.dataset_version_id = d.id),
 		          d.created_by, d.published_at, d.created_at`, datasetID).Scan(
-			&record.DatasetKey, &record.Version, &record.ManifestSHA256, &record.SourceType,
-			&record.Status, &record.CaseCount, &record.CreatedBy, &record.PublishedAt, &record.CreatedAt)
-	})
+		&record.DatasetKey, &record.Version, &record.ManifestSHA256, &record.SourceType,
+		&record.Status, &record.CaseCount, &record.CreatedBy, &record.PublishedAt, &record.CreatedAt)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, sql.ErrNoRows
 	}
@@ -200,8 +198,7 @@ func (r *radarGovernanceRepository) CreatePlan(ctx context.Context, input servic
 		return nil, err
 	}
 	record := &service.RadarPlanRecord{ID: uuid.New()}
-	err := WithEvaluationWriterTx(ctx, r.db, defaultEvaluationWriterIdentity("control"), func(tx *sql.Tx) error {
-		return tx.QueryRowContext(ctx, `
+	err := r.db.QueryRowContext(ctx, `
 		INSERT INTO evaluation_plans (
 			id, name, dataset_version_id, gateway_api_key_id, trigger_type, model_matrix,
 			max_run_cost, daily_cost_limit, max_concurrency, created_by
@@ -220,12 +217,11 @@ func (r *radarGovernanceRepository) CreatePlan(ctx context.Context, input servic
 		RETURNING id, name, dataset_version_id, gateway_api_key_id, trigger_type,
 		          model_matrix, max_run_cost, daily_cost_limit, max_concurrency,
 		          enabled, created_by, created_at`, record.ID, strings.TrimSpace(input.Name),
-			input.DatasetVersionID, input.GatewayAPIKeyID, input.TriggerType, string(input.ModelMatrix),
-			input.MaxRunCost, input.DailyCostLimit, input.MaxConcurrency, input.CreatedBy).Scan(
-			&record.ID, &record.Name, &record.DatasetVersionID, &record.GatewayAPIKeyID,
-			&record.TriggerType, &record.ModelMatrix, &record.MaxRunCost, &record.DailyCostLimit,
-			&record.MaxConcurrency, &record.Enabled, &record.CreatedBy, &record.CreatedAt)
-	})
+		input.DatasetVersionID, input.GatewayAPIKeyID, input.TriggerType, string(input.ModelMatrix),
+		input.MaxRunCost, input.DailyCostLimit, input.MaxConcurrency, input.CreatedBy).Scan(
+		&record.ID, &record.Name, &record.DatasetVersionID, &record.GatewayAPIKeyID,
+		&record.TriggerType, &record.ModelMatrix, &record.MaxRunCost, &record.DailyCostLimit,
+		&record.MaxConcurrency, &record.Enabled, &record.CreatedBy, &record.CreatedAt)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, errors.New("published dataset and usable dedicated evaluation API key are required")
 	}

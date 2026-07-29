@@ -3,19 +3,13 @@ package service
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"time"
 
-	infraerrors "github.com/Wei-Shaw/sub2api/internal/pkg/errors"
 	"github.com/google/uuid"
 )
 
-var (
-	ErrRadarWorkerConflict            = infraerrors.Conflict("RADAR_WORKER_CONFLICT", "worker identity conflicts with an existing worker")
-	ErrRadarWorkerIdempotencyConflict = infraerrors.Conflict("RADAR_WORKER_IDEMPOTENCY_CONFLICT", "worker idempotency key was reused with a different request")
-	ErrRadarWorkerStateConflict       = infraerrors.Conflict("RADAR_WORKER_STATE_CONFLICT", "worker is not in a state that accepts this action")
-	ErrRadarRunIdempotencyConflict    = infraerrors.Conflict("RADAR_RUN_IDEMPOTENCY_CONFLICT", "run idempotency key was reused with a different request")
-	ErrRadarRunStateConflict          = infraerrors.Conflict("RADAR_RUN_STATE_CONFLICT", "run is not in a state that accepts this action")
-)
+var ErrGovernanceHeadConflict = errors.New("evaluation governance head changed")
 
 // RadarGovernanceRepository is the durable control-plane contract for Radar
 // governance. Implementations must keep decisions and alert transitions
@@ -28,12 +22,6 @@ type RadarGovernanceRepository interface {
 	PublishDataset(ctx context.Context, datasetID uuid.UUID, actorID int64) (*RadarDatasetRecord, error)
 	CreatePlan(ctx context.Context, input CreateRadarPlanInput) (*RadarPlanRecord, error)
 	CreateRunWithMatrix(ctx context.Context, input CreateRunInput) (*EvaluationRun, error)
-	RegisterWorker(ctx context.Context, input RadarWorkerRegistrationInput) (*RadarWorkerRecord, error)
-	RotateWorkerToken(ctx context.Context, input RadarWorkerTokenRotationInput) (*RadarWorkerRecord, error)
-	PauseWorkerClaims(ctx context.Context, input RadarWorkerActionInput) (*RadarWorkerActionResult, error)
-	ResumeWorkerClaims(ctx context.Context, input RadarWorkerActionInput) (*RadarWorkerActionResult, error)
-	DrainWorker(ctx context.Context, input RadarWorkerActionInput) (*RadarWorkerActionResult, error)
-	DisableWorker(ctx context.Context, input RadarWorkerActionInput) (*RadarWorkerActionResult, error)
 
 	CreateRoleBinding(ctx context.Context, input RadarRoleBindingInput) (*RadarRoleBinding, error)
 	DisableRoleBinding(ctx context.Context, id uuid.UUID, actorID int64) error
@@ -45,8 +33,15 @@ type RadarGovernanceRepository interface {
 	GetBaseline(ctx context.Context, id uuid.UUID) (*RadarBaseline, error)
 
 	CreateGatePolicy(ctx context.Context, input RadarGatePolicyInput) (*RadarGatePolicyRecord, error)
+	CreateReleaseSubject(ctx context.Context, input ReleaseSubjectInput) (*ReleaseSubjectRecord, error)
+	ActivateReleaseSubject(ctx context.Context, input ReleaseSubjectActivationInput) (*ReleaseSubjectEvent, error)
+	RevokeReleaseSubject(ctx context.Context, subjectID uuid.UUID, actorID int64) (*ReleaseSubjectEvent, error)
+	ActivateGatePolicy(ctx context.Context, input RadarGatePolicyActivationInput) (*RadarGatePolicyHead, error)
+	ActivateBaselineHead(ctx context.Context, input RadarBaselineActivationInput) (*RadarBaselineHead, error)
 	RecordGateDecision(ctx context.Context, input RadarGateDecisionInput) (*RadarGateDecisionRecord, error)
 	WaiveGateDecision(ctx context.Context, input RadarGateWaiverInput) (*RadarGateWaiverRecord, error)
+	RotateEvidenceSigningKey(ctx context.Context, input RotateEvidenceSigningKeyInput) (*EvidenceSigningKeyRecord, error)
+	TransitionEvidenceSigningKey(ctx context.Context, input TransitionEvidenceSigningKeyInput) (*EvidenceSigningKeyRecord, error)
 
 	ObserveAlert(ctx context.Context, input RadarAlertObservationInput) (*RadarAlertRecord, error)
 	AcknowledgeAlert(ctx context.Context, alertID uuid.UUID, actorID int64) error
@@ -56,31 +51,46 @@ type RadarGovernanceRepository interface {
 	GetAlert(ctx context.Context, id uuid.UUID) (*RadarAlertRecord, error)
 }
 
-type RadarRunControlRepository interface {
-	PauseRun(ctx context.Context, input RadarRunActionInput) (*RadarRunActionResult, error)
-	ResumeRun(ctx context.Context, input RadarRunActionInput) (*RadarRunActionResult, error)
-	CancelRun(ctx context.Context, input RadarRunActionInput) (*RadarRunActionResult, error)
-	FenceRun(ctx context.Context, input RadarRunActionInput) (*RadarRunActionResult, error)
+type WorkerClaimMode string
+
+const (
+	WorkerClaimsOpen     WorkerClaimMode = "open"
+	WorkerClaimsPaused   WorkerClaimMode = "paused"
+	WorkerClaimsDraining WorkerClaimMode = "draining"
+)
+
+type RadarWorkerRegistrationInput struct {
+	Name           string
+	WorkerKind     string
+	Region         string
+	ImageDigest    string
+	Capabilities   []string
+	MaxConcurrency int
+	Token          string
 }
 
-type RadarRunActionInput struct {
-	RunID          uuid.UUID
-	Reason         string
-	ActorID        int64
-	IdempotencyKey string
+type RadarWorkerRecord struct {
+	ID               uuid.UUID       `json:"id"`
+	Name             string          `json:"name"`
+	WorkerKind       string          `json:"worker_kind"`
+	Region           string          `json:"region,omitempty"`
+	ImageDigest      string          `json:"image_digest,omitempty"`
+	Capabilities     []string        `json:"capabilities,omitempty"`
+	MaxConcurrency   int             `json:"max_concurrency"`
+	Status           string          `json:"status"`
+	ClaimMode        WorkerClaimMode `json:"claim_mode"`
+	TokenEpoch       int64           `json:"token_epoch"`
+	TokenFingerprint string          `json:"token_fingerprint"`
+	ActiveLeaseCount int             `json:"active_lease_count,omitempty"`
+	CreatedAt        time.Time       `json:"created_at"`
+	UpdatedAt        time.Time       `json:"updated_at"`
 }
 
-type RadarRunActionResult struct {
-	RunID             uuid.UUID      `json:"run_id"`
-	FromStatus        RunStatus      `json:"from_status"`
-	ToStatus          RunStatus      `json:"to_status"`
-	PreviousEpoch     int64          `json:"previous_epoch"`
-	CurrentEpoch      int64          `json:"current_epoch"`
-	AffectedWorkCount int            `json:"affected_work_count"`
-	ReplacementIDs    []uuid.UUID    `json:"replacement_ids,omitempty"`
-	EventID           uuid.UUID      `json:"event_id"`
-	Idempotent        bool           `json:"idempotent"`
-	Run               *EvaluationRun `json:"run,omitempty"`
+type RadarWorkerRepository interface {
+	RegisterRadarWorker(ctx context.Context, input RadarWorkerRegistrationInput, actorID int64, idempotencyKey string) (*RadarWorkerRecord, error)
+	RotateRadarWorkerToken(ctx context.Context, workerID uuid.UUID, token string, actorID int64, idempotencyKey string) (*RadarWorkerRecord, error)
+	SetRadarWorkerClaimMode(ctx context.Context, workerID uuid.UUID, mode WorkerClaimMode, actorID int64, idempotencyKey string) (*RadarWorkerRecord, error)
+	DisableRadarWorker(ctx context.Context, workerID uuid.UUID, actorID int64, idempotencyKey string) (*RadarWorkerRecord, error)
 }
 
 type RadarEvaluationKeyRecord struct {
@@ -119,16 +129,14 @@ type RadarModelHealthProjection struct {
 }
 
 type RadarRunProjection struct {
-	ID                    uuid.UUID  `json:"id"`
-	PlanID                uuid.UUID  `json:"plan_id"`
-	TriggerSource         string     `json:"trigger_source"`
-	Status                string     `json:"status"`
-	CreatedAt             time.Time  `json:"created_at"`
-	StartedAt             *time.Time `json:"started_at,omitempty"`
-	FinishedAt            *time.Time `json:"finished_at,omitempty"`
-	ContractStatus        string     `json:"contract_status"`
-	RequestManifestID     *uuid.UUID `json:"request_manifest_id,omitempty"`
-	RequestManifestSHA256 string     `json:"request_manifest_sha256,omitempty"`
+	ID             uuid.UUID  `json:"id"`
+	PlanID         uuid.UUID  `json:"plan_id"`
+	TriggerSource  string     `json:"trigger_source"`
+	Status         string     `json:"status"`
+	ContractStatus string     `json:"contract_status"`
+	CreatedAt      time.Time  `json:"created_at"`
+	StartedAt      *time.Time `json:"started_at,omitempty"`
+	FinishedAt     *time.Time `json:"finished_at,omitempty"`
 }
 
 type RadarAlertProjection struct {
@@ -155,60 +163,8 @@ type RadarWorkerProjection struct {
 	Name            string     `json:"name"`
 	WorkerKind      string     `json:"worker_kind"`
 	Status          string     `json:"status"`
-	ClaimMode       string     `json:"claim_mode"`
-	Region          string     `json:"region,omitempty"`
-	ImageDigest     string     `json:"image_digest,omitempty"`
 	LastHeartbeatAt *time.Time `json:"last_heartbeat_at,omitempty"`
 	Capabilities    []string   `json:"capabilities,omitempty"`
-}
-
-type RadarWorkerRegistrationInput struct {
-	Name           string
-	WorkerKind     string
-	Region         string
-	ImageDigest    string
-	Capabilities   []string
-	MaxConcurrency int
-	Token          string
-	ActorID        int64
-	IdempotencyKey string
-}
-
-type RadarWorkerTokenRotationInput struct {
-	WorkerID       uuid.UUID
-	Token          string
-	ActorID        int64
-	IdempotencyKey string
-}
-
-type RadarWorkerActionInput struct {
-	WorkerID       uuid.UUID
-	Reason         string
-	ActorID        int64
-	IdempotencyKey string
-}
-
-type RadarWorkerRecord struct {
-	ID               uuid.UUID  `json:"id"`
-	Name             string     `json:"name"`
-	WorkerKind       string     `json:"worker_kind"`
-	Region           string     `json:"region"`
-	ImageDigest      string     `json:"image_digest"`
-	Status           string     `json:"status"`
-	ClaimMode        string     `json:"claim_mode"`
-	Capabilities     []string   `json:"capabilities,omitempty"`
-	MaxConcurrency   int        `json:"max_concurrency"`
-	LastHeartbeatAt  *time.Time `json:"last_heartbeat_at,omitempty"`
-	TokenFingerprint string     `json:"token_fingerprint"`
-}
-
-type RadarWorkerActionResult struct {
-	Worker            *RadarWorkerRecord `json:"worker"`
-	EventID           uuid.UUID          `json:"event_id"`
-	PreviousClaimMode string             `json:"previous_claim_mode"`
-	ClaimMode         string             `json:"claim_mode"`
-	ActiveLeaseCount  int                `json:"active_lease_count"`
-	Idempotent        bool               `json:"idempotent"`
 }
 
 type RadarDatasetProjection struct {
@@ -268,6 +224,8 @@ type RadarBaselineApprovalInput struct {
 	ApproverID   int64
 	Role         RadarRole
 	EvidenceHash string
+	EffectiveAt  time.Time
+	ExpiresAt    time.Time
 }
 
 type RadarBaselineApproval struct {
@@ -276,6 +234,8 @@ type RadarBaselineApproval struct {
 	ApproverID   int64
 	Role         RadarRole
 	EvidenceHash string
+	EffectiveAt  time.Time
+	ExpiresAt    time.Time
 	CreatedAt    time.Time
 }
 
@@ -284,6 +244,7 @@ type RadarGatePolicyInput struct {
 	Policy              json.RawMessage
 	PolicyHash          string
 	EnforcementStartsAt time.Time
+	ApprovalExpiresAt   time.Time
 	CreatedBy           int64
 }
 
@@ -298,26 +259,100 @@ type RadarGatePolicyRecord struct {
 	RetiredAt           *time.Time
 }
 
-type RadarGateDecisionInput struct {
+type ReleaseSubjectInput struct {
 	RunID        uuid.UUID
-	BaselineID   *uuid.UUID
-	PolicyID     uuid.UUID
-	Status       RadarGateDecisionStatus
-	RuleIDs      []string
-	Evidence     json.RawMessage
-	EvidenceHash string
+	Subject      ReleaseSubject
+	ExpectedHash string
+}
+
+type ReleaseSubjectRecord struct {
+	ID          uuid.UUID      `json:"id"`
+	RunID       uuid.UUID      `json:"run_id"`
+	SubjectHash string         `json:"subject_hash"`
+	Subject     ReleaseSubject `json:"subject"`
+	CreatedAt   time.Time      `json:"created_at"`
+}
+
+type ReleaseSubjectActivationInput struct {
+	ReleaseSubjectID uuid.UUID
+	ActorID          int64
+	EffectiveAt      time.Time
+	ExpiresAt        time.Time
+}
+
+type ReleaseSubjectEvent struct {
+	ID               uuid.UUID  `json:"id"`
+	ReleaseSubjectID uuid.UUID  `json:"release_subject_id"`
+	EventType        string     `json:"event_type"`
+	ActorID          int64      `json:"actor_id"`
+	EffectiveAt      time.Time  `json:"effective_at"`
+	ExpiresAt        *time.Time `json:"expires_at,omitempty"`
+	CreatedAt        time.Time  `json:"created_at"`
+}
+
+type RadarGovernanceScope struct {
+	Environment string `json:"environment"`
+	ScopeType   string `json:"scope_type"`
+	ScopeID     string `json:"scope_id"`
+}
+
+type RadarGatePolicyActivationInput struct {
+	PolicyID         uuid.UUID
+	Scope            RadarGovernanceScope
+	ActorID          int64
+	ExpectedPolicyID *uuid.UUID
+}
+
+type RadarGatePolicyHead struct {
+	Scope     RadarGovernanceScope `json:"scope"`
+	PolicyID  uuid.UUID            `json:"policy_id"`
+	EventID   uuid.UUID            `json:"event_id"`
+	UpdatedAt time.Time            `json:"updated_at"`
+}
+
+type RadarBaselineActivationInput struct {
+	BaselineID         uuid.UUID
+	Scope              RadarGovernanceScope
+	ActorID            int64
+	ExpectedBaselineID *uuid.UUID
+}
+
+type RadarBaselineHead struct {
+	Scope      RadarGovernanceScope `json:"scope"`
+	ModelRoute string               `json:"model_route"`
+	BaselineID uuid.UUID            `json:"baseline_id"`
+	EventID    uuid.UUID            `json:"event_id"`
+	UpdatedAt  time.Time            `json:"updated_at"`
+}
+
+type RadarGateDecisionInput struct {
+	RunID                uuid.UUID
+	BaselineID           *uuid.UUID
+	PolicyID             uuid.UUID
+	Status               RadarGateDecisionStatus
+	RuleIDs              []string
+	Evidence             json.RawMessage
+	EvidenceHash         string
+	ReleaseSubjectHash   string
+	SourceWatermark      json.RawMessage
+	SupersedesDecisionID *uuid.UUID
+	CauseSetHash         string
 }
 
 type RadarGateDecisionRecord struct {
-	ID           uuid.UUID
-	RunID        uuid.UUID
-	BaselineID   *uuid.UUID
-	PolicyID     uuid.UUID
-	Status       RadarGateDecisionStatus
-	RuleIDs      []string
-	Evidence     json.RawMessage
-	EvidenceHash string
-	CreatedAt    time.Time
+	ID                   uuid.UUID
+	RunID                uuid.UUID
+	BaselineID           *uuid.UUID
+	PolicyID             uuid.UUID
+	Status               RadarGateDecisionStatus
+	RuleIDs              []string
+	Evidence             json.RawMessage
+	EvidenceHash         string
+	ReleaseSubjectHash   string
+	SourceWatermark      json.RawMessage
+	SupersedesDecisionID *uuid.UUID
+	CauseSetHash         string
+	CreatedAt            time.Time
 }
 
 type RadarGateWaiverInput struct {

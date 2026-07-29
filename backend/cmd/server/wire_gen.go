@@ -304,7 +304,7 @@ func initializeApplication(buildInfo handler.BuildInfo) (*Application, error) {
 	jwtAuthMiddleware := middleware.NewJWTAuthMiddleware(authService, userService, settingService, auditLogService)
 	adminAuthMiddleware := middleware.NewAdminAuthMiddleware(authService, userService, settingService, auditLogService)
 	apiKeyAuthMiddleware := middleware.NewAPIKeyAuthMiddleware(apiKeyService, subscriptionService, configConfig)
-	evaluationEvidenceRepository := repository.NewEvaluationRouteEvidenceRepository(db)
+	evaluationEvidenceRepository := repository.ProvideEvaluationRouteEvidenceRepository(db, configConfig)
 	evaluationEvidenceMiddleware := middleware.NewEvaluationEvidenceMiddleware(evaluationEvidenceRepository)
 	auditLogMiddleware := middleware.NewAuditLogMiddleware(auditLogService)
 	stepUpAuthMiddleware := middleware.NewStepUpAuthMiddleware(totpService, userService, settingService)

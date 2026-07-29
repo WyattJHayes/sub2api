@@ -111,6 +111,9 @@ func usageRecordContext(parent context.Context, base context.Context) context.Co
 	if repo, ok := service.EvaluationEvidenceRepositoryFromContext(parent); ok {
 		base = service.WithEvaluationEvidenceRepository(base, repo)
 	}
+	if tracker, ok := service.RouteEvidenceRevisionTrackerFromContext(parent); ok {
+		base = service.WithRouteEvidenceRevisionTracker(base, tracker)
+	}
 	return base
 }
 

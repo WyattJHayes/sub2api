@@ -11,10 +11,96 @@ import (
 	"time"
 
 	"github.com/DATA-DOG/go-sqlmock"
+	"github.com/Wei-Shaw/sub2api/internal/config"
 	"github.com/Wei-Shaw/sub2api/internal/service"
+	"github.com/google/uuid"
 	"github.com/shopspring/decimal"
 	"github.com/stretchr/testify/require"
 )
+
+func TestNewEvaluationRouteEvidenceRepositoryAcceptsSemanticsVerifierRegistry(t *testing.T) {
+	registry := service.NewRequestSemanticsVerifierRegistry()
+	repo := NewEvaluationRouteEvidenceRepositoryWithVerifiers(nil, registry)
+	trusted, ok := repo.(*evaluationRouteEvidenceRepository)
+	require.True(t, ok)
+	require.Same(t, registry, trusted.semanticsVerifiers)
+}
+
+func TestProvideEvaluationRouteEvidenceRepositoryResolvesVersionedRotationKey(t *testing.T) {
+	t.Setenv("RADAR_EVIDENCE_HASH_KEY_202607", strings.Repeat("v", 32))
+	repo := ProvideEvaluationRouteEvidenceRepository(nil, &config.Config{Radar: config.RadarConfig{
+		HashingSecret: strings.Repeat("d", 32),
+	}}).(*evaluationRouteEvidenceRepository)
+
+	key, err := repo.evidenceKeys.ResolveEvidenceSigningKey(context.Background(), "env:RADAR_EVIDENCE_HASH_KEY_202607")
+
+	require.NoError(t, err)
+	require.Equal(t, []byte(strings.Repeat("v", 32)), key)
+}
+
+func TestProvideEvaluationRouteEvidenceRepositoryRejectsUntrustedEnvironmentReference(t *testing.T) {
+	t.Setenv("DATABASE_URL", strings.Repeat("s", 32))
+	repo := ProvideEvaluationRouteEvidenceRepository(nil, &config.Config{Radar: config.RadarConfig{
+		HashingSecret: strings.Repeat("d", 32),
+	}}).(*evaluationRouteEvidenceRepository)
+
+	_, err := repo.evidenceKeys.ResolveEvidenceSigningKey(context.Background(), "env:DATABASE_URL")
+
+	require.ErrorIs(t, err, service.ErrEvidenceSigningKeyUnavailable)
+}
+
+func TestLockAndValidateCreateOpenRejectsSlotAtMaxOccurrences(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = db.Close() })
+
+	semantics, err := service.DeriveSingleRequestSemantics([]byte(`{"input":"ping"}`))
+	require.NoError(t, err)
+	canonicalSemantics, err := service.CanonicalizeRequestSemantics(semantics)
+	require.NoError(t, err)
+	manifest, err := service.CanonicalizeRequestManifest(service.RequestManifest{
+		SchemaVersion: service.RequestManifestSchemaV1, InteractionType: "single",
+		OrdinalPolicy: "exact", MinRequests: 1, MaxRequests: 1,
+		RequestSlots: []service.RequestSlot{{
+			SlotID: "request-0", OrdinalMin: 0, OrdinalMax: 0, Phase: "primary",
+			Required: true, SemanticsMode: "exact", MaxOccurrences: 1,
+			ExpectedRequestSemanticsSHA256: canonicalSemantics.SHA256,
+			ToolSchemaSHA256:               semantics.ToolSchemaHash, AllowedToolSetSHA256: semantics.ProvidedToolSetHash,
+		}},
+	})
+	require.NoError(t, err)
+	runID := uuid.MustParse(testRunID)
+	sampleID := uuid.MustParse(testSampleID)
+	assignmentID := uuid.New()
+	manifestID := uuid.New()
+
+	mock.ExpectBegin()
+	tx, err := db.Begin()
+	require.NoError(t, err)
+	mock.ExpectQuery("SELECT r.status, r.control_epoch").
+		WithArgs(runID, sampleID, testRouteTraceID, int64(41)).
+		WillReturnRows(sqlmock.NewRows([]string{
+			"status", "control_epoch", "route_profile_version", "assignment_id", "assignment_status", "lease_epoch",
+			"request_manifest_id", "request_manifest_sha256", "canonical_manifest_bytes", "canonical_spec",
+		}).AddRow("running", int64(3), "route-v42", assignmentID, "leased", int64(3),
+			manifestID, manifest.SHA256, manifest.Bytes, []byte(`{"expected_model_alias":"route-a","route_profile_version":"route-v42"}`)))
+	mock.ExpectQuery("SELECT COUNT\\(\\*\\) FROM evaluation_route_evidence").
+		WithArgs(assignmentID, "request-0").WillReturnRows(sqlmock.NewRows([]string{"count"}).AddRow(1))
+
+	repo := &evaluationRouteEvidenceRepository{db: db, semanticsVerifiers: service.NewRequestSemanticsVerifierRegistry()}
+	_, err = repo.lockAndValidateCreateOpen(context.Background(), tx, service.CreateOpenRouteEvidenceInput{
+		RouteTraceID: testRouteTraceID, RunID: testRunID, SampleID: testSampleID, APIKeyID: 41,
+		RequestID: "request-1", RequestedModel: "route-a", RouteProfileVersion: "route-v42",
+		RequestOrdinal: 0, Semantics: semantics, GatewayServiceIdentity: "sub2api-gateway",
+		GatewayImageDigest: "sub2api-gateway@sha256:" + strings.Repeat("a", 64),
+		Region:             "default", StartedAt: time.Date(2026, 7, 28, 1, 0, 0, 0, time.UTC),
+	})
+	require.ErrorIs(t, err, service.ErrRequestSemanticsMismatch)
+
+	mock.ExpectRollback()
+	require.NoError(t, tx.Rollback())
+	require.NoError(t, mock.ExpectationsWereMet())
+}
 
 const (
 	testRouteTraceID = "trace-server-generated"
