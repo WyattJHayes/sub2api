@@ -633,4 +633,10 @@ G2 失败不会自动回退当前远端版本。发布流程保留旧镜像摘�
 5. 精调训练集成，包含数据服务、训练编排、GPU 队列、checkpoint、模型仓库和自动 Radar Gate。
 6. Agent 与插件评测，包含工具协议、权限沙箱、Coding Plan 任务集和可执行评分。
 
-工作包 1 是其余包的可信证据基础。工作包 2 在企业客户开放前完成。工作包 3 和 4 可以在工作包 1 通过 G2 后并行。工作包 5 与 6 分别拥有独立规格和实施计划，通过统一 Case、Evidence、Score 与 Gate 合同接入 Radar。
+工作包 1 是其余包的可信证据基础。工作包 2 在企业客户开放前完成。工作包 3 和 4 可以在工作包 1 通过 G2 后并行。工作包 4、5 与 6 分别拥有独立规格，实施计划在对应规格完成评审后创建，通过统一 Case、Evidence、Score 与 Gate 合同接入 Radar。
+
+独立规格：
+
+1. [性能、可靠性、混沌与容灾](superpowers/specs/2026-07-29-radar-performance-reliability-design.md)
+2. [精调训练集成](superpowers/specs/2026-07-29-radar-finetune-integration-design.md)
+3. [Agent、插件与 Coding Plan 评测](superpowers/specs/2026-07-29-radar-agent-plugin-evaluation-design.md)

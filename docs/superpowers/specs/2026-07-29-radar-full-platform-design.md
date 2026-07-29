@@ -7,6 +7,9 @@
 - 配套规格：
   - [模型质量雷达设计](2026-07-25-sub2api-model-quality-radar-design.md)
   - [可信执行核心 G1 合同](2026-07-27-radar-trusted-execution-contracts-design.md)
+  - [性能、可靠性、混沌与容灾设计](2026-07-29-radar-performance-reliability-design.md)
+  - [精调训练集成设计](2026-07-29-radar-finetune-integration-design.md)
+  - [Agent、插件与 Coding Plan 评测设计](2026-07-29-radar-agent-plugin-evaluation-design.md)
   - [生产运行手册](../../radar-production-runbook.md)
 
 ## 1. 文档定位
@@ -462,3 +465,10 @@ release_subject_hash + decision_id + source_watermark + actor_id + expires_at
 6. 30-pair deterministic acceptance、生产 Gate acceptance 和 recovery drill 都可被独立复核。
 7. 后续实施计划只需引用本总包和配套规格，不需要重新解释证据语义。
 
+配套工作包规格的责任边界如下：
+
+| 工作包 | 配套规格 | 主要出口 |
+| --- | --- | --- |
+| 性能、可靠性、混沌与容灾 | [独立规格](2026-07-29-radar-performance-reliability-design.md) | Load Plan、Reliability Snapshot、Fault Experiment、RPO/RTO 报告 |
+| 精调训练集成 | [独立规格](2026-07-29-radar-finetune-integration-design.md) | Dataset、Training、Checkpoint、Model Artifact、自动 Radar Run |
+| Agent、插件与 Coding Plan | [独立规格](2026-07-29-radar-agent-plugin-evaluation-design.md) | Tool Manifest、Sandbox Attestation、Tool Evidence、可执行评分 |
