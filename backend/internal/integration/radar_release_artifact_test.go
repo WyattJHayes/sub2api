@@ -192,24 +192,13 @@ func TestRadarStagingComposeRequiresImmutableBuildIdentity(t *testing.T) {
 }
 
 func TestRadarWorkerDockerfileReplacesInheritedSourceTree(t *testing.T) {
-	root := filepath.Clean(filepath.Join("..", "..", ".."))
-	contents, err := os.ReadFile(filepath.Join(root, "radar-worker", "Dockerfile"))
-	if err != nil {
-		t.Fatalf("read Radar Worker Dockerfile: %v", err)
-	}
-
-	for _, validationError := range validateRadarWorkerDockerfile(string(contents)) {
+	for _, validationError := range validateRadarWorkerDockerfile(readRadarWorkerDockerfile(t)) {
 		t.Error(validationError)
 	}
 }
 
 func TestRadarWorkerDockerfileRejectsDetachedInheritedSourceCleanup(t *testing.T) {
-	root := filepath.Clean(filepath.Join("..", "..", ".."))
-	contents, err := os.ReadFile(filepath.Join(root, "radar-worker", "Dockerfile"))
-	if err != nil {
-		t.Fatalf("read Radar Worker Dockerfile: %v", err)
-	}
-	dockerfile := string(contents)
+	dockerfile := readRadarWorkerDockerfile(t)
 	cleanup := "USER root\nRUN rm -rf /opt/radar-worker/src\n"
 	mutated := strings.Replace(dockerfile, cleanup, "", 1)
 	mutated = strings.Replace(
@@ -225,6 +214,61 @@ func TestRadarWorkerDockerfileRejectsDetachedInheritedSourceCleanup(t *testing.T
 	if len(validateRadarWorkerDockerfile(mutated)) == 0 {
 		t.Fatal("cleaning an unrelated build stage must not satisfy the Worker runtime source replacement contract")
 	}
+}
+
+func TestRadarWorkerDockerfileRejectsBypassedSourceReplacementContract(t *testing.T) {
+	dockerfile := readRadarWorkerDockerfile(t)
+	mutations := map[string]string{
+		"final root user": dockerfile + "\nUSER root\n",
+		"no-op cleanup": strings.Replace(
+			dockerfile,
+			"RUN rm -rf /opt/radar-worker/src",
+			"RUN printf '%s\\n' 'rm -rf /opt/radar-worker/src'",
+			1,
+		),
+		"source copied from old stage": strings.Replace(
+			dockerfile,
+			"COPY src ./src",
+			"COPY --from=old /opt/radar-worker/src ./src",
+			1,
+		),
+	}
+
+	for name, mutated := range mutations {
+		t.Run(name, func(t *testing.T) {
+			if mutated == dockerfile {
+				t.Fatal("test mutation must change the Worker Dockerfile")
+			}
+			if len(validateRadarWorkerDockerfile(mutated)) == 0 {
+				t.Fatal("bypassing the Worker source replacement contract must be rejected")
+			}
+		})
+	}
+}
+
+func TestRadarWorkerDockerignoreExcludesNestedPythonBuildArtifacts(t *testing.T) {
+	root := filepath.Clean(filepath.Join("..", "..", ".."))
+	contents, err := os.ReadFile(filepath.Join(root, "radar-worker", ".dockerignore"))
+	if err != nil {
+		t.Fatalf("read Radar Worker .dockerignore: %v", err)
+	}
+	dockerignore := string(contents)
+
+	for _, pattern := range []string{"**/__pycache__/", "**/*.py[cod]"} {
+		if !strings.Contains(dockerignore, pattern) {
+			t.Errorf("Radar Worker .dockerignore must exclude nested Python build artifacts with %q", pattern)
+		}
+	}
+}
+
+func readRadarWorkerDockerfile(t *testing.T) string {
+	t.Helper()
+	root := filepath.Clean(filepath.Join("..", "..", ".."))
+	contents, err := os.ReadFile(filepath.Join(root, "radar-worker", "Dockerfile"))
+	if err != nil {
+		t.Fatalf("read Radar Worker Dockerfile: %v", err)
+	}
+	return string(contents)
 }
 
 func validateRadarWorkerDockerfile(dockerfile string) []string {
@@ -252,12 +296,12 @@ func validateRadarWorkerDockerfile(dockerfile string) []string {
 			if copiedCurrentSource && activeUser == "radar-worker" {
 				restoredRuntimeUser = true
 			}
-		case strings.HasPrefix(instruction, "RUN ") && strings.Contains(instruction, "rm -rf /opt/radar-worker/src"):
+		case instruction == "RUN rm -rf /opt/radar-worker/src":
 			if activeUser != "root" {
 				validationErrors = append(validationErrors, "Radar Worker Dockerfile must clean the inherited source tree as root")
 			}
 			cleanedInheritedSource = true
-		case strings.HasPrefix(instruction, "COPY ") && strings.HasSuffix(instruction, "src ./src"):
+		case copiesCurrentWorkerSource(instruction):
 			if !cleanedInheritedSource {
 				validationErrors = append(validationErrors, "Radar Worker Dockerfile must clean the inherited source tree before copying current source")
 			}
@@ -271,9 +315,28 @@ func validateRadarWorkerDockerfile(dockerfile string) []string {
 	if !copiedCurrentSource {
 		validationErrors = append(validationErrors, "Radar Worker Dockerfile must copy the current source tree")
 	}
-	if !restoredRuntimeUser {
+	if !restoredRuntimeUser || activeUser != "radar-worker" {
 		validationErrors = append(validationErrors, "Radar Worker Dockerfile must restore the radar-worker runtime user after copying source")
 	}
 
 	return validationErrors
+}
+
+func copiesCurrentWorkerSource(instruction string) bool {
+	fields := strings.Fields(instruction)
+	if len(fields) < 3 || fields[0] != "COPY" {
+		return false
+	}
+
+	var operands []string
+	for _, field := range fields[1:] {
+		if strings.HasPrefix(field, "--from=") {
+			return false
+		}
+		if strings.HasPrefix(field, "--") {
+			continue
+		}
+		operands = append(operands, field)
+	}
+	return len(operands) == 2 && operands[0] == "src" && operands[1] == "./src"
 }
