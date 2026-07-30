@@ -10,6 +10,9 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 
 WORKDIR /opt/radar-worker
 
+USER root
+RUN rm -rf /opt/radar-worker/src
+
 COPY pyproject.toml ./
 COPY src ./src
 

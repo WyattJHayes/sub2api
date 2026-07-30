@@ -190,3 +190,90 @@ func TestRadarStagingComposeRequiresImmutableBuildIdentity(t *testing.T) {
 		}
 	}
 }
+
+func TestRadarWorkerDockerfileReplacesInheritedSourceTree(t *testing.T) {
+	root := filepath.Clean(filepath.Join("..", "..", ".."))
+	contents, err := os.ReadFile(filepath.Join(root, "radar-worker", "Dockerfile"))
+	if err != nil {
+		t.Fatalf("read Radar Worker Dockerfile: %v", err)
+	}
+
+	for _, validationError := range validateRadarWorkerDockerfile(string(contents)) {
+		t.Error(validationError)
+	}
+}
+
+func TestRadarWorkerDockerfileRejectsDetachedInheritedSourceCleanup(t *testing.T) {
+	root := filepath.Clean(filepath.Join("..", "..", ".."))
+	contents, err := os.ReadFile(filepath.Join(root, "radar-worker", "Dockerfile"))
+	if err != nil {
+		t.Fatalf("read Radar Worker Dockerfile: %v", err)
+	}
+	dockerfile := string(contents)
+	cleanup := "USER root\nRUN rm -rf /opt/radar-worker/src\n"
+	mutated := strings.Replace(dockerfile, cleanup, "", 1)
+	mutated = strings.Replace(
+		mutated,
+		"FROM sub2api/radar-worker:staging AS runtime",
+		"FROM alpine:3.20 AS detached-cleanup\n"+cleanup+"\nFROM sub2api/radar-worker:staging AS runtime",
+		1,
+	)
+	if mutated == dockerfile {
+		t.Fatal("test mutation must move the inherited source cleanup to another build stage")
+	}
+
+	if len(validateRadarWorkerDockerfile(mutated)) == 0 {
+		t.Fatal("cleaning an unrelated build stage must not satisfy the Worker runtime source replacement contract")
+	}
+}
+
+func validateRadarWorkerDockerfile(dockerfile string) []string {
+	var validationErrors []string
+	instructions := dockerInstructions(dockerfile)
+	runtimeStageStart := -1
+	for index, instruction := range instructions {
+		if strings.HasPrefix(instruction, "FROM ") {
+			runtimeStageStart = index
+		}
+	}
+	if runtimeStageStart < 0 {
+		return []string{"Radar Worker Dockerfile must define a runtime build stage"}
+	}
+
+	activeUser := ""
+	cleanedInheritedSource := false
+	copiedCurrentSource := false
+	restoredRuntimeUser := false
+
+	for _, instruction := range instructions[runtimeStageStart+1:] {
+		switch {
+		case strings.HasPrefix(instruction, "USER "):
+			activeUser = strings.TrimSpace(strings.TrimPrefix(instruction, "USER "))
+			if copiedCurrentSource && activeUser == "radar-worker" {
+				restoredRuntimeUser = true
+			}
+		case strings.HasPrefix(instruction, "RUN ") && strings.Contains(instruction, "rm -rf /opt/radar-worker/src"):
+			if activeUser != "root" {
+				validationErrors = append(validationErrors, "Radar Worker Dockerfile must clean the inherited source tree as root")
+			}
+			cleanedInheritedSource = true
+		case strings.HasPrefix(instruction, "COPY ") && strings.HasSuffix(instruction, "src ./src"):
+			if !cleanedInheritedSource {
+				validationErrors = append(validationErrors, "Radar Worker Dockerfile must clean the inherited source tree before copying current source")
+			}
+			copiedCurrentSource = true
+		}
+	}
+
+	if !cleanedInheritedSource {
+		validationErrors = append(validationErrors, "Radar Worker Dockerfile must remove the inherited source tree")
+	}
+	if !copiedCurrentSource {
+		validationErrors = append(validationErrors, "Radar Worker Dockerfile must copy the current source tree")
+	}
+	if !restoredRuntimeUser {
+		validationErrors = append(validationErrors, "Radar Worker Dockerfile must restore the radar-worker runtime user after copying source")
+	}
+
+	return validationErrors
+}
