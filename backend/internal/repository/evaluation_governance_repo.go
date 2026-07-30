@@ -96,7 +96,7 @@ func (r *radarGovernanceRepository) Require(ctx context.Context, actorID int64, 
 func radarPermissions(role service.RadarRole) []service.RadarPermission {
 	all := map[service.RadarRole][]service.RadarPermission{
 		service.RoleViewer:         {service.PermissionView},
-		service.RoleTestOperator:   {service.PermissionView, service.PermissionRunStart, service.PermissionRunRetry, service.PermissionWorkerManage},
+		service.RoleTestOperator:   {service.PermissionView, service.PermissionRunStart, service.PermissionRunRetry, service.PermissionRunControl, service.PermissionWorkerManage},
 		service.RoleQualityAdmin:   {service.PermissionView, service.PermissionDatasetManage, service.PermissionDatasetPublish, service.PermissionPolicyManage, service.PermissionBaselineQualityApprove},
 		service.RoleReleaseManager: {service.PermissionView, service.PermissionGateDecide, service.PermissionGateWaive, service.PermissionBaselineReleaseApprove},
 		service.RolePlatformAdmin:  {service.PermissionView, service.PermissionRoleManage, service.PermissionRouteAction, service.PermissionEvaluationKeyManage},

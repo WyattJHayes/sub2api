@@ -260,6 +260,19 @@ func TestRadarPermissionsUseOnlyGlobalRoleBindings(t *testing.T) {
 	}
 }
 
+func TestRadarTestOperatorCanControlRuns(t *testing.T) {
+	db, mock, err := sqlmock.New(sqlmock.QueryMatcherOption(sqlmock.QueryMatcherRegexp))
+	require.NoError(t, err)
+	defer db.Close()
+	mock.ExpectQuery(`SELECT role FROM evaluation_role_bindings.*scope = '\{\}'::jsonb`).
+		WithArgs(int64(7)).
+		WillReturnRows(sqlmock.NewRows([]string{"role"}).AddRow("test_operator"))
+
+	repo := &radarGovernanceRepository{db: db}
+	require.NoError(t, repo.Require(context.Background(), 7, service.PermissionRunControl))
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
 func TestRadarPermissionsAllowAdminBootstrapOnlyWhenNoBindingsExist(t *testing.T) {
 	db, mock, err := sqlmock.New()
 	if err != nil {
