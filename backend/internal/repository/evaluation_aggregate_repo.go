@@ -544,7 +544,7 @@ func (r *evaluationGradingRepository) completeRevisionAnalysisJob(ctx context.Co
 		       job.cause_set_hash, job.input_score_refs, job.input_snapshot_refs
 		FROM evaluation_analysis_jobs job
 		LEFT JOIN evaluation_workers w ON w.id = job.leased_by
-		WHERE job.id=$1 FOR UPDATE`, jobID).Scan(
+		WHERE job.id=$1 FOR UPDATE OF job`, jobID).Scan(
 		&job.runID, &job.domain, &job.route, &job.window, &job.version, &job.windowStart,
 		&job.status, &job.leaseHash, &job.leaseExpires, &job.leasedBy, &job.workerStatus, &job.leaseEpoch,
 		&job.snapshotID, &job.scope, &job.workOrigin, &job.revisionBatchID, &job.inputSetHash,
