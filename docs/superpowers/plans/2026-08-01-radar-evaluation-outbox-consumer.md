@@ -36,7 +36,7 @@
 - Consumes: the existing `EvaluationOutboxEvent`, `Claim`, `Heartbeat`, `Complete`, and `DeadLetter` contracts.
 - Produces: `Retry(context.Context, uuid.UUID, string, int64, string, time.Duration) error`, `EnsureConsumerWorker(context.Context, string) (uuid.UUID, error)`, and cause-closed claims.
 
-- [ ] **Step 1: Write repository tests that expose the missing protocol**
+- [x] **Step 1: Write repository tests that expose the missing protocol**
 
 Add tests that prove the following observable behavior.
 
@@ -75,7 +75,7 @@ func TestEnsureConsumerWorkerIsStableAcrossStarts(t *testing.T) {
 
 The mutation each test catches is respectively retaining a stale lease, claiming a child after only one parent completes, and creating a different worker identity after restart.
 
-- [ ] **Step 2: Run the focused repository tests and verify RED**
+- [x] **Step 2: Run the focused repository tests and verify RED**
 
 Run:
 
@@ -86,7 +86,7 @@ go test -tags=unit ./internal/repository -run 'TestEvaluationOutboxRetry|TestEva
 
 Expected result: compilation fails because `Retry` and `EnsureConsumerWorker` are absent, then the cause closure test fails because the current claim query does not inspect `evaluation_outbox_event_causes`.
 
-- [ ] **Step 3: Extend the service interface and implement the transaction rules**
+- [x] **Step 3: Extend the service interface and implement the transaction rules**
 
 Add these methods to `EvaluationOutboxRepository`.
 
@@ -128,7 +128,7 @@ AND NOT EXISTS (
 )
 ```
 
-- [ ] **Step 4: Run repository tests and verify GREEN**
+- [x] **Step 4: Run repository tests and verify GREEN**
 
 Run:
 
@@ -140,7 +140,7 @@ RADAR_INTEGRATION=1 go test -tags=integration ./internal/repository -run 'Evalua
 
 Expected result: all selected tests pass. A fenced token, wrong owner, expired lease, and old revision epoch still return `ErrEvaluationOutboxFenced` or `ErrRadarForbidden` according to the existing contract.
 
-- [ ] **Step 5: Commit the repository protocol**
+- [x] **Step 5: Commit the repository protocol**
 
 ```bash
 git add backend/internal/service/evaluation_outbox.go \
@@ -191,7 +191,7 @@ type EvaluationOutboxDomainRepository interface {
 }
 ```
 
-- [ ] **Step 1: Write dispatcher contract tests**
+- [x] **Step 1: Write dispatcher contract tests**
 
 Cover one real behavior per test.
 
@@ -223,7 +223,7 @@ func TestHistoricalSingleCellGlobalEventRunsCompatibleGate(t *testing.T) {
 
 Also test the valid sealed route evidence path, unsupported source and event pair, malformed JSON, unsupported analysis version, no Gate target, `core` mode Gate delay, and `full` mode Gate evaluation.
 
-- [ ] **Step 2: Run dispatcher tests and verify RED**
+- [x] **Step 2: Run dispatcher tests and verify RED**
 
 Run:
 
@@ -234,7 +234,7 @@ go test -tags=unit ./internal/service -run 'OutboxDispatcher|HistoricalSingleCel
 
 Expected result: compilation fails because the dispatcher and result types do not exist.
 
-- [ ] **Step 3: Implement canonical validation and the handler registry**
+- [x] **Step 3: Implement canonical validation and the handler registry**
 
 Create these result values.
 
@@ -259,7 +259,7 @@ Canonicalize the payload with `DigestCanonicalJSON`, compare it to `PayloadHash`
 
 Call `ReconcileEvaluationRun` only after a handler has durably completed its domain action. For a historical single-cell `global_recompute`, a nil Global Job invokes the Gate path with the original event and cause set.
 
-- [ ] **Step 4: Implement the PostgreSQL domain adapter**
+- [x] **Step 4: Implement the PostgreSQL domain adapter**
 
 `ValidateSealedRouteEvidence` loads the row by `source_id=route_trace_id` and verifies run ID, `sealed_at`, evidence revision, schema version, and payload hash against the event payload and source identity.
 
@@ -267,7 +267,7 @@ Call `ReconcileEvaluationRun` only after a handler has durably completed its dom
 
 Delegate cell and global job creation to `evaluationAggregateRepository`. Delegate Run reconciliation to `evaluationRepository.ReconcileEvaluationRun` and return only its error.
 
-- [ ] **Step 5: Run dispatcher and adapter tests and verify GREEN**
+- [x] **Step 5: Run dispatcher and adapter tests and verify GREEN**
 
 Run:
 
@@ -279,7 +279,7 @@ go test -tags=unit ./internal/repository -run 'OutboxProcessing' -count=1
 
 Expected result: all selected tests pass, with no production event payload or lease token written to logs.
 
-- [ ] **Step 6: Commit canonical dispatch**
+- [x] **Step 6: Commit canonical dispatch**
 
 ```bash
 git add backend/internal/service/evaluation_outbox_dispatcher.go \
@@ -303,7 +303,7 @@ git commit -m "feat(radar): dispatch evaluation outbox events"
 - Consumes: `EvaluationOutboxRepository`, `EvaluationOutboxDispatcher`, `RouteEvidenceTerminalizationScheduler`, and runtime options.
 - Produces: `EvaluationOutboxConsumerRuntime.Start()`, `Stop()`, and `ProcessPending(context.Context) EvaluationOutboxConsumerResult`.
 
-- [ ] **Step 1: Write runtime behavior tests**
+- [x] **Step 1: Write runtime behavior tests**
 
 Use a deterministic in-memory repository fake and real dispatcher result values. Assert state transitions, not mock call presence.
 
@@ -329,7 +329,7 @@ func TestOutboxRuntimeNeverExceedsConcurrency(t *testing.T) {
 
 Add tests for poll overlap suppression, heartbeat fencing canceling the handler, dependency backoff, 24 hour dependency timeout, transient attempt exhaustion at 8, permanent dead letter, `core` Gate rollout wait without attempt exhaustion, shutdown cancellation preserving the lease, and `Stop` waiting for active goroutines.
 
-- [ ] **Step 2: Run runtime tests and verify RED**
+- [x] **Step 2: Run runtime tests and verify RED**
 
 Run:
 
@@ -340,7 +340,7 @@ go test -tags=unit ./internal/service -run 'OutboxRuntime' -count=1
 
 Expected result: compilation fails because the runtime is absent.
 
-- [ ] **Step 3: Implement scheduling, heartbeat, and disposition application**
+- [x] **Step 3: Implement scheduling, heartbeat, and disposition application**
 
 Use a semaphore of size 4, one heartbeat goroutine per event, one handler timeout context per event, an atomic poll guard, and a `sync.WaitGroup` for shutdown. Start by calling `EnsureConsumerWorker` before the first claim. Claim only the four supported event types.
 
@@ -357,7 +357,7 @@ Dependency retry starts at 2 seconds, doubles to 60 seconds, and dead letters wi
 
 Log and aggregate only event ID, event type, disposition, stable error code, count, lag seconds, and latency milliseconds.
 
-- [ ] **Step 4: Run runtime tests and verify GREEN**
+- [x] **Step 4: Run runtime tests and verify GREEN**
 
 Run:
 
@@ -368,7 +368,7 @@ go test -tags=unit ./internal/service -run 'OutboxRuntime' -count=1 -race
 
 Expected result: all tests pass under the race detector and leave no blocked goroutines.
 
-- [ ] **Step 5: Commit the runtime**
+- [x] **Step 5: Commit the runtime**
 
 ```bash
 git add backend/internal/service/evaluation_outbox_runtime.go \
@@ -393,7 +393,7 @@ git commit -m "feat(radar): run the evaluation outbox consumer"
 - Consumes: completed Analysis Jobs and outbox event terminal states.
 - Produces: direct single-cell Gate events, analysis and outbox Run barriers, and initial pipeline failure facts.
 
-- [ ] **Step 1: Write regression tests for the two missing barriers**
+- [x] **Step 1: Write regression tests for the two missing barriers**
 
 ```go
 func TestSingleCellAggregateHeadEnqueuesGateDirectly(t *testing.T) {
@@ -423,7 +423,7 @@ func TestInitialOutboxDeadLetterFailsRun(t *testing.T) {
 }
 ```
 
-- [ ] **Step 2: Run the regression tests and verify RED**
+- [x] **Step 2: Run the regression tests and verify RED**
 
 Run:
 
@@ -435,17 +435,17 @@ RADAR_INTEGRATION=1 go test -tags=integration ./internal/repository \
 
 Expected result: the first test sees `global_recompute`, the second Run completes too early, and the third Run remains running.
 
-- [ ] **Step 3: Select the next Aggregate event from durable scope facts**
+- [x] **Step 3: Select the next Aggregate event from durable scope facts**
 
 In `enqueueAggregateHeadProgress`, when `scope == "cell"`, count current cell heads for the Run and analysis version. Emit `gate_reevaluation` when exactly one cell exists and `global_recompute` when more than one exists. Keep the existing Global Aggregate behavior that always emits `gate_reevaluation`.
 
-- [ ] **Step 4: Extend Run facts and initial dead letter behavior**
+- [x] **Step 4: Extend Run facts and initial dead letter behavior**
 
 Add to `PendingWork` the count of Analysis Jobs in `pending`, `leased`, or `running` plus supported outbox rows in `pending` or `leased`.
 
 Load an initial outbox dead letter as an unrecoverable pipeline failure before transition selection. On `DeadLetter`, call `ReconcileEvaluationRun` after the outbox transaction commits when `work_origin='initial'`. Preserve the existing revision requirement failure for `work_origin='regrade'`.
 
-- [ ] **Step 5: Run repository tests and verify GREEN**
+- [x] **Step 5: Run repository tests and verify GREEN**
 
 Run:
 
@@ -457,7 +457,7 @@ RADAR_INTEGRATION=1 go test -tags=integration ./internal/repository \
 
 Expected result: all selected tests pass, a completed regrade Run remains completed, and its revision batch transitions to failed.
 
-- [ ] **Step 6: Commit propagation and terminalization**
+- [x] **Step 6: Commit propagation and terminalization**
 
 ```bash
 git add backend/internal/repository/evaluation_aggregate_repo.go \
@@ -486,7 +486,7 @@ git commit -m "fix(radar): gate run completion on outbox propagation"
 - Consumes: an active Gate target and trusted evidence loader output.
 - Produces: one atomic automated Gate outcome transaction and corrected observation timestamps.
 
-- [ ] **Step 1: Write tests for the discovered trust and projection defects**
+- [x] **Step 1: Write tests for the discovered trust and projection defects**
 
 ```go
 func TestLoadRadarGateReliabilityCopiesObservedAtIntoContextAndInput(t *testing.T) {
@@ -513,7 +513,7 @@ func TestAutomatedGateOutcomeUsesRunTenantAndCommitsEveryProjection(t *testing.T
 
 Add rollback coverage by forcing the alert write to fail and asserting that decision, head, and release projection counts remain unchanged.
 
-- [ ] **Step 2: Run Gate tests and verify RED**
+- [x] **Step 2: Run Gate tests and verify RED**
 
 Run:
 
@@ -525,11 +525,11 @@ RADAR_INTEGRATION=1 go test -tags=integration ./internal/repository -run 'Automa
 
 Expected result: the loader exposes a zero observation time, non-reliability watermark validation rejects empty refs, and no atomic projection method exists.
 
-- [ ] **Step 3: Correct trusted loader timestamps and watermark rules**
+- [x] **Step 3: Correct trusted loader timestamps and watermark rules**
 
 Set both `authoritativeInput.ObservedAt` and `RadarGateReliabilityContext.ObservedAt` to the repeatable-read transaction timestamp. During watermark validation, require snapshot refs only when the stored policy document contains a non-null `reliability` section.
 
-- [ ] **Step 4: Refactor Gate writes onto one transaction helper**
+- [x] **Step 4: Refactor Gate writes onto one transaction helper**
 
 Extract the current decision insert and decision head advance into a helper that accepts `*sql.Tx`. `RecordGateDecision` keeps using that helper. `EvaluateAndProjectRadarGate` performs the following in one `beginRadarWriterTx(ctx, db, "api")` transaction.
 
@@ -543,7 +543,7 @@ Extract the current decision insert and decision head advance into a helper that
 
 Alert payload contains run ID, decision ID, policy ID, rule ID, evidence hash, outbox event ID, and cause set hash. It excludes evidence bodies and credentials.
 
-- [ ] **Step 5: Run Gate tests and verify GREEN**
+- [x] **Step 5: Run Gate tests and verify GREEN**
 
 Run:
 
@@ -557,7 +557,7 @@ RADAR_INTEGRATION=1 go test -tags=integration ./internal/repository \
 
 Expected result: all tests pass and the forced alert failure proves transaction rollback.
 
-- [ ] **Step 6: Commit automatic Gate evaluation**
+- [x] **Step 6: Commit automatic Gate evaluation**
 
 ```bash
 git add backend/internal/service/evaluation_gate_service.go \
@@ -589,7 +589,7 @@ git commit -m "feat(radar): project automatic gate outcomes atomically"
 - Consumes: `RADAR_OUTBOX_CONSUMER_MODE` and `TimingWheelService`.
 - Produces: startup and cleanup ownership for one consumer runtime.
 
-- [ ] **Step 1: Write config and cleanup tests**
+- [x] **Step 1: Write config and cleanup tests**
 
 ```go
 func TestLoadRadarOutboxConsumerModeDefaultsToCore(t *testing.T) {
@@ -609,7 +609,7 @@ func TestLoadRejectsInvalidRadarOutboxConsumerMode(t *testing.T) {
 
 Extend the cleanup test with a runtime whose scheduler records cancellation, then assert `provideCleanup` stops it.
 
-- [ ] **Step 2: Run config and Wire tests and verify RED**
+- [x] **Step 2: Run config and Wire tests and verify RED**
 
 Run:
 
@@ -621,7 +621,7 @@ go test -tags=unit ./internal/config ./cmd/server \
 
 Expected result: configuration fields and cleanup arguments are absent.
 
-- [ ] **Step 3: Add mode validation and provider wiring**
+- [x] **Step 3: Add mode validation and provider wiring**
 
 Add `OutboxConsumerMode string` to `RadarConfig`, default it to `core`, and validate the exact three values. `ProvideEvaluationOutboxConsumerRuntime` starts only when Radar is enabled and mode is not `disabled`.
 
@@ -629,7 +629,7 @@ Register the new repository and service providers and bind the scheduler to `Tim
 
 Regenerate Wire with the repository's existing generation command, then retain only graph changes caused by these providers.
 
-- [ ] **Step 4: Add deployment configuration and Global worker capability**
+- [x] **Step 4: Add deployment configuration and Global worker capability**
 
 Set the control plane environment to:
 
@@ -643,7 +643,7 @@ Set both staging statistics defaults to include `global`.
 RADAR_ANALYSIS_CAPABILITIES: ${RADAR_ANALYSIS_CAPABILITIES:-coding,reasoning,safety,tool_use,protocol,global}
 ```
 
-- [ ] **Step 5: Run config, Wire, and compose validation and verify GREEN**
+- [x] **Step 5: Run config, Wire, and compose validation and verify GREEN**
 
 Run:
 
@@ -658,7 +658,7 @@ docker compose -f radar-worker/deploy/docker-compose.staging.yml config --quiet
 
 Expected result: Go tests pass and both Compose files validate when their required staging variables are supplied.
 
-- [ ] **Step 6: Commit configuration and lifecycle wiring**
+- [x] **Step 6: Commit configuration and lifecycle wiring**
 
 ```bash
 git add backend/internal/config/config.go backend/internal/config/radar_config_test.go \
@@ -758,7 +758,7 @@ Append commands, timestamps, image digests, database counts, health output, and 
 
 #### Execution closure recorded 2026-08-01
 
-Steps 1 through 7 were verified in the release worktree and on staging. The E2E proof is retained in `docs/superpowers/evidence/radar-g1-evidence-revision-verification.md`. The release worktree intentionally retains its other existing implementation changes for their own release commit; no unrelated files were reverted.
+Steps 1 through 7 were verified in the release worktree and on staging. The E2E proof is retained in `docs/superpowers/evidence/radar-g1-evidence-revision-verification.md`. Task 1 through Task 6 implementation and verification checklists are now closed. The release worktree intentionally retains its other existing implementation changes for their own release commit; no unrelated files were reverted. Historical dead-letter rows remain retained and require an explicit run-scoped replay decision.
 
 ## Plan Self-Review
 
