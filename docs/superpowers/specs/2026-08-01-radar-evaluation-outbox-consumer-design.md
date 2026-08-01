@@ -137,7 +137,7 @@ Initial 事件进入 dead letter 时记录 pipeline failure。该失败属于不
 | --- | --- | --- | --- |
 | `route_evidence_sealed` | `route_evidence` | 校验 sealed evidence 身份与 payload | durable sealed row 与事件一致 |
 | `cell_recompute` | `score_head_event` | `EnsureCellAnalysisJob` | Analysis Job 已存在或已创建 |
-| `global_recompute` | `aggregate_head` | `EnsureGlobalAnalysisJob` | Global Job 已存在、已创建，或单 cell 场景无需创建 |
+| `global_recompute` | `aggregate_head` | `EnsureGlobalAnalysisJob` | Global Job 已存在、已创建，或历史单 cell 事件已完成兼容 Gate 处理 |
 | `gate_reevaluation` | `aggregate_head` | 解析目标并执行 Gate | 无有效配置，或 decision 与投影已提交 |
 
 ### 5.1 route_evidence_sealed
@@ -152,9 +152,11 @@ Route Evidence 已在生产事件的同一事务中封存。处理器读取 dura
 
 ### 5.3 global_recompute
 
-处理器从 payload 读取 analysis version，并调用 `EnsureGlobalAnalysisJob`。多 cell Run 创建 Global Job。只有一个 cell 时 repository 返回 nil，处理器完成事件并触发 Run Reconciler。
+处理器从 payload 读取 analysis version，并调用 `EnsureGlobalAnalysisJob`。多 cell Run 创建 Global Job。
 
 多 cell Run 在 Global Job 完成并推进 Global Aggregate Head 后生成 `gate_reevaluation`。该事件成为 Run 收敛前的最后一个 outbox barrier。
+
+新产生的单 cell Run 在 Cell Aggregate Head 推进时直接生成 `gate_reevaluation`，跳过 `global_recompute` 与 Global Job。当前 staging 可能已经保存旧版 `global_recompute`。Consumer 发现该事件无需 Global Job 时，使用同一个事件的 cause set 执行兼容 Gate 处理。无 Gate 配置时完成事件并收敛 Run，有有效配置时必须完成 Gate decision 与投影后才完成事件。
 
 ### 5.4 gate_reevaluation
 
@@ -311,10 +313,12 @@ error_code
 1. Score Head 到 Cell Job。
 2. Cell Aggregate 到 Global Job。
 3. Global Aggregate 到 Gate。
-4. 无 Gate 配置的 Run 完成。
-5. 有 Gate 配置的 decision 与投影。
-6. 重复投递保持单一领域结果。
-7. revision batch epoch fencing 与 requirement closure。
+4. 单 cell Aggregate 直接到 Gate。
+5. 历史单 cell `global_recompute` 走兼容 Gate 路径。
+6. 无 Gate 配置的 Run 完成。
+7. 有 Gate 配置的 decision 与投影。
+8. 重复投递保持单一领域结果。
+9. revision batch epoch fencing 与 requirement closure。
 
 ## 13. Staging 上线与验收
 
