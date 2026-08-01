@@ -107,6 +107,8 @@ Run `2719e76a-f573-4c89-bc6c-2c07d1ad8d68` reached `completed`. Its durable prop
 
 The persistent worker `radar-control-plane-outbox` exists once, with worker kind `statistics`, capability `outbox_consumer`, maximum concurrency `4`, and active claim mode. Idempotency checks returned zero duplicate outbox dedup keys and zero duplicate Gate decision lineages; the decision-head-per-lineage and release-projection-per-subject maxima were both `1`. Active outbox, analysis, and assignment leases were all `0`, and supported pending or leased outbox rows were `0`.
 
+The global outbox table still contains 177 historical `dead_letter` rows, created from 2026-07-29 through 2026-08-01 13:52:22Z. They do not belong to the acceptance Run and require a separate replay or retention decision before a global dead-letter count can be treated as zero.
+
 Local release verification also passed the targeted service, repository, config, and server tests, the four outbox consumer E2E cases, `TestRadarRevisionPipelineE2E`, the complete package test command, `go build -buildvcs=false ./cmd/server`, and `git diff --check`. The default VCS-stamped build was retried with `-buildvcs=false` after the host Git metadata probe returned a bus error; this did not affect compilation.
 
 This evidence excludes request bodies, model outputs, credentials, signing material, and real account or channel identifiers.
