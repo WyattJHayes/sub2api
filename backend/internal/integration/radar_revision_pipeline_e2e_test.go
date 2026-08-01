@@ -132,6 +132,7 @@ type radarRevisionFixture struct {
 	planID   uuid.UUID
 	workerID uuid.UUID
 	runID    uuid.UUID
+	domains  []string
 }
 
 func proveRadarRevisionPipeline(t *testing.T, db *sql.DB) {
@@ -143,10 +144,12 @@ func proveRadarRevisionPipeline(t *testing.T, db *sql.DB) {
 
 	initialScores := submitRadarScores(t, grading, fixture.workerID, []string{"0.80", "0.70", "0.90", "0.75"})
 	require.Len(t, initialScores, 4)
+	initialRuntime := startRadarOutboxConsumer(t, db, service.EvaluationOutboxConsumerModeCore)
 	initialDecision, policyID, releaseSubjectHash := completeRadarAnalysisAndDecision(
 		t, db, fixture, grading, uuid.Nil, nil,
 	)
-	completeRadarRun(t, db, fixture.runID)
+	waitRadarRunStatus(t, db, fixture.runID, "completed")
+	initialRuntime.Stop()
 
 	var runStatus string
 	require.NoError(t, db.QueryRowContext(ctx, `SELECT status FROM evaluation_runs WHERE id=$1`, fixture.runID).Scan(&runStatus))
@@ -173,11 +176,14 @@ func proveRadarRevisionPipeline(t *testing.T, db *sql.DB) {
 		  AND score_id IS NOT NULL AND score_created_at IS NOT NULL`, batch.ID).Scan(&regradedCount))
 	require.Equal(t, 4, regradedCount)
 
+	regradeRuntime := startRadarOutboxConsumer(t, db, service.EvaluationOutboxConsumerModeCore)
 	regradeDecision, _, _ := completeRadarAnalysisAndDecision(
 		t, db, fixture, grading, batch.ID, &radarDecisionSeed{
 			policyID: policyID, releaseSubjectHash: releaseSubjectHash, supersedes: initialDecision.ID,
 		},
 	)
+	waitRadarRevisionBatchStatus(t, db, batch.ID, service.RevisionBatchCompleted)
+	regradeRuntime.Stop()
 	require.NotEqual(t, initialDecision.ID, regradeDecision.ID)
 
 	var currentDecisionID uuid.UUID
@@ -200,53 +206,18 @@ func proveRadarRevisionPipeline(t *testing.T, db *sql.DB) {
 	require.Zero(t, leased)
 }
 
-func completeRadarRun(t *testing.T, db *sql.DB, runID uuid.UUID) {
-	t.Helper()
-	ctx := context.Background()
-	require.NoError(t, withRadarWriterTx(ctx, db, "scheduler", func(tx *sql.Tx) error {
-		var status string
-		var version, epoch int64
-		if err := tx.QueryRowContext(ctx, `
-			SELECT status,state_version,control_epoch FROM evaluation_runs WHERE id=$1 FOR UPDATE`, runID).Scan(
-			&status, &version, &epoch); err != nil {
-			return err
-		}
-		if status != "pending" {
-			return fmt.Errorf("expected pending run before terminalization, got %s", status)
-		}
-		if _, err := tx.ExecContext(ctx, `
-			INSERT INTO evaluation_run_events (
-				id,run_id,event_type,payload,actor_type,actor_ref,transition_version,
-				from_status,to_status,control_epoch,idempotency_key
-			) VALUES ($1,$2,'e2e_start','{}','system','revision-e2e',$3,'pending','running',$4,$5)`,
-			uuid.New(), runID, version+1, epoch, radarRevisionHash("run-start:"+runID.String())); err != nil {
-			return err
-		}
-		if _, err := tx.ExecContext(ctx, `
-			UPDATE evaluation_runs SET status='running',state_version=$2,started_at=NOW(),updated_at=NOW() WHERE id=$1`,
-			runID, version+1); err != nil {
-			return err
-		}
-		if _, err := tx.ExecContext(ctx, `
-			INSERT INTO evaluation_run_events (
-				id,run_id,event_type,payload,actor_type,actor_ref,transition_version,
-				from_status,to_status,control_epoch,idempotency_key
-			) VALUES ($1,$2,'e2e_complete','{}','system','revision-e2e',$3,'running','completed',$4,$5)`,
-			uuid.New(), runID, version+2, epoch, radarRevisionHash("run-complete:"+runID.String())); err != nil {
-			return err
-		}
-		_, err := tx.ExecContext(ctx, `
-			UPDATE evaluation_runs SET status='completed',state_version=$2,finished_at=NOW(),updated_at=NOW() WHERE id=$1`,
-			runID, version+2)
-		return err
-	}))
+func createRadarRevisionFixture(t *testing.T, db *sql.DB) radarRevisionFixture {
+	return createRadarRevisionFixtureWithDomains(t, db, []string{"coding", "reasoning"})
 }
 
-func createRadarRevisionFixture(t *testing.T, db *sql.DB) radarRevisionFixture {
+func createRadarRevisionFixtureWithDomains(t *testing.T, db *sql.DB, domains []string) radarRevisionFixture {
 	t.Helper()
+	require.NotEmpty(t, domains)
 	ctx := context.Background()
 	suffix := uuid.NewString()
-	fixture := radarRevisionFixture{planID: uuid.New(), workerID: uuid.New()}
+	fixture := radarRevisionFixture{
+		planID: uuid.New(), workerID: uuid.New(), domains: append([]string(nil), domains...),
+	}
 	require.NoError(t, db.QueryRowContext(ctx, `
 		INSERT INTO users (email,username,password_hash,role,balance,concurrency,status)
 		VALUES ($1,$2,'not-a-login-secret','admin',100,0,'active') RETURNING id`,
@@ -259,12 +230,12 @@ func createRadarRevisionFixture(t *testing.T, db *sql.DB) radarRevisionFixture {
 	require.NoError(t, withRadarWriterTx(ctx, db, "api", func(tx *sql.Tx) error {
 		if _, err := tx.ExecContext(ctx, `
 			INSERT INTO evaluation_dataset_versions (
-				id,dataset_key,version,manifest_sha256,source_type,status,created_by
-			) VALUES ($1,$2,'v1',$3,'synthetic','draft',$4)`,
+				id,dataset_key,version,manifest_sha256,source_type,status,created_by,tenant_id
+			) VALUES ($1,$2,'v1',$3,'synthetic','draft',$4,$4)`,
 			datasetID, "radar-revision-"+suffix, strings.Repeat("1", 64), fixture.userID); err != nil {
 			return err
 		}
-		for index, domain := range []string{"coding", "reasoning"} {
+		for index, domain := range domains {
 			if _, err := tx.ExecContext(ctx, `
 				INSERT INTO evaluation_cases (
 					id,dataset_version_id,case_key,capability_domain,priority,weight,sample_count,
@@ -287,16 +258,16 @@ func createRadarRevisionFixture(t *testing.T, db *sql.DB) radarRevisionFixture {
 		if _, err := tx.ExecContext(ctx, `
 			INSERT INTO evaluation_plans (
 				id,name,dataset_version_id,gateway_api_key_id,trigger_type,model_matrix,
-				max_run_cost,daily_cost_limit,max_concurrency,created_by
-			) VALUES ($1,$2,$3,$4,'manual',$5::jsonb,100,100,2,$6)`,
+				max_run_cost,daily_cost_limit,max_concurrency,created_by,tenant_id
+			) VALUES ($1,$2,$3,$4,'manual',$5::jsonb,100,100,2,$6,$6)`,
 			fixture.planID, "radar-revision-"+suffix, datasetID, fixture.apiKeyID, matrix, fixture.userID); err != nil {
 			return err
 		}
 		_, err := tx.ExecContext(ctx, `
-			INSERT INTO evaluation_workers (id,name,worker_kind,token_hash,capabilities,image_digest)
-			VALUES ($1,$2,'grader',$3,ARRAY['grader'],$4)`, fixture.workerID,
+			INSERT INTO evaluation_workers (id,name,worker_kind,token_hash,capabilities,image_digest,tenant_id)
+			VALUES ($1,$2,'grader',$3,ARRAY['grader'],$4,$5)`, fixture.workerID,
 			"radar-revision-worker-"+suffix, radarRevisionHash("worker:"+suffix),
-			"worker@sha256:"+strings.Repeat("3", 64))
+			"worker@sha256:"+strings.Repeat("3", 64), fixture.userID)
 		return err
 	}))
 	run, err := repository.NewEvaluationRepository(db).CreateRunWithMatrix(ctx, service.CreateRunInput{
@@ -310,6 +281,7 @@ func createRadarRevisionFixture(t *testing.T, db *sql.DB) radarRevisionFixture {
 func sealRadarRevisionEvidence(t *testing.T, db *sql.DB, fixture radarRevisionFixture) {
 	t.Helper()
 	ctx := context.Background()
+	startRadarRevisionRun(t, db, fixture)
 	require.NoError(t, withRadarWriterTx(ctx, db, "gateway", func(tx *sql.Tx) error {
 		semanticsID := uuid.New()
 		semanticsHash := radarRevisionHash("semantics:" + fixture.runID.String())
@@ -322,7 +294,16 @@ func sealRadarRevisionEvidence(t *testing.T, db *sql.DB, fixture radarRevisionFi
 		}
 		var signingKeyID uuid.UUID
 		if err := tx.QueryRowContext(ctx, `SELECT id FROM evaluation_evidence_signing_keys WHERE status='active'`).Scan(&signingKeyID); err != nil {
-			return err
+			if err != sql.ErrNoRows {
+				return err
+			}
+			signingKeyID = uuid.New()
+			if _, err := tx.ExecContext(ctx, `
+				INSERT INTO evaluation_evidence_signing_keys (id,key_reference,status,state_epoch)
+				VALUES ($1,$2,'active',1)`, signingKeyID,
+				"kms://radar/e2e/"+signingKeyID.String()); err != nil {
+				return err
+			}
 		}
 		rows, err := tx.QueryContext(ctx, `
 			SELECT assignment.id,assignment.sample_id,sample.model_route,
@@ -355,10 +336,12 @@ func sealRadarRevisionEvidence(t *testing.T, db *sql.DB, fixture radarRevisionFi
 		if err := rows.Close(); err != nil {
 			return err
 		}
-		if len(assignments) != 4 {
-			return fmt.Errorf("expected four paired assignments, got %d", len(assignments))
+		expectedAssignments := len(fixture.domains) * 2
+		if len(assignments) != expectedAssignments {
+			return fmt.Errorf("expected %d paired assignments, got %d", expectedAssignments, len(assignments))
 		}
 		for index, item := range assignments {
+			routeTraceID := "revision-evidence-" + uuid.NewString()
 			if _, err := tx.ExecContext(ctx, `
 				INSERT INTO evaluation_route_evidence (
 					route_trace_id,evaluation_run_id,sample_id,api_key_id,request_id,
@@ -376,7 +359,7 @@ func sealRadarRevisionEvidence(t *testing.T, db *sql.DB, fixture radarRevisionFi
 					1,'[]','stop',1,1,1,0.00000001,'succeeded',NOW(),NOW(),
 					'radar-route-evidence-v1','rfc8785-v1',$7,0,0,$8,$9,'request-0',
 					$10,$11,$12,$13,$14,1,NOW(),NOW(),$15,$16,$17,'complete','sha256:gateway'
-				)`, "revision-evidence-"+uuid.NewString(), fixture.runID, item.sampleID,
+				)`, routeTraceID, fixture.runID, item.sampleID,
 				fixture.apiKeyID, "request-"+uuid.NewString(), item.modelRoute, item.id,
 				item.manifestID, item.manifestHash, semanticsID, semanticsHash,
 				strings.Repeat("4", 64), strings.Repeat("5", 64), strings.Repeat("6", 64),
@@ -386,13 +369,33 @@ func sealRadarRevisionEvidence(t *testing.T, db *sql.DB, fixture radarRevisionFi
 			}
 			if _, err := tx.ExecContext(ctx, `
 				UPDATE evaluation_assignments
-				SET status='evidence_uploaded',lease_epoch=0,evidence_manifest='{}',updated_at=NOW()
+				SET status='evidence_uploaded',lease_epoch=0,evidence_manifest='{}',
+				    lease_token_hash=NULL,leased_by=NULL,lease_expires_at=NULL,heartbeat_at=NULL,
+				    updated_at=NOW()
 				WHERE id=$1`, item.id); err != nil {
+				return err
+			}
+			if _, err := tx.ExecContext(ctx, `
+				UPDATE evaluation_samples
+				SET status='evidence_uploaded',route_trace_id=$2,updated_at=NOW()
+				WHERE id=$1`, item.sampleID, routeTraceID); err != nil {
 				return err
 			}
 		}
 		return nil
 	}))
+}
+
+func startRadarRevisionRun(t *testing.T, db *sql.DB, fixture radarRevisionFixture) {
+	t.Helper()
+	setRadarWorkerMode(t, db, fixture.workerID, "runner", fixture.domains)
+	lease, err := repository.NewEvaluationRepository(db).ClaimAssignment(
+		context.Background(), fixture.workerID, fixture.domains, time.Minute,
+	)
+	require.NoError(t, err)
+	require.NotNil(t, lease)
+	require.Equal(t, fixture.runID, lease.RunID)
+	setRadarWorkerMode(t, db, fixture.workerID, "grader", []string{"grader"})
 }
 
 func submitRadarScores(t *testing.T, grading service.EvaluationGradingRepository, workerID uuid.UUID, values []string) []*service.Score {
@@ -428,42 +431,9 @@ func completeRadarAnalysisAndDecision(
 ) (*service.RadarGateDecisionRecord, uuid.UUID, string) {
 	t.Helper()
 	ctx := context.Background()
-	aggregates := repository.NewEvaluationAggregateRepository(db)
-	setRadarWorkerMode(t, db, fixture.workerID, "statistics", []string{"coding", "reasoning", "global"})
-	for _, domain := range []string{"coding", "reasoning"} {
-		cell, err := aggregates.EnsureCellAnalysisJob(ctx, service.CellAnalysisJobRequest{
-			RunID: fixture.runID, CapabilityDomain: domain, ModelRoute: "route-a", AnalysisVersion: "v1",
-		})
-		require.NoError(t, err)
-		require.NotNil(t, cell)
-		require.Equal(t, batchID, cell.RevisionBatchID)
-		cellLease, err := grading.ClaimAnalysisJob(ctx, fixture.workerID, []string{domain}, time.Minute)
-		require.NoError(t, err)
-		require.NotNil(t, cellLease)
-		_, err = grading.CompleteAnalysisJob(ctx, cellLease.ID, cellLease.Token, service.AggregateSubmission{
-			RunID: fixture.runID, ScoreRefs: cell.ScoreRefs, InputSetHash: cell.InputSetHash,
-			Aggregate: json.RawMessage(`{"delta_pp":-10}`), LeaseEpoch: cellLease.LeaseEpoch,
-		})
-		require.NoError(t, err)
-	}
-	completeRadarOutbox(t, db, fixture.workerID, fixture.runID, "cell_recompute", batchID)
-
-	global, err := aggregates.EnsureGlobalAnalysisJob(ctx, service.GlobalAnalysisJobRequest{
-		RunID: fixture.runID, AnalysisVersion: "v1",
-	})
-	require.NoError(t, err)
-	require.NotNil(t, global)
-	require.Equal(t, batchID, global.RevisionBatchID)
-	globalLease, err := grading.ClaimAnalysisJob(ctx, fixture.workerID, []string{"global"}, time.Minute)
-	require.NoError(t, err)
-	require.NotNil(t, globalLease)
-	_, err = grading.CompleteAnalysisJob(ctx, globalLease.ID, globalLease.Token, service.AggregateSubmission{
-		RunID: fixture.runID, SnapshotRefs: global.SnapshotRefs, InputSetHash: global.InputSetHash,
-		Aggregate: json.RawMessage(`{"delta_pp":-10}`), LeaseEpoch: globalLease.LeaseEpoch,
-	})
-	require.NoError(t, err)
-	completeRadarOutbox(t, db, fixture.workerID, fixture.runID, "global_recompute", batchID)
-	gateEvent := completeRadarOutbox(t, db, fixture.workerID, fixture.runID, "gate_reevaluation", batchID)
+	completeRadarConsumerAnalysis(t, db, fixture, grading, batchID)
+	gateEvent := waitRadarOutboxEvent(t, db, fixture.runID, "gate_reevaluation", batchID)
+	requireRadarOutboxDrained(t, db, fixture.runID, batchID)
 
 	policyID := uuid.New()
 	releaseSubjectHash := radarRevisionHash("release:" + fixture.runID.String())
@@ -484,31 +454,13 @@ func completeRadarAnalysisAndDecision(
 	}
 	decision, err := repository.NewRadarGovernanceRepository(db).RecordGateDecision(ctx, service.RadarGateDecisionInput{
 		RunID: fixture.runID, PolicyID: policyID, Status: service.RadarGatePassed,
+		RuleIDs:  []string{"pass"},
 		Evidence: json.RawMessage(`{}`), EvidenceHash: radarRevisionHash("decision:" + gateEvent.ID.String()),
 		ReleaseSubjectHash: releaseSubjectHash, SourceWatermark: json.RawMessage(`{}`),
 		SupersedesDecisionID: supersedes, CauseSetHash: gateEvent.CauseSetHash,
 	})
 	require.NoError(t, err)
 	return decision, policyID, releaseSubjectHash
-}
-
-func completeRadarOutbox(t *testing.T, db *sql.DB, workerID, runID uuid.UUID, eventType string, batchID uuid.UUID) service.EvaluationOutboxEvent {
-	t.Helper()
-	ctx := context.Background()
-	repo := repository.NewEvaluationOutboxRepository(db)
-	events, err := repo.Claim(ctx, workerID, []string{eventType}, 100, time.Minute)
-	require.NoError(t, err)
-	var matched *service.EvaluationOutboxEvent
-	for index := range events {
-		event := events[index]
-		require.NoError(t, repo.Complete(ctx, event.ID, event.LeaseToken, event.LeaseEpoch))
-		if event.RunID == runID && event.RevisionBatchID == batchID {
-			copy := event
-			matched = &copy
-		}
-	}
-	require.NotNil(t, matched, "missing %s event for revision batch %s", eventType, batchID)
-	return *matched
 }
 
 func setRadarWorkerMode(t *testing.T, db *sql.DB, workerID uuid.UUID, kind string, capabilities []string) {

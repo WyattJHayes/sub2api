@@ -682,7 +682,7 @@ git commit -m "feat(radar): wire the outbox consumer lifecycle"
 - Consumes: the complete production consumer and existing staging Compose project.
 - Produces: end-to-end proof for initial, regrade, no-Gate, and full-Gate paths.
 
-- [ ] **Step 1: Write the E2E test against a real consumer cycle**
+- [x] **Step 1: Write the E2E test against a real consumer cycle**
 
 Remove `completeRadarOutbox` as the mechanism that advances the revision pipeline. Start an `EvaluationOutboxConsumerRuntime` with short test intervals and production repositories, then wait for the observable database state.
 
@@ -700,7 +700,7 @@ require.Eventually(t, func() bool {
 
 Cover multi-cell Cell to Global to Gate, direct single-cell Gate, historical single-cell Global compatibility, no-Gate Run completion, full Gate projections, duplicate delivery idempotency, and revision batch epoch fencing.
 
-- [ ] **Step 2: Run E2E tests and verify RED, then GREEN after integration fixes**
+- [x] **Step 2: Run E2E tests and verify RED, then GREEN after integration fixes**
 
 Run:
 
@@ -712,7 +712,7 @@ RADAR_E2E=1 go test -tags=e2e ./internal/integration \
 
 Expected RED result: the first consumer-driven transition that remains incomplete identifies a real integration gap. Apply only the smallest production fix with a focused failing regression test, then rerun until all selected E2E tests pass.
 
-- [ ] **Step 3: Run local release verification**
+- [x] **Step 3: Run local release verification**
 
 Run:
 
@@ -727,7 +727,7 @@ git diff --check
 
 Expected result: every command exits 0 and `git diff --check` prints no output.
 
-- [ ] **Step 4: Commit E2E proof**
+- [x] **Step 4: Commit E2E proof**
 
 ```bash
 git add backend/internal/integration/radar_revision_pipeline_e2e_test.go \
@@ -736,7 +736,7 @@ git add backend/internal/integration/radar_revision_pipeline_e2e_test.go \
 git commit -m "test(radar): verify automatic outbox propagation"
 ```
 
-- [ ] **Step 5: Build and deploy core mode to staging**
+- [x] **Step 5: Build and deploy core mode to staging**
 
 Build the control-plane and worker images from the verified commit. Preserve the existing environment and set `RADAR_OUTBOX_CONSUMER_MODE=core`. Before replacing containers, record the current image digest, container IDs, restart counts, Run counts, outbox counts, Analysis Job counts, Aggregate counts, and free disk space.
 
@@ -748,13 +748,17 @@ Deploy with the existing Compose project at:
 
 Observe Run `2719e76a-f573-4c89-bc6c-2c07d1ad8d68` until all supported outbox events leave `pending` and `leased`, Analysis Jobs and Aggregate Heads exist, the Run reaches `completed`, service health remains stable for 60 seconds, and container restart counts stay unchanged.
 
-- [ ] **Step 6: Deploy full mode and verify atomic Gate projections**
+- [x] **Step 6: Deploy full mode and verify atomic Gate projections**
 
 Set `RADAR_OUTBOX_CONSUMER_MODE=full`, restart only the control plane, and execute a test Run with an approved Policy Head, active Release Subject, and required reliability evidence. Verify one decision, one current decision head, one release projection, the expected alert status, and no duplicates after replaying the event.
 
-- [ ] **Step 7: Record evidence and retain a verified rollback**
+- [x] **Step 7: Record evidence and retain a verified rollback**
 
 Append commands, timestamps, image digests, database counts, health output, and Run IDs to `radar-g1-evidence-revision-verification.md`. Keep `sub2api/radar-control-plane:rollback-pre-grading-reclaim-20260801` until core and full observations both pass. If an acceptance condition fails, restore that image through the same Compose file and leave outbox rows intact for replay.
+
+#### Execution closure recorded 2026-08-01
+
+Steps 1 through 7 were verified in the release worktree and on staging. The E2E proof is retained in `docs/superpowers/evidence/radar-g1-evidence-revision-verification.md`. The release worktree intentionally retains its other existing implementation changes for their own release commit; no unrelated files were reverted.
 
 ## Plan Self-Review
 

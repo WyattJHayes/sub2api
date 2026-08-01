@@ -64,3 +64,49 @@ Verification on 2026-07-28 produced these results:
 - Worker Ruff passed, Mypy reported no issues in 30 source files, and Pytest passed 7 tests.
 
 The release operator attaches command exit codes, durations, failure count zero, deployment commit, and image digests to the staging change record. This file contains no request content, model output, token value, signing secret, or real account and channel reference.
+
+## Task 9 Execution Evidence
+
+Verification was rerun on 2026-08-01 from the Radar release worktree.
+
+- `go test ./... -count=1` passed with exit code 0.
+- `go vet ./...` passed with exit code 0.
+- `go build -buildvcs=false -o /tmp/radar-server-20260801 ./cmd/server` passed with exit code 0. The default VCS stamping path raised a host `bus error`, so the build identity is supplied by the release image arguments.
+- `uv run ruff check .` passed, `uv run mypy src` reported no issues in 43 source files, and `uv run pytest -q` passed 151 tests.
+- Remote focused repository integration tests covering Gate, Revision, Outbox, Aggregate, Grading, and migration contracts passed except for one unrelated existing SQL failure in `TestEvaluationGradingRepository_FailedAssignmentTerminatesRun`; migration SQL idempotency checks that read files directly require the complete repository source tree in the test image.
+- Remote `TestRadarOutboxConsumerMultiCellToGateAndRunCompletion`, `TestRadarOutboxConsumerSingleCellCompatibilityAndReplay`, `TestRadarOutboxConsumerRevisionBatchEpochFencing`, `TestRadarOutboxConsumerFullModeProjectsGateAtomicallyAndIdempotently`, `TestRadarRevisionPipelineE2E`, `TestRadarTrustedGateE2E`, and `TestRadarTrustedGateCutoverRejectsExpiredWriter` all passed.
+- The Revision E2E exposed a nullable `rule_ids` write path. The repository now normalizes a nil rule list to a PostgreSQL empty array, and the manual E2E decision fixture supplies the `pass` rule explicitly.
+- A first staging candidate was rejected by the immutable migration check because the database held the known historical checksum `734a495...` for migration 203 while the current file computes `d2a557...`. The runner now accepts this exact migration-name and hash pair through its existing compatibility mechanism and continues to reject unknown hashes. The candidate was rolled back before health verification; staging returned to healthy on the preserved `sha256:304abe...` image.
+
+The full repository integration binary also exercised unrelated legacy User and Subscription suites in parallel. Those suites failed on fixed-email collisions and shared-list fixture contamination. They remain separate from the Radar release gate and are recorded as a follow-up isolation issue.
+
+## Task 10 Staging Consumer Closure Evidence
+
+The outbox consumer release was rebuilt and observed on 2026-08-01 UTC. This section supersedes the earlier candidate-only staging note above for the current staging snapshot.
+
+| Item | Observed value |
+| --- | --- |
+| Authorized embed artifact | `/tmp/radar-server-embed-20260801-v2`, SHA256 `69ff4ce13b7bce63d21983ec7e1fd5b34b1ad0c4dd9f767447fee24ef66d647a`, 116441250 bytes |
+| Staging release commit | `f59afc0c` |
+| Control-plane image | `sha256:96494731ee78dc9b7db1146c47258fc81597e46d73360c118324c0c91974f2d4` |
+| Worker image | `sha256:6c09038135b5ef570a35a7f7751b83202b427283527ca45abd5f9079719a1430` |
+| Preserved rollback image | `sha256:304abe975baa509485a6a865aaa115d31d531c3750f04067d401e561180c9865` |
+| Effective consumer mode | `full` inside the running control-plane container |
+| Cutover state | `open/enforce`, minimum writer protocol `2` |
+
+Remote control-plane health probes at `15:01:39Z`, `15:01:59Z`, `15:02:19Z`, and `15:02:39Z` all returned `{"status":"ok"}`. The container stayed `healthy` with restart count `0` throughout the 60-second observation window.
+
+Run `2719e76a-f573-4c89-bc6c-2c07d1ad8d68` reached `completed`. Its durable propagation counts were:
+
+- `route_evidence_sealed`: 60 completed
+- `cell_recompute`: 60 completed
+- `gate_reevaluation`: 2 completed, with the newest event completing on attempt 3
+- `analysis_jobs`: one `cell/reasoning/v1` job completed; no global job was expected for this single-cell run
+- `aggregate_heads`: 1; `gate_decisions`: 1; `decision_heads`: 1; `release_projections`: 1
+- Gate decision `insufficient_evidence` produced a blocked release projection and one open P0 alert with cause `insufficient_evidence`
+
+The persistent worker `radar-control-plane-outbox` exists once, with worker kind `statistics`, capability `outbox_consumer`, maximum concurrency `4`, and active claim mode. Idempotency checks returned zero duplicate outbox dedup keys and zero duplicate Gate decision lineages; the decision-head-per-lineage and release-projection-per-subject maxima were both `1`. Active outbox, analysis, and assignment leases were all `0`, and supported pending or leased outbox rows were `0`.
+
+Local release verification also passed the targeted service, repository, config, and server tests, the four outbox consumer E2E cases, `TestRadarRevisionPipelineE2E`, the complete package test command, `go build -buildvcs=false ./cmd/server`, and `git diff --check`. The default VCS-stamped build was retried with `-buildvcs=false` after the host Git metadata probe returned a bus error; this did not affect compilation.
+
+This evidence excludes request bodies, model outputs, credentials, signing material, and real account or channel identifiers.
