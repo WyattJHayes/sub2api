@@ -115,4 +115,6 @@ Local release verification also passed the targeted service, repository, config,
 
 The follow-up verification also passed the focused outbox repository integration suite, outbox dispatcher and runtime unit suite, runtime cancellation and fencing cases, server and route tests, Radar worker Ruff and Mypy checks, 151 Radar worker Pytest cases, both staging Compose config checks with required variables, and the Linux embed artifact SHA/version smoke test. The local race command remains unavailable in this macOS Go toolchain because it fails before test execution with `runtime/race: package testmain: cannot find package`; this is an environment limitation rather than a test failure in the runtime.
 
+Post-upload staging revalidation returned `{"status":"ok"}` at `15:56:22Z`, `15:56:42Z`, `15:57:02Z`, and `15:57:22Z`. The running control-plane container remained healthy with restart count `0`, and `/app/sub2api` inside that container hashed to `69ff4ce13b7bce63d21983ec7e1fd5b34b1ad0c4dd9f767447fee24ef66d647a`, matching the authorized artifact byte for byte. The artifact `--version` smoke test reported Radar build commit `fcf9d32aa`.
+
 This evidence excludes request bodies, model outputs, credentials, signing material, and real account or channel identifiers.
