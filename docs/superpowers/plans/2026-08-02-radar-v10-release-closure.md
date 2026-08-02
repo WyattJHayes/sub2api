@@ -259,32 +259,34 @@ git commit -m "feat(radar): gate releases on restart delta and capacity"
 * Consumes the committed source and Tasks 2 through 4.
 * Produces an immutable candidate digest, disposable migration proof, and staging observation evidence.
 
-- [ ] **Step 1: Run complete local verification**
+- [x] **Step 1: Run complete local verification**
 
 Run all Go tests, Worker tests, Ruff, mypy, Python gate tests, `git diff --check`, and secret scans. Record exact exit codes.
 
-- [ ] **Step 2: Build the fixed Linux image**
+- [x] **Step 2: Build the fixed Linux image**
 
 Use a new immutable candidate tag and record image digest, binary SHA256, pricing file SHA256, build arguments, and source commit.
 
-- [ ] **Step 3: Rehearse migrations**
+- [x] **Step 3: Rehearse migrations**
 
 Restore the verified staging backup into a disposable PostgreSQL container. Apply all 255 migrations twice, proving checksum compatibility and idempotency. Drop only the disposable container and volume after evidence is saved.
 
-- [ ] **Step 4: Deploy to staging**
+- [x] **Step 4: Deploy to staging**
 
 Capture restart baselines first, update the staging control-plane image by digest, and leave Worker and data services unchanged unless their committed source changed.
 
-- [ ] **Step 5: Observe and verify**
+- [x] **Step 5: Observe and verify**
 
 Require healthy containers, zero restart delta, zero HTTP 5xx, zero false cleanup errors, pricing fallback at `WARN`, current pricing source metrics, terminalization pending zero, and successful runner, grader, and statistics requests.
 
-- [ ] **Step 6: Commit evidence**
+- [x] **Step 6: Commit evidence**
 
 ```bash
 git add docs/superpowers/evidence/radar-v10-release-verification.md
 git commit -m "test(radar): record v10 staging release gates"
 ```
+
+Task 5 evidence is recorded in `docs/superpowers/evidence/radar-v10-release-verification.md` under Worker Verification, Pure v10 Source Verification, Linux AMD64 Reproduction, Fixed Candidate Staging Evidence, Disposable Migration Rehearsal, Staging Deployment, and Staging Observation Gate. The accepted staging control-plane image is `sub2api/radar-control-plane:staging` with image ID `sha256:5c0b50508ba200a20fc3637e7d052f17cac900703bffc7e5334302791ddebf37`.
 
 ### Task 6: Promote by digest and prove rollback
 
@@ -299,6 +301,8 @@ git commit -m "test(radar): record v10 staging release gates"
 - [ ] **Step 1: Audit promotion inputs**
 
 Require clean Git status, accepted staging evidence, backup checksum, production image digest, configuration hashes, migration compatibility proof, and available rollback images.
+
+Current status: staging evidence, disposable migration proof, production configuration hashes, and a fail-closed production target preflight are recorded. The production promotion input audit cannot pass yet because `/opt/sub2api` has no running production Compose project, no active production application container, no current production logical backup, no verified active production image digest, and `.env` is still mode `644`.
 
 - [ ] **Step 2: Create and verify the production backup**
 

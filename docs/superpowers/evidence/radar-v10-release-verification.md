@@ -789,3 +789,30 @@ authorize_rollback_drill
 ```
 
 This confirms the candidate cannot move to production through the release gate until the operator explicitly authorizes the inactive production target start, environment permission tightening, fresh production backup, immutable digest promotion, rollback drill, and accepted-candidate restoration.
+
+## Plan Status Reconciliation
+
+The implementation plan has been reconciled with the evidence bundle after the production target preflight gate run.
+
+Task 5 is now marked complete because the evidence bundle records all required staging inputs and gates:
+
+```text
+complete_local_verification=true
+fixed_linux_image_built=true
+disposable_migration_rehearsal=true
+staging_deployed=true
+staging_observation_gate=true
+staging_evidence_committed=true
+accepted_staging_image_id=sha256:5c0b50508ba200a20fc3637e7d052f17cac900703bffc7e5334302791ddebf37
+```
+
+Task 6 remains open. The promotion input audit has recorded partial inputs, but it cannot pass until production target authorization and production-state creation occur:
+
+```text
+production_target_preflight_ok=false
+production_backup_current=false
+production_active_digest_verified=false
+production_promotion_executed=false
+production_rollback_drill_executed=false
+accepted_candidate_restored_after_rollback=false
+```
