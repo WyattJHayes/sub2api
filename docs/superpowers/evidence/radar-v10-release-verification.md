@@ -858,6 +858,7 @@ production_rollback_drill_executed=false
 accepted_candidate_restored_after_rollback=false
 production_smoke_audit_ready=true
 rollback_evidence_audit_ready=true
+production_release_closure_evidence_builder_ready=true
 production_release_closure_audit_ready=true
 ```
 
@@ -983,18 +984,24 @@ The tool does not execute rollback. It records the acceptance criteria that the 
 
 ## Production Release Closure Audit Tool
 
-Task 6 final closure is now covered by a fail-closed JSON gate:
+Task 6 final closure evidence assembly and audit are now covered by JSON tooling:
 
 ```text
+deploy/radar/production_release_closure_evidence.py
+deploy/radar/test_production_release_closure_evidence.py
 deploy/radar/production_release_closure_audit.py
 deploy/radar/test_production_release_closure_audit.py
 ```
 
-The audit consumes a final closure evidence bundle and verifies target preflight, backup audit, promotion audit, production smoke audit, rollback audit, production promotion execution, rollback drill execution, and candidate digest consistency across promotion, smoke, rollback, and final active state.
+The builder assembles a final closure evidence bundle from the recorded target preflight, backup audit, promotion audit, smoke audit, rollback audit, accepted candidate digest, and the two explicit execution flags. Missing gate outputs become empty objects and execution flags default to false, so the closure audit still fails closed. The audit consumes that bundle and verifies target preflight, backup audit, promotion audit, production smoke audit, rollback audit, production promotion execution, rollback drill execution, and candidate digest consistency across promotion, smoke, rollback, and final active state.
 
 TDD red verification:
 
 ```text
+python3 -m unittest deploy/radar/test_production_release_closure_evidence.py
+FileNotFoundError: production_release_closure_evidence.py
+exit code 1
+
 python3 -m unittest deploy/radar/test_production_release_closure_audit.py
 FileNotFoundError: production_release_closure_audit.py
 exit code 1
@@ -1003,17 +1010,22 @@ exit code 1
 Green verification:
 
 ```text
+python3 -m unittest deploy/radar/test_production_release_closure_evidence.py
+...
+Ran 3 tests in 0.001s
+OK
+
 python3 -m unittest deploy/radar/test_production_release_closure_audit.py
 .....
 Ran 5 tests in 0.001s
 OK
 
-python3 -m unittest deploy/radar/test_release_host_gate.py deploy/radar/test_production_target_preflight.py deploy/radar/test_production_backup_audit.py deploy/radar/test_production_smoke_audit.py deploy/radar/test_production_rollback_audit.py deploy/radar/test_production_release_closure_audit.py deploy/radar/test_production_promotion_manifest.py deploy/radar/test_production_promotion_audit.py deploy/radar/test_reliability_evidence.py
-...........................................
-Ran 43 tests in 0.017s
+python3 -m unittest deploy/radar/test_release_host_gate.py deploy/radar/test_production_target_preflight.py deploy/radar/test_production_backup_audit.py deploy/radar/test_production_smoke_audit.py deploy/radar/test_production_rollback_audit.py deploy/radar/test_production_release_closure_evidence.py deploy/radar/test_production_release_closure_audit.py deploy/radar/test_production_promotion_manifest.py deploy/radar/test_production_promotion_audit.py deploy/radar/test_reliability_evidence.py
+..............................................
+Ran 46 tests in 0.015s
 OK
 
-python3 -m py_compile deploy/radar/production_release_closure_audit.py deploy/radar/test_production_release_closure_audit.py deploy/radar/production_smoke_audit.py deploy/radar/test_production_smoke_audit.py deploy/radar/production_rollback_audit.py deploy/radar/test_production_rollback_audit.py deploy/radar/production_backup_audit.py deploy/radar/test_production_backup_audit.py deploy/radar/production_promotion_manifest.py deploy/radar/test_production_promotion_manifest.py deploy/radar/production_promotion_audit.py deploy/radar/test_production_promotion_audit.py deploy/radar/production_target_preflight.py deploy/radar/test_production_target_preflight.py
+python3 -m py_compile deploy/radar/production_release_closure_evidence.py deploy/radar/test_production_release_closure_evidence.py deploy/radar/production_release_closure_audit.py deploy/radar/test_production_release_closure_audit.py deploy/radar/production_smoke_audit.py deploy/radar/test_production_smoke_audit.py deploy/radar/production_rollback_audit.py deploy/radar/test_production_rollback_audit.py deploy/radar/production_backup_audit.py deploy/radar/test_production_backup_audit.py deploy/radar/production_promotion_manifest.py deploy/radar/test_production_promotion_manifest.py deploy/radar/production_promotion_audit.py deploy/radar/test_production_promotion_audit.py deploy/radar/production_target_preflight.py deploy/radar/test_production_target_preflight.py
 exit code 0
 
 git diff --check

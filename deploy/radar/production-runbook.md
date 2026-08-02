@@ -263,7 +263,22 @@ Minimum rollback evidence shape:
 
 ## Final Production Release Closure Audit
 
-After production promotion, smoke, rollback drill, and accepted candidate restoration are complete, assemble the closure evidence and run the final audit:
+After production promotion, smoke, rollback drill, and accepted candidate restoration are complete, assemble the closure evidence from the recorded gate outputs:
+
+```bash
+python3 deploy/radar/production_release_closure_evidence.py \
+  --accepted-candidate-digest sha256:... \
+  --production-target-preflight /tmp/radar-production-target-preflight.json \
+  --production-backup-audit /tmp/radar-production-backup-audit.json \
+  --production-promotion-audit /tmp/radar-production-promotion-audit.json \
+  --production-smoke-audit /tmp/radar-production-smoke-audit.json \
+  --production-rollback-audit /tmp/radar-production-rollback-audit.json \
+  --production-promotion-executed \
+  --rollback-drill-executed \
+  --output /tmp/radar-production-release-closure-evidence.json
+```
+
+The builder defaults both execution flags to `false`, and missing gate outputs become empty objects, so the final audit fails closed when production work or evidence is incomplete. Then run the final audit:
 
 ```bash
 python3 deploy/radar/production_release_closure_audit.py \
