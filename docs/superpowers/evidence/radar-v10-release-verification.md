@@ -260,3 +260,207 @@ disk_free_bytes=12156874752
 ```
 
 The non-Radar container `compose-celery-worker-1` is still unhealthy on the shared host. It was deliberately excluded from the Radar release gate target set and remains a shared-host operational risk, not a blocker for the four observed Radar containers.
+
+## Fixed Candidate Staging Evidence
+
+The fixed source candidate was built on the staging host from archive:
+
+```text
+source_archive=/tmp/radar-v10-fixed-bc6e476a95ab-20260802.tar.gz
+source_archive_sha256=df6501e3d05c68614e321a7f142192c5540456b9f35dc561bba64f5b114fd7d1
+unpacked_source=/tmp/radar-build-bc6e476a95ab-20260802-153830
+source_commit=bc6e476a95ab
+```
+
+The first fixed image completed successfully but did not contain the runtime pricing fallback resource:
+
+```text
+image=sub2api/radar-control-plane:radar-v10-fixed-bc6e476a95ab-20260802
+image_id=sha256:57869fd765deb30d468ab815aca8bdae66c278c81abde832b2ed57b2a1f07302
+binary_sha256=8b7aa76f2bcbb57fd268777b5df07c557aa35d6dfe8f896f7d5f228f51bef571
+pricing_resource=/app/resources/model-pricing/model_prices_and_context_window.json
+pricing_resource_status=missing
+```
+
+The running pre-fix staging image and the source tree both contained the same pricing fallback file:
+
+```text
+pricing_resource_sha256=139de8a906ce61dc3f086ed394cd01b6c2110341054d7576dce4c4775f358569
+```
+
+A second candidate layer added only `backend/resources/model-pricing/` to `/app/resources/model-pricing/`. It did not change the server binary:
+
+```text
+image=sub2api/radar-control-plane:radar-v10-fixed-bc6e476a95ab-20260802-pricing
+image_id=sha256:5c0b50508ba200a20fc3637e7d052f17cac900703bffc7e5334302791ddebf37
+binary_sha256=8b7aa76f2bcbb57fd268777b5df07c557aa35d6dfe8f896f7d5f228f51bef571
+pricing_resource_sha256=139de8a906ce61dc3f086ed394cd01b6c2110341054d7576dce4c4775f358569
+```
+
+The candidate labels record the release identity and fixed hashes:
+
+```text
+io.sub2api.radar.candidate=true
+io.sub2api.radar.source.commit=bc6e476a95ab
+io.sub2api.radar.binary.sha256=8b7aa76f2bcbb57fd268777b5df07c557aa35d6dfe8f896f7d5f228f51bef571
+io.sub2api.radar.model-pricing.sha256=139de8a906ce61dc3f086ed394cd01b6c2110341054d7576dce4c4775f358569
+org.opencontainers.image.version=radar-v10-fixed-20260802-pricing
+```
+
+## Disposable Migration Rehearsal
+
+A fresh staging dump was created and retained on the host:
+
+```text
+backup_dir=/opt/sub2api-backups/radar-v10-fixed-staging-20260803-162311
+backup_file=/opt/sub2api-backups/radar-v10-fixed-staging-20260803-162311/radar-staging.dump
+backup_sha256=098541cd8f2e907e2d3ea4717ec40c3e39820679e6a1d3d05c6d5a782e0af21b
+backup_size_bytes=26720147
+schema_migrations=255
+```
+
+The final rehearsal restored that dump into a disposable PostgreSQL 18 container, started a disposable Redis container, and booted the final fixed candidate twice with `AUTO_SETUP=true` so that `repository.ApplyMigrations` executed on each boot. The disposable containers and network used only the `radar-v10-migration-*` namespace and were removed after completion.
+
+Evidence log:
+
+```text
+/opt/sub2api-backups/radar-v10-fixed-staging-20260803-162311/migration-rehearsal-pricing.log
+```
+
+Result summary:
+
+```text
+restored_schema_migrations=255
+radar-v10-migration-app1-20260803 healthy_after=6s
+255|206_remove_gate_policy_head_tenant_default.sql
+radar-v10-migration-app2-20260803 healthy_after=6s
+255|206_remove_gate_policy_head_tenant_default.sql
+final_schema_migrations=255
+```
+
+Pricing initialization in the disposable rehearsal succeeded with the fallback resource present:
+
+```text
+[Pricing] Downloaded 218 models successfully
+[Pricing] Merged 1 fallback-only models
+[Pricing] Service initialized with 218 models
+```
+
+## Staging Deployment
+
+The control-plane staging tag was moved to the fixed pricing candidate, then only `sub2api-staging` was recreated with the recorded compose environment file:
+
+```text
+compose_file=/opt/sub2api-builds/radar-outbox-e2e-20260801/deploy/docker-compose.radar-staging.yml
+compose_env_file=/opt/sub2api-builds/radar-release-20260801-f59afc0c/.env
+command=docker compose ... up -d --no-deps --force-recreate sub2api-staging
+```
+
+Pre-rollout control-plane state:
+
+```text
+image=sub2api/radar-control-plane:candidate-terminalization-pricing-security-v10-20260802
+image_id=sha256:5de118fe8e0be180bb27e270a4a7f686b757083737853173ab828d459bdcb015
+binary_sha256=bfe1c72ef8f9d5f8a514f9a3df55d161af80522a0a7888dab1f031dc09d00a24
+pricing_resource_sha256=139de8a906ce61dc3f086ed394cd01b6c2110341054d7576dce4c4775f358569
+```
+
+Post-rollout control-plane state:
+
+```text
+image=sub2api/radar-control-plane:staging
+image_id=sha256:5c0b50508ba200a20fc3637e7d052f17cac900703bffc7e5334302791ddebf37
+health=healthy
+restart_count=0
+binary_sha256=8b7aa76f2bcbb57fd268777b5df07c557aa35d6dfe8f896f7d5f228f51bef571
+pricing_resource_sha256=139de8a906ce61dc3f086ed394cd01b6c2110341054d7576dce4c4775f358569
+```
+
+Runtime identity probe:
+
+```text
+PID   USER     COMMAND
+1     sub2api  /app/sub2api
+```
+
+The control-plane recreate briefly made the internal service endpoint unavailable. The runner did not restart. The grader and statistics workers restarted and then recovered:
+
+```text
+sub2api-radar-staging-radar-runner-1 restart_count=0
+sub2api-radar-staging-radar-grader-1 restart_count=128
+sub2api-radar-staging-radar-statistics-1 restart_count=125
+```
+
+The post-deploy observation baseline intentionally starts after those recovered worker restarts:
+
+```text
+baseline=/opt/sub2api-backups/radar-v10-fixed-staging-20260803-162311/post-deploy-observation-baseline.json
+```
+
+## Staging Observation Gate
+
+The first post-deploy gate verify failed only the host capacity checks:
+
+```text
+ok=false
+checks=22
+failures=2
+disk_used_percent=98.47
+disk_free_bytes=1130532864
+```
+
+Root cause investigation found build-only cache pressure:
+
+```text
+/tmp/radar-go-build-cache=3.0G
+/tmp/radar-go-mod-cache=1007M
+docker_build_cache=5.484G
+```
+
+The cleanup removed only build caches and temporary extracted image directories. It did not remove staging volumes, backups, running container data, rollback images, or the active candidate image.
+
+After cleanup:
+
+```text
+df=/dev/vda2 69G 55G 12G 83%
+docker_build_cache=0B
+```
+
+The second post-deploy gate verify passed:
+
+```text
+verify=/opt/sub2api-backups/radar-v10-fixed-staging-20260803-162311/post-deploy-observation-verify-after-cleanup.json
+ok=true
+checks=22
+failures=0
+disk_used_percent=83.24
+disk_free_bytes=12377600000
+```
+
+Container state at the passing gate:
+
+```text
+sub2api-radar-staging-sub2api-staging-1 restarts=0 health=healthy
+sub2api-radar-staging-radar-runner-1 restarts=0 health=healthy
+sub2api-radar-staging-radar-grader-1 restarts=128 health=healthy
+sub2api-radar-staging-radar-statistics-1 restarts=125 health=healthy
+```
+
+Application smoke:
+
+```text
+GET /health -> 200
+terminalization_pending=0
+terminalization_processed=18
+evaluation_outbox_pending=0
+evaluation_outbox_dead_letter=177
+analysis_pending_total=3
+```
+
+The three pending analysis jobs were created on 2026-08-01 and remain historical staging work. They were not introduced by this deployment. The release-critical terminalization and evaluation outbox pending counts are both zero.
+
+No control-plane `ERROR`, panic, HTTP 5xx, pricing fallback failure, or worker connection error appeared in logs after the post-deploy observation baseline timestamp.
+
+## Production Promotion Status
+
+Production promotion remains gated. The fixed candidate now has staging evidence for source, tests, binary hash, pricing fallback resource, disposable migration rehearsal, runtime identity, health, restart observation, and disk capacity. The production part of the release design still requires a production database backup, current production image and config hashes, immutable digest promotion, production smoke checks, rollback to the recorded digest, and post-rollback restoration evidence.
