@@ -1335,3 +1335,40 @@ The host has staging images and staging backups, including the accepted
 candidate digest, but no evidence that any of them is the active production
 digest or a fresh production backup. No production mutation occurred during
 this recheck.
+
+## Candidate-to-Production Compose Compatibility Check
+
+The accepted candidate image was compared with the current production image
+metadata on the remote host. Both images use the same application entrypoint,
+working directory, exposed application port, and container command:
+
+```text
+entrypoint=/app/docker-entrypoint.sh
+command=/app/sub2api
+working_dir=/app
+exposed_port=8080/tcp
+candidate_image_id=sha256:5c0b50508ba200a20fc3637e7d052f17cac900703bffc7e5334302791ddebf37
+previous_production_image_id=sha256:ee79e9afed34054acdb6c05708b27aab1674ce25afef8fb66a78c548bc63b915
+```
+
+The current production override still points to the custom image tag:
+
+```text
+production_override_image=sub2api-custom:0.1.151-disable-image-generation.1
+```
+
+A temporary override replaced only that image reference with the accepted
+immutable candidate digest. The temporary file was deleted after validation,
+and the production Compose files were untouched:
+
+```text
+image=sub2api/radar-control-plane@sha256:5c0b50508ba200a20fc3637e7d052f17cac900703bffc7e5334302791ddebf37
+docker_compose_config_images=postgres:18-alpine,redis:8-alpine,sub2api/radar-control-plane@sha256:5c0b50508ba200a20fc3637e7d052f17cac900703bffc7e5334302791ddebf37
+config_ok=true
+production_mutation=false
+```
+
+This establishes Compose-level compatibility for the candidate reference.
+The production override hash, active container digest, migration state, API
+Smoke results, and rollback evidence still require the authorized promotion
+sequence.
