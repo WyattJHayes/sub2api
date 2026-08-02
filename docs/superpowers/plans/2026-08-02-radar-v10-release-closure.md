@@ -157,7 +157,7 @@ go test ./internal/service -run 'ArtifactCleanup' -count=1
 go test ./internal/service ./internal/repository -count=1
 ```
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add backend/internal/service/evaluation_artifact_cleanup.go backend/internal/service/evaluation_artifact_cleanup_test.go
@@ -177,25 +177,25 @@ git commit -m "fix(radar): correct artifact cleanup log severity"
 * Produces `PricingSourceSnapshot` with source, hashes, timestamps, last refresh result, and fallback count.
 * Produces bounded metrics for current source, source age, last refresh health, and fallback total.
 
-- [ ] **Step 1: Write failing fallback behavior tests**
+- [x] **Step 1: Write failing fallback behavior tests**
 
 Inject a remote hash fetch failure while a literal local price fixture is loaded. Assert the request still resolves pricing, `Source` remains `local` or `embedded`, `LastRefreshOK` is false, and `FallbackTotal` increases by one.
 
-- [ ] **Step 2: Write failing log severity test**
+- [x] **Step 2: Write failing log severity test**
 
 Capture the structured record and require `WARN`, `pricing_source`, `source_age_seconds`, and `fallback_total`. Add an empty-source case that requires `ERROR`.
 
-- [ ] **Step 3: Verify red**
+- [x] **Step 3: Verify red**
 
 ```bash
 go test ./internal/service -run 'Pricing.*(Fallback|Source|Observability)' -count=1
 ```
 
-- [ ] **Step 4: Implement the snapshot and logging**
+- [x] **Step 4: Implement the snapshot and logging**
 
 Keep mutable state under the existing service lock. Use a monotonic atomic counter for fallback events. Avoid metric labels derived from models, URLs, or tenant data.
 
-- [ ] **Step 5: Wire and verify metrics**
+- [x] **Step 5: Wire and verify metrics**
 
 Add literal metric assertions for the four published series and run:
 
@@ -203,7 +203,7 @@ Add literal metric assertions for the four published series and run:
 go test ./internal/service ./internal/repository -count=1
 ```
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add backend/internal/service backend/internal/repository

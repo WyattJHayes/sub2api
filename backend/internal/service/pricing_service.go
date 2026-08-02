@@ -12,6 +12,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/Wei-Shaw/sub2api/internal/config"
@@ -170,6 +171,13 @@ type PricingService struct {
 	pricingData  map[string]*LiteLLMModelPricing
 	lastUpdated  time.Time
 	localHash    string
+	source       string
+	remoteHash   string
+
+	lastRefreshAt    time.Time
+	lastRefreshOK    bool
+	lastRefreshError string
+	fallbackTotal    atomic.Uint64
 
 	// 停止信号
 	stopCh chan struct{}
@@ -271,8 +279,10 @@ func (s *PricingService) checkAndUpdatePricing() error {
 		remoteHash, err := s.fetchRemoteHash()
 		if err != nil {
 			logger.LegacyPrintf("service.pricing", "[Pricing] Failed to fetch remote hash on startup: %v", err)
+			s.recordPricingFallback("local", err)
 			return nil // 已加载本地文件，哈希获取失败不影响启动
 		}
+		s.recordPricingRefresh("local", remoteHash, true, nil)
 
 		s.mu.RLock()
 		localHash := s.localHash
@@ -283,6 +293,7 @@ func (s *PricingService) checkAndUpdatePricing() error {
 				localHash[:min(8, len(localHash))], remoteHash[:min(8, len(remoteHash))])
 			if err := s.downloadPricingData(); err != nil {
 				logger.LegacyPrintf("service.pricing", "[Pricing] Download failed, using existing file: %v", err)
+				s.recordPricingFallback("local", err)
 			}
 		}
 		return nil
@@ -301,6 +312,7 @@ func (s *PricingService) checkAndUpdatePricing() error {
 		logger.LegacyPrintf("service.pricing", "[Pricing] Local file is %v old, updating...", fileAge.Round(time.Hour))
 		if err := s.downloadPricingData(); err != nil {
 			logger.LegacyPrintf("service.pricing", "[Pricing] Download failed, using existing file: %v", err)
+			s.recordPricingFallback("local", err)
 		}
 	}
 
@@ -314,8 +326,10 @@ func (s *PricingService) syncWithRemote() error {
 		remoteHash, err := s.fetchRemoteHash()
 		if err != nil {
 			logger.LegacyPrintf("service.pricing", "[Pricing] Failed to fetch remote hash: %v", err)
+			s.recordPricingFallback("local", err)
 			return nil // 哈希获取失败不影响正常使用
 		}
+		s.recordPricingRefresh("local", remoteHash, true, nil)
 
 		s.mu.RLock()
 		localHash := s.localHash
@@ -342,7 +356,11 @@ func (s *PricingService) syncWithRemote() error {
 
 	if fileAge > maxAge {
 		logger.LegacyPrintf("service.pricing", "[Pricing] File is %v old, downloading...", fileAge.Round(time.Hour))
-		return s.downloadPricingData()
+		if err := s.downloadPricingData(); err != nil {
+			s.recordPricingFallback("local", err)
+			return err
+		}
+		return nil
 	}
 
 	return nil
@@ -411,6 +429,11 @@ func (s *PricingService) downloadPricingData() error {
 	s.pricingData = data
 	s.lastUpdated = time.Now()
 	s.localHash = syncHash
+	s.source = pricingSourceRemote
+	s.remoteHash = remoteHash
+	s.lastRefreshAt = s.lastUpdated
+	s.lastRefreshOK = true
+	s.lastRefreshError = ""
 	s.mu.Unlock()
 
 	logger.LegacyPrintf("service.pricing", "[Pricing] Downloaded %d models successfully", len(data))
@@ -535,12 +558,18 @@ func (s *PricingService) loadPricingData(filePath string) error {
 	s.mu.Lock()
 	s.pricingData = pricingData
 	s.localHash = hashStr
+	s.source = pricingSourceLocal
 
 	info, _ := os.Stat(filePath)
 	if info != nil {
 		s.lastUpdated = info.ModTime()
 	} else {
 		s.lastUpdated = time.Now()
+	}
+	if s.lastRefreshAt.IsZero() {
+		s.lastRefreshAt = time.Now()
+		s.lastRefreshOK = true
+		s.lastRefreshError = ""
 	}
 	s.mu.Unlock()
 
@@ -588,6 +617,7 @@ func (s *PricingService) useFallbackPricing() error {
 	}
 
 	logger.LegacyPrintf("service.pricing", "[Pricing] Using fallback file: %s", fallbackFile)
+	s.fallbackTotal.Add(1)
 
 	// 复制到数据目录
 	data, err := os.ReadFile(fallbackFile)
@@ -600,7 +630,16 @@ func (s *PricingService) useFallbackPricing() error {
 		logger.LegacyPrintf("service.pricing", "[Pricing] Failed to copy fallback: %v", err)
 	}
 
-	return s.loadPricingData(fallbackFile)
+	if err := s.loadPricingData(fallbackFile); err != nil {
+		return err
+	}
+	s.mu.Lock()
+	s.source = pricingSourceEmbedded
+	s.lastRefreshAt = time.Now()
+	s.lastRefreshOK = false
+	s.lastRefreshError = "using fallback pricing file"
+	s.mu.Unlock()
+	return nil
 }
 
 // fetchRemoteHash 从远程获取哈希值

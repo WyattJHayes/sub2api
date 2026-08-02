@@ -1,7 +1,9 @@
 package service
 
 import (
+	"context"
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"testing"
@@ -10,6 +12,18 @@ import (
 	"github.com/Wei-Shaw/sub2api/internal/config"
 	"github.com/stretchr/testify/require"
 )
+
+type pricingServiceRemoteClientStub struct {
+	hashErr error
+}
+
+func (s *pricingServiceRemoteClientStub) FetchPricingJSON(context.Context, string) ([]byte, error) {
+	return nil, errors.New("unexpected pricing download")
+}
+
+func (s *pricingServiceRemoteClientStub) FetchHashText(context.Context, string) (string, error) {
+	return "", s.hashErr
+}
 
 func TestPricingSchedulerBlankRemoteURLDoesNotStart(t *testing.T) {
 	svc := NewPricingService(&config.Config{Pricing: config.PricingConfig{RemoteURL: "  \t  "}}, nil)
@@ -39,6 +53,40 @@ func TestPricingNonEmptyInvalidRemoteURLStillReturnsValidationError(t *testing.T
 
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "invalid pricing url")
+}
+
+func TestPricingSourceFallbackSnapshotRemoteHashFailureUsesLocalPricing(t *testing.T) {
+	dir := t.TempDir()
+	pricingFile := filepath.Join(dir, "model_pricing.json")
+	require.NoError(t, os.WriteFile(pricingFile, []byte(`{
+		"local-chat-model": {
+			"input_cost_per_token": 0.000001,
+			"output_cost_per_token": 0.000002,
+			"litellm_provider": "local-fixture",
+			"mode": "chat"
+		}
+	}`), 0644))
+	svc := NewPricingService(&config.Config{Pricing: config.PricingConfig{
+		DataDir:   dir,
+		RemoteURL: "https://pricing.example.test/model_prices.json",
+		HashURL:   "https://pricing.example.test/model_prices.sha256",
+	}}, &pricingServiceRemoteClientStub{hashErr: errors.New("remote hash unavailable")})
+
+	err := svc.checkAndUpdatePricing()
+
+	require.NoError(t, err)
+	pricing := svc.GetModelPricing("local-chat-model")
+	require.NotNil(t, pricing)
+	require.InDelta(t, 0.000001, pricing.InputCostPerToken, 1e-12)
+	snapshot := svc.SnapshotPricingSource()
+	require.Equal(t, "local", snapshot.Source)
+	require.Equal(t, 1, snapshot.ModelCount)
+	require.NotEmpty(t, snapshot.LocalHash)
+	require.Empty(t, snapshot.RemoteHash)
+	require.False(t, snapshot.LastRefreshOK)
+	require.Contains(t, snapshot.LastRefreshError, "remote hash unavailable")
+	require.Equal(t, uint64(1), snapshot.FallbackTotal)
+	require.False(t, snapshot.LastRefreshAt.IsZero())
 }
 
 func TestParsePricingData_ParsesPriorityAndServiceTierFields(t *testing.T) {

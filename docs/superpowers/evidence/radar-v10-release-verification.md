@@ -151,3 +151,49 @@ ok  	github.com/Wei-Shaw/sub2api/internal/repository	3.824s
 ```
 
 The implemented helper emits `DEBUG` for empty successful polls, `INFO` for selected successful work, and `ERROR` only when an error is returned. The structured fields retained are `component`, `selected`, `deleted`, `skipped`, and `failed`.
+
+## Pricing Fallback Source Health
+
+The regression tests cover a remote hash failure after a literal local pricing file has been loaded. The service keeps resolving the local model price, reports `Source=local`, records the remote refresh failure, and increments the fallback counter once.
+
+Red verification:
+
+```text
+go test ./internal/service -run 'Pricing.*(Fallback|Source|Observability)' -count=1
+internal/service/pricing_observability_test.go:13:68: undefined: PricingSourceSnapshot
+internal/service/pricing_observability_test.go:18:2: undefined: logPricingSourceSnapshot
+internal/service/pricing_observability_test.go:65:13: undefined: PricingSourceMetrics
+internal/service/pricing_service_test.go:81:18: svc.SnapshotPricingSource undefined
+FAIL
+```
+
+Green verification:
+
+```text
+go test ./internal/service -run 'Pricing.*(Fallback|Source|Observability)' -count=1
+ok  	github.com/Wei-Shaw/sub2api/internal/service	1.610s
+
+go test ./internal/service ./internal/repository -count=1
+ok  	github.com/Wei-Shaw/sub2api/internal/service	97.898s
+ok  	github.com/Wei-Shaw/sub2api/internal/repository	3.442s
+```
+
+The new bounded observability surface is:
+
+```text
+PricingSourceSnapshot
+SnapshotPricingSource
+logPricingSourceSnapshot
+PricingSourceMetrics
+```
+
+`logPricingSourceSnapshot` emits `WARN` for fallback or failed refresh states and `ERROR` for an empty source. The published low-cardinality series are:
+
+```text
+radar_pricing_source_current{source="local|remote|embedded|empty|unknown"}
+radar_pricing_source_age_seconds
+radar_pricing_last_refresh_ok
+radar_pricing_fallback_total
+```
+
+The repository has an Ops SQL collector, but no existing Prometheus registry or generic application-gauge exporter in the current source. For this release fix, the metrics are exposed as a stable in-process series producer with literal tests, ready for the deployment probe or a future exporter to scrape without adding new dependencies.
