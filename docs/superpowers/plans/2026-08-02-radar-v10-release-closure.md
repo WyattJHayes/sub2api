@@ -304,6 +304,12 @@ Require clean Git status, accepted staging evidence, backup checksum, production
 
 Current status: staging evidence, disposable migration proof, production configuration hashes, a promotion manifest generator, a final closure evidence builder, a fail-closed production target preflight, a fail-closed production mutation authorization audit, a fail-closed promotion input audit tool, a fail-closed production smoke audit tool, a fail-closed rollback evidence audit tool, a fail-closed final closure audit tool, and a current failed promotion audit run are recorded. The production promotion input audit cannot pass yet because `/opt/sub2api` has no running production Compose project, no active production application container, no current production logical backup, no verified active production image digest, and `.env` is still mode `644`.
 
+Candidate-to-production Compose compatibility has been verified with a temporary
+override that references the accepted immutable digest. The candidate and the
+current production image share the expected `/app/sub2api` command, port `8080`,
+and health-check shape. The production override remains unchanged until the
+authorized promotion step.
+
 - [ ] **Step 2: Create and verify the production backup**
 
 Store the backup outside the deployment directory, compute SHA256, and run a read-only restore listing or disposable restore check.
