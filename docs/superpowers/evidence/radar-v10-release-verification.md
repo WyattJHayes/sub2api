@@ -230,6 +230,47 @@ git diff --check
 exit code 0
 ```
 
+## Production Backup Audit Tool
+
+Task 6 Step 2 now has a fail-closed backup evidence gate:
+
+```text
+deploy/radar/production_backup_audit.py
+deploy/radar/test_production_backup_audit.py
+```
+
+The backup audit consumes a JSON evidence file after the fresh production logical backup is created. It verifies the backup path is absolute, outside the deployment directory, has a lowercase SHA256 digest, is fresh, is large enough, has restore verification, and reports the expected restored schema migration count.
+
+TDD red verification:
+
+```text
+python3 -m unittest deploy/radar/test_production_backup_audit.py
+FileNotFoundError: production_backup_audit.py
+exit code 1
+```
+
+Green verification:
+
+```text
+python3 -m unittest deploy/radar/test_production_backup_audit.py
+.....
+Ran 5 tests in 0.002s
+OK
+
+python3 -m unittest deploy/radar/test_release_host_gate.py deploy/radar/test_production_target_preflight.py deploy/radar/test_production_backup_audit.py deploy/radar/test_production_promotion_manifest.py deploy/radar/test_production_promotion_audit.py deploy/radar/test_reliability_evidence.py
+............................
+Ran 28 tests in 0.014s
+OK
+
+python3 -m py_compile deploy/radar/production_backup_audit.py deploy/radar/test_production_backup_audit.py deploy/radar/production_promotion_manifest.py deploy/radar/test_production_promotion_manifest.py deploy/radar/production_promotion_audit.py deploy/radar/test_production_promotion_audit.py deploy/radar/production_target_preflight.py deploy/radar/test_production_target_preflight.py
+exit code 0
+
+git diff --check
+exit code 0
+```
+
+The tool does not create or read production backups. It records the acceptance criteria that the authorized production backup must satisfy before it can be passed into the promotion manifest.
+
 Staging host verification:
 
 ```text

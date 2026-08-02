@@ -91,6 +91,36 @@ If `/opt/sub2api` has no active Compose containers, stop the promotion path and 
 
 Treat the first `docker compose up` for an inactive production target as a production exposure event because it can bind host port `8080` and join the shared DGC network. Capture health, listeners, network aliases, image digests, config hashes, and backup checksums before continuing to the image promotion step.
 
+## Production Backup Evidence Audit
+
+After creating the fresh logical production backup and restore verification evidence, audit the backup evidence before adding it to the promotion manifest:
+
+```bash
+python3 deploy/radar/production_backup_audit.py \
+  --backup-evidence /tmp/radar-production-backup-evidence.json \
+  --max-age-seconds 3600 \
+  --min-size-bytes 1024 \
+  --expected-schema-migrations 255 \
+  --output /tmp/radar-production-backup-audit.json
+```
+
+The backup audit exits `0` only when the backup path is absolute, the backup is outside `/opt/sub2api`, the SHA256 is a lowercase 64-character hex digest, the backup is fresh, the size is above the configured minimum, restore verification is true, and the restored schema migration count matches the expected release count. It exits `1` when the JSON result contains blockers and `2` when evidence cannot be read or parsed.
+
+Minimum backup evidence shape:
+
+```json
+{
+  "path": "/opt/sub2api-backups/radar-prod-20260802/sub2api.dump",
+  "sha256": "...",
+  "created_at": "2026-08-02T17:20:00Z",
+  "checked_at": "2026-08-02T17:30:00Z",
+  "size_bytes": 25000000,
+  "restore_verified": true,
+  "restore_schema_migrations": 255,
+  "deployment_dir": "/opt/sub2api"
+}
+```
+
 ## Production Promotion Manifest And Input Audit
 
 Before changing the production image reference, generate a promotion manifest that binds the accepted staging candidate, staging gate, migration rehearsal, production target preflight, fresh production backup, active production image digest, configuration hashes, rollback digest, and post-rollback restoration plan. The manifest builder keeps missing production-only values empty so the audit fails closed until those values exist.

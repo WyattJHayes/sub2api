@@ -308,6 +308,8 @@ Current status: staging evidence, disposable migration proof, production configu
 
 Store the backup outside the deployment directory, compute SHA256, and run a read-only restore listing or disposable restore check.
 
+Current status: a fail-closed backup evidence audit is recorded. The actual production backup and restore verification remain pending production authorization.
+
 - [ ] **Step 3: Promote the immutable candidate digest**
 
 Change only the production control-plane image reference. Wait for health and run API, outbox, pricing, artifact cleanup, and billing smoke checks.
