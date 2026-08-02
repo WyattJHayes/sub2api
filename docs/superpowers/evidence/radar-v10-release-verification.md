@@ -464,3 +464,83 @@ No control-plane `ERROR`, panic, HTTP 5xx, pricing fallback failure, or worker c
 ## Production Promotion Status
 
 Production promotion remains gated. The fixed candidate now has staging evidence for source, tests, binary hash, pricing fallback resource, disposable migration rehearsal, runtime identity, health, restart observation, and disk capacity. The production part of the release design still requires a production database backup, current production image and config hashes, immutable digest promotion, production smoke checks, rollback to the recorded digest, and post-rollback restoration evidence.
+
+## Production Preflight
+
+Production promotion was not executed because the remote host does not currently expose a running production Sub2API Compose project.
+
+Read-only production discovery:
+
+```text
+docker compose ls
+compose
+dramagenai-cloud
+sub2api-radar-staging
+weihub
+```
+
+The `/opt/sub2api` directory contains a production Compose configuration, but `docker compose ps --all` in that directory reports no active service containers:
+
+```text
+project=sub2api
+services=postgres,redis,sub2api
+containers=none
+```
+
+The only non-staging Sub2API application container found on the host is an orphan created container without Compose labels:
+
+```text
+container=trusting_visvesvaraya
+image=weishaw/sub2api:0.1.166
+image_id=sha256:ee79e9afed34054acdb6c05708b27aab1674ce25afef8fb66a78c548bc63b915
+status=created
+compose_project=
+```
+
+Production directory assets:
+
+```text
+/opt/sub2api/.env mode=0644 owner=root:root size=21191
+/opt/sub2api/data/config.yaml mode=0600 owner=ubuntu:netdev size=659
+/opt/sub2api/data/.installed mode=0400 owner=ubuntu:netdev size=34
+/opt/sub2api/postgres_data/PG_VERSION mode=0600 size=3
+/opt/sub2api/redis_data/dump.rdb mode=0600 owner=root:root size=381518
+```
+
+Existing production backups are old and predate this release:
+
+```text
+2026-07-10 23:29 /opt/sub2api/backups/clash-20260710T2328/sub2api.before.dump
+2026-07-10 23:38 /opt/sub2api/backups/trigger-20260710T2340/sub2api.before-trigger.dump
+```
+
+Current relevant image IDs:
+
+```text
+sub2api-custom:0.1.151-disable-image-generation.1 sha256:96494731ee78dc9b7db1146c47258fc81597e46d73360c118324c0c91974f2d4
+weishaw/sub2api:0.1.166 sha256:ee79e9afed34054acdb6c05708b27aab1674ce25afef8fb66a78c548bc63b915
+sub2api/radar-control-plane:staging sha256:5c0b50508ba200a20fc3637e7d052f17cac900703bffc7e5334302791ddebf37
+```
+
+Promotion blocker summary:
+
+```text
+production_compose_project_running=false
+production_target_container_absent=true
+production_current_digest_unverified=true
+production_database_logical_backup_current=false
+production_env_mode=0644
+```
+
+Required operator decisions before production promotion:
+
+```text
+1. Confirm whether /opt/sub2api is the intended production target.
+2. Confirm whether the production stack should be started from its existing local data directory before any Radar promotion.
+3. Tighten /opt/sub2api/.env to 0600 if this directory is active production material.
+4. Create a fresh production backup after the target is confirmed.
+5. Record the active production image digest and configuration hash.
+6. Promote only by immutable digest, then run production smoke, rollback, and post-rollback restore evidence.
+```
+
+Until those items are confirmed, staging remains the highest verified environment for this candidate.
