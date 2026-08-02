@@ -47,6 +47,32 @@ python3 deploy/radar/release_host_gate.py verify \
 
 The verifier exits `0` only when every captured container keeps the same container ID, the same start timestamp, no restart-count increase, `running=true`, `health=healthy`, root filesystem use is at or below 85 percent, and free space is at or above 10 GiB. Exit `1` means a release gate failed and the JSON result contains individual checks. Exit `2` means the gate could not inspect the host or parse its inputs. Do not clean images, volumes, or backups from this command path.
 
+## Sub2API Production Target Preflight
+
+Before mutating an existing `/opt/sub2api` production directory, collect a read-only target snapshot and attach it to the release evidence:
+
+```bash
+docker compose ls
+cd /opt/sub2api
+docker compose ps --all --format json
+docker compose config --images
+stat -c "%a %U:%G %s %n" .env data/config.yaml
+sha256sum docker-compose.yml docker-compose.override.yml .env data/config.yaml
+ss -ltnp | awk 'NR==1 || /:8080|:18080|:80 |:443 /'
+docker network inspect dramagenai-cloud_dgc-net --format '{{range .Containers}}{{.Name}} {{.IPv4Address}}{{println}}{{end}}'
+```
+
+If `/opt/sub2api` has no active Compose containers, stop the promotion path and obtain explicit operator approval for each item below:
+
+1. `/opt/sub2api` is the intended production target.
+2. The stack may be started from the existing local `postgres_data`, `redis_data`, and `data` directories.
+3. `.env` may be tightened to `0600`.
+4. A fresh logical database backup may be created and checksummed.
+5. The accepted candidate may be promoted by immutable digest after the active image digest and configuration hashes are captured.
+6. Rollback may be exercised to the recorded digest, followed by restoring the accepted candidate and recording post-rollback evidence.
+
+Treat the first `docker compose up` for an inactive production target as a production exposure event because it can bind host port `8080` and join the shared DGC network. Capture health, listeners, network aliases, image digests, config hashes, and backup checksums before continuing to the image promotion step.
+
 ## Secret Rotation
 
 Rotate one identity at a time so the lease protocol continues to have a valid caller.

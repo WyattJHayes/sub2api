@@ -586,3 +586,92 @@ Current host listeners relevant to the target:
 ```
 
 No running container currently has the `sub2api` alias on `dramagenai-cloud_dgc-net`. Starting `/opt/sub2api` would create a new live production service surface on host port `8080` and on the DGC network, so it requires explicit release authorization.
+
+## Production Preflight Refresh
+
+A later read-only refresh confirmed the production blockers are still present and no production promotion has happened implicitly.
+
+Refresh timestamp:
+
+```text
+checked_at=2026-08-02T16:53:59Z
+host=101.43.35.235
+mode=read-only
+```
+
+Compose projects still do not include a running `/opt/sub2api` production project:
+
+```text
+compose
+dramagenai-cloud
+sub2api-radar-staging
+weihub
+```
+
+The production compose directory still renders no active containers:
+
+```text
+cd /opt/sub2api
+docker compose ps --all --format json
+result=empty
+```
+
+The production target metadata remains unchanged:
+
+```text
+/opt/sub2api/.env mode=0644 owner=root:root size=21191
+/opt/sub2api/docker-compose.yml sha256=26de0d992725d414ca469e1e25ef3741b26b03edd7db4c9acac9157c05cda98c
+/opt/sub2api/docker-compose.override.yml sha256=2eeb002bdfad3182b83bbbc8232f51829669ca46856286a4c7ce295d3435f3fb
+/opt/sub2api/.env sha256=05c458f94e358cde0771ac8e05d611a4611ee5a486d54aa7f5512ff29e854d45
+/opt/sub2api/data/config.yaml sha256=f5e7033dc84dddbee47df8266acaa39f3f3edcc09b252e18380ab40f20c26d47
+```
+
+The only non-staging Sub2API application container is still the orphan created container:
+
+```text
+container=trusting_visvesvaraya
+image=weishaw/sub2api:0.1.166
+status=Created
+compose_project=
+```
+
+The production listener and DGC network alias checks still show no active production service:
+
+```text
+0.0.0.0:8080 inactive
+dramagenai-cloud_dgc-net sub2api alias absent
+```
+
+The staging release gate was refreshed after the production preflight and still passed:
+
+```text
+baseline_captured_at=2026-08-02T16:36:25Z
+checked_at=2026-08-02T16:54:27Z
+verify=/tmp/radar-host-gate-refresh-20260802-1654.json
+ok=true
+checks=22
+failures=0
+disk_used_percent=83.22
+disk_free_bytes=12392423424
+```
+
+Current release decision boundary:
+
+```text
+staging_verified_current=true
+production_target_confirmed=false
+production_mutation_authorized=false
+production_promotion_executed=false
+rollback_drill_executed=false
+```
+
+The next safe production sequence remains:
+
+```text
+1. Confirm /opt/sub2api is the intended production target.
+2. Authorize starting the production stack from existing local data if no active production container exists.
+3. Tighten /opt/sub2api/.env to 0600 before using that directory as production material.
+4. Create a fresh production logical backup and checksum.
+5. Record active production image digest and configuration hashes.
+6. Promote by immutable digest, run smoke checks, execute rollback drill, restore the accepted candidate, and record final evidence.
+```
