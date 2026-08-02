@@ -261,6 +261,70 @@ Minimum rollback evidence shape:
 }
 ```
 
+## Final Production Release Closure Audit
+
+After production promotion, smoke, rollback drill, and accepted candidate restoration are complete, assemble the closure evidence and run the final audit:
+
+```bash
+python3 deploy/radar/production_release_closure_audit.py \
+  --closure-evidence /tmp/radar-production-release-closure-evidence.json \
+  --output /tmp/radar-production-release-closure-audit.json
+```
+
+The closure audit exits `0` only when the target preflight, backup audit, promotion audit, smoke audit, rollback audit, production promotion execution flag, and rollback drill execution flag all pass. It also requires the accepted candidate digest to match the promotion candidate digest, production smoke active digest, rollback candidate digest, and rollback final active digest. The previous rollback digest must be distinct from the accepted candidate. It exits `1` when the JSON result contains blockers and `2` when evidence cannot be read or parsed.
+
+Minimum closure evidence shape:
+
+```json
+{
+  "accepted_candidate_digest": "sha256:...",
+  "production_target_preflight": {
+    "ok": true,
+    "promotion_ready": true,
+    "production_exposure_event": false,
+    "blockers": []
+  },
+  "production_backup_audit": {
+    "ok": true,
+    "summary": {
+      "sha256": "...",
+      "restore_verified": true,
+      "restore_schema_migrations": 255
+    },
+    "blockers": []
+  },
+  "production_promotion_audit": {
+    "ok": true,
+    "promotion_ready": true,
+    "summary": {
+      "accepted_staging_image_digest": "sha256:...",
+      "previous_image_digest": "sha256:...",
+      "production_active_image_digest": "sha256:..."
+    },
+    "blockers": []
+  },
+  "production_promotion_executed": true,
+  "production_smoke_audit": {
+    "ok": true,
+    "summary": {
+      "accepted_candidate_digest": "sha256:...",
+      "active_image_digest": "sha256:..."
+    },
+    "blockers": []
+  },
+  "rollback_drill_executed": true,
+  "production_rollback_audit": {
+    "ok": true,
+    "summary": {
+      "accepted_candidate_digest": "sha256:...",
+      "previous_image_digest": "sha256:...",
+      "final_active_digest": "sha256:..."
+    },
+    "blockers": []
+  }
+}
+```
+
 ## Secret Rotation
 
 Rotate one identity at a time so the lease protocol continues to have a valid caller.

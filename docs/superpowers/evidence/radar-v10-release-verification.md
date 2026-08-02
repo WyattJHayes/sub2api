@@ -858,6 +858,7 @@ production_rollback_drill_executed=false
 accepted_candidate_restored_after_rollback=false
 production_smoke_audit_ready=true
 rollback_evidence_audit_ready=true
+production_release_closure_audit_ready=true
 ```
 
 ## Production Promotion Audit Tool
@@ -979,6 +980,47 @@ exit code 0
 ```
 
 The tool does not execute rollback. It records the acceptance criteria that the authorized rollback drill must satisfy before Task 6 can be closed.
+
+## Production Release Closure Audit Tool
+
+Task 6 final closure is now covered by a fail-closed JSON gate:
+
+```text
+deploy/radar/production_release_closure_audit.py
+deploy/radar/test_production_release_closure_audit.py
+```
+
+The audit consumes a final closure evidence bundle and verifies target preflight, backup audit, promotion audit, production smoke audit, rollback audit, production promotion execution, rollback drill execution, and candidate digest consistency across promotion, smoke, rollback, and final active state.
+
+TDD red verification:
+
+```text
+python3 -m unittest deploy/radar/test_production_release_closure_audit.py
+FileNotFoundError: production_release_closure_audit.py
+exit code 1
+```
+
+Green verification:
+
+```text
+python3 -m unittest deploy/radar/test_production_release_closure_audit.py
+.....
+Ran 5 tests in 0.001s
+OK
+
+python3 -m unittest deploy/radar/test_release_host_gate.py deploy/radar/test_production_target_preflight.py deploy/radar/test_production_backup_audit.py deploy/radar/test_production_smoke_audit.py deploy/radar/test_production_rollback_audit.py deploy/radar/test_production_release_closure_audit.py deploy/radar/test_production_promotion_manifest.py deploy/radar/test_production_promotion_audit.py deploy/radar/test_reliability_evidence.py
+...........................................
+Ran 43 tests in 0.017s
+OK
+
+python3 -m py_compile deploy/radar/production_release_closure_audit.py deploy/radar/test_production_release_closure_audit.py deploy/radar/production_smoke_audit.py deploy/radar/test_production_smoke_audit.py deploy/radar/production_rollback_audit.py deploy/radar/test_production_rollback_audit.py deploy/radar/production_backup_audit.py deploy/radar/test_production_backup_audit.py deploy/radar/production_promotion_manifest.py deploy/radar/test_production_promotion_manifest.py deploy/radar/production_promotion_audit.py deploy/radar/test_production_promotion_audit.py deploy/radar/production_target_preflight.py deploy/radar/test_production_target_preflight.py
+exit code 0
+
+git diff --check
+exit code 0
+```
+
+The tool does not call production or create evidence. It is the final machine gate for the authorized production promotion and rollback proof.
 
 ## Production Target Preflight Refresh After Rollback Audit
 
