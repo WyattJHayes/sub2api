@@ -91,6 +91,57 @@ If `/opt/sub2api` has no active Compose containers, stop the promotion path and 
 
 Treat the first `docker compose up` for an inactive production target as a production exposure event because it can bind host port `8080` and join the shared DGC network. Capture health, listeners, network aliases, image digests, config hashes, and backup checksums before continuing to the image promotion step.
 
+## Production Promotion Input Audit
+
+Before changing the production image reference, create a promotion manifest that binds the accepted staging candidate, staging gate, migration rehearsal, production target preflight, fresh production backup, active production image digest, configuration hashes, rollback digest, and post-rollback restoration plan. Then run:
+
+```bash
+python3 deploy/radar/production_promotion_audit.py \
+  --manifest /tmp/radar-production-promotion-manifest.json \
+  --output /tmp/radar-production-promotion-audit.json
+```
+
+The audit exits `0` only when every required production promotion input is present and well-formed. It exits `1` when the JSON result contains blockers such as a failed production target preflight, missing fresh backup SHA256, missing restore verification, missing active production digest, malformed configuration hash, unavailable rollback digest, rollback digest equal to the accepted candidate, or a missing plan to restore the accepted candidate after rollback. It exits `2` when the manifest cannot be read or parsed.
+
+The minimum manifest shape is:
+
+```json
+{
+  "candidate": {
+    "accepted_staging_image_digest": "sha256:...",
+    "staging_gate_ok": true,
+    "migration_rehearsal_ok": true
+  },
+  "production_preflight": {
+    "ok": true,
+    "promotion_ready": true,
+    "production_exposure_event": false,
+    "blockers": []
+  },
+  "production_backup": {
+    "path": "/opt/sub2api-backups/prod.dump",
+    "sha256": "...",
+    "restore_verified": true
+  },
+  "production_active": {
+    "image_digest": "sha256:...",
+    "config_hashes": {
+      "docker-compose.yml": "...",
+      "docker-compose.override.yml": "...",
+      ".env": "...",
+      "data/config.yaml": "..."
+    }
+  },
+  "rollback": {
+    "previous_image_digest": "sha256:...",
+    "rollback_image_available": true
+  },
+  "post_rollback": {
+    "accepted_candidate_restoration_planned": true
+  }
+}
+```
+
 ## Secret Rotation
 
 Rotate one identity at a time so the lease protocol continues to have a valid caller.

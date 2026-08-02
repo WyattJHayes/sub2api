@@ -302,7 +302,7 @@ Task 5 evidence is recorded in `docs/superpowers/evidence/radar-v10-release-veri
 
 Require clean Git status, accepted staging evidence, backup checksum, production image digest, configuration hashes, migration compatibility proof, and available rollback images.
 
-Current status: staging evidence, disposable migration proof, production configuration hashes, and a fail-closed production target preflight are recorded. The production promotion input audit cannot pass yet because `/opt/sub2api` has no running production Compose project, no active production application container, no current production logical backup, no verified active production image digest, and `.env` is still mode `644`.
+Current status: staging evidence, disposable migration proof, production configuration hashes, a fail-closed production target preflight, and a fail-closed promotion input audit tool are recorded. The production promotion input audit cannot pass yet because `/opt/sub2api` has no running production Compose project, no active production application container, no current production logical backup, no verified active production image digest, and `.env` is still mode `644`.
 
 - [ ] **Step 2: Create and verify the production backup**
 

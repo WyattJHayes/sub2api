@@ -816,3 +816,44 @@ production_promotion_executed=false
 production_rollback_drill_executed=false
 accepted_candidate_restored_after_rollback=false
 ```
+
+## Production Promotion Audit Tool
+
+Task 6 input auditing is now covered by a second fail-closed JSON gate:
+
+```text
+deploy/radar/production_promotion_audit.py
+deploy/radar/test_production_promotion_audit.py
+```
+
+The audit consumes a local promotion manifest and verifies the accepted staging digest, staging gate result, migration rehearsal result, production target preflight, fresh production backup SHA256, backup restore verification, active production image digest, required configuration hashes, rollback image digest, rollback image availability, rollback digest distinctness, and accepted-candidate restoration plan.
+
+TDD red verification:
+
+```text
+python3 -m unittest deploy/radar/test_production_promotion_audit.py
+FileNotFoundError: production_promotion_audit.py
+exit code 1
+```
+
+Green verification:
+
+```text
+python3 -m unittest deploy/radar/test_production_promotion_audit.py
+.....
+Ran 5 tests in 0.002s
+OK
+
+python3 -m unittest deploy/radar/test_release_host_gate.py deploy/radar/test_production_target_preflight.py deploy/radar/test_production_promotion_audit.py deploy/radar/test_reliability_evidence.py
+....................
+Ran 20 tests in 0.011s
+OK
+
+python3 -m py_compile deploy/radar/production_promotion_audit.py deploy/radar/test_production_promotion_audit.py deploy/radar/production_target_preflight.py deploy/radar/test_production_target_preflight.py
+exit code 0
+
+git diff --check
+exit code 0
+```
+
+The current production state would still fail this audit because the production target preflight is false, no fresh production backup SHA256 exists, no production backup restore verification exists, no active production image digest is verified, and required production config hashes cannot be bound to a running target.
