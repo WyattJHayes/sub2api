@@ -938,6 +938,45 @@ exit code 0
 
 The tool does not execute rollback. It records the acceptance criteria that the authorized rollback drill must satisfy before Task 6 can be closed.
 
+## Production Target Preflight Refresh After Rollback Audit
+
+After adding the rollback evidence audit, the current production target was refreshed with the read-only preflight `check` mode. The script was streamed over SSH and produced only stdout JSON. It did not upload files, change Docker state, edit configuration, start containers, or create backups.
+
+Command:
+
+```text
+ssh -o BatchMode=yes root@101.43.35.235 'python3 - check --target-dir /opt/sub2api --project sub2api --app-service sub2api --app-port 8080' < deploy/radar/production_target_preflight.py
+exit code 1
+checked_at=2026-08-02T17:37:08Z
+ok=false
+promotion_ready=false
+production_exposure_event=true
+target_dir=/opt/sub2api
+```
+
+Blockers remain:
+
+```text
+production_compose_project_running
+production_target_container_present
+production_target_container_running
+production_target_container_healthy
+production_env_mode_0600
+```
+
+Required authorizations remain:
+
+```text
+confirm_target_dir
+authorize_inactive_stack_start
+authorize_env_chmod_0600
+authorize_fresh_backup
+authorize_digest_promotion
+authorize_rollback_drill
+```
+
+The refreshed `.env` mode check still reports `644`, expected `600`.
+
 ## Current Production Promotion Audit Run
 
 A local promotion manifest was assembled from the accepted staging candidate, the latest fail-closed production target preflight, and the non-secret production configuration hashes. It intentionally left production-only fields empty where no current production state exists yet.
