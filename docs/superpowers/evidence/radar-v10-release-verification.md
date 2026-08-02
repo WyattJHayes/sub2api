@@ -724,3 +724,68 @@ exit code 0
 ```
 
 This tool does not authorize production mutation by itself. It converts the current manual blocker into a repeatable JSON gate that must pass before fresh backup, immutable digest promotion, smoke checks, and rollback drill proceed.
+
+## Production Target Preflight Tool Run
+
+The new fail-closed preflight gate was run against the current remote production target without uploading a file to the host. The script was streamed to remote Python over SSH and performed only read-only Docker, file metadata, hash, listener, and network inspection.
+
+Capture command shape:
+
+```text
+ssh -o BatchMode=yes root@101.43.35.235 'python3 - capture --target-dir /opt/sub2api --project sub2api' < deploy/radar/production_target_preflight.py
+```
+
+Local artifacts:
+
+```text
+snapshot=/tmp/radar-production-target-snapshot-20260802-verify.json
+snapshot_sha256=cae73d1b7f68f3e3b00f45de145876e4b588ceccadb8cba4c83971a4526d141d
+result=/tmp/radar-production-target-preflight-20260802-verify-rerun.json
+result_sha256=198bd51d64c1398a91c0e06a02b7d5e9a43783ea07cee088543dbb72b51ed34a
+captured_at=2026-08-02T17:06:34Z
+checked_at=2026-08-02T17:06:34Z
+```
+
+Snapshot summary:
+
+```text
+compose_projects=compose:running(7),dramagenai-cloud:running(6),sub2api-radar-staging:running(9),weihub:running(1)
+production_container_count=0
+rendered_images=redis:8-alpine,sub2api-custom:0.1.151-disable-image-generation.1,postgres:18-alpine
+env_mode=644
+listener_ports=18080,80,443,80,443
+dgc_alias_count=9
+```
+
+Evaluation result:
+
+```text
+python3 deploy/radar/production_target_preflight.py evaluate --snapshot /tmp/radar-production-target-snapshot-20260802-verify.json --project sub2api --app-service sub2api --app-port 8080 --output /tmp/radar-production-target-preflight-20260802-verify-rerun.json
+exit_code=1
+ok=false
+promotion_ready=false
+production_exposure_event=true
+```
+
+Machine-identified blockers:
+
+```text
+production_compose_project_running
+production_target_container_present
+production_target_container_running
+production_target_container_healthy
+production_env_mode_0600
+```
+
+Machine-required authorizations:
+
+```text
+confirm_target_dir
+authorize_inactive_stack_start
+authorize_env_chmod_0600
+authorize_fresh_backup
+authorize_digest_promotion
+authorize_rollback_drill
+```
+
+This confirms the candidate cannot move to production through the release gate until the operator explicitly authorizes the inactive production target start, environment permission tightening, fresh production backup, immutable digest promotion, rollback drill, and accepted-candidate restoration.
