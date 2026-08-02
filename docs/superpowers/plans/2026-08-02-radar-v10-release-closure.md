@@ -302,7 +302,7 @@ Task 5 evidence is recorded in `docs/superpowers/evidence/radar-v10-release-veri
 
 Require clean Git status, accepted staging evidence, backup checksum, production image digest, configuration hashes, migration compatibility proof, and available rollback images.
 
-Current status: staging evidence, disposable migration proof, production configuration hashes, a promotion manifest generator, a fail-closed production target preflight, a fail-closed promotion input audit tool, and a current failed promotion audit run are recorded. The production promotion input audit cannot pass yet because `/opt/sub2api` has no running production Compose project, no active production application container, no current production logical backup, no verified active production image digest, and `.env` is still mode `644`.
+Current status: staging evidence, disposable migration proof, production configuration hashes, a promotion manifest generator, a fail-closed production target preflight, a fail-closed promotion input audit tool, a fail-closed rollback evidence audit tool, and a current failed promotion audit run are recorded. The production promotion input audit cannot pass yet because `/opt/sub2api` has no running production Compose project, no active production application container, no current production logical backup, no verified active production image digest, and `.env` is still mode `644`.
 
 - [ ] **Step 2: Create and verify the production backup**
 
@@ -317,6 +317,8 @@ Change only the production control-plane image reference. Wait for health and ru
 - [ ] **Step 4: Exercise rollback**
 
 Restore the recorded previous digest, require health and smoke success, and verify migration compatibility. Record restart deltas and database state.
+
+Current status: a fail-closed rollback evidence audit is recorded. The actual rollback drill remains pending production authorization and a verified active production target.
 
 - [ ] **Step 5: Restore the accepted candidate**
 

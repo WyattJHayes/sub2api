@@ -856,6 +856,7 @@ production_active_digest_verified=false
 production_promotion_executed=false
 production_rollback_drill_executed=false
 accepted_candidate_restored_after_rollback=false
+rollback_evidence_audit_ready=true
 ```
 
 ## Production Promotion Audit Tool
@@ -898,6 +899,44 @@ exit code 0
 ```
 
 The current production state would still fail this audit because the production target preflight is false, no fresh production backup SHA256 exists, no production backup restore verification exists, no active production image digest is verified, and required production config hashes cannot be bound to a running target.
+
+## Production Rollback Evidence Audit Tool
+
+Task 6 rollback proof is now covered by a fail-closed JSON gate:
+
+```text
+deploy/radar/production_rollback_audit.py
+deploy/radar/test_production_rollback_audit.py
+```
+
+The audit consumes the rollback drill evidence after production has been promoted, rolled back to the recorded previous digest, smoke tested, restored to the accepted candidate, and smoke tested again. It verifies valid and distinct image digests, rollback image availability, rollback execution, rollback smoke, schema migration compatibility, unchanged budget ledger totals when they are reported, accepted candidate restoration, post-restore smoke, and final active digest equality with the accepted candidate.
+
+TDD red verification:
+
+```text
+python3 -m unittest deploy/radar/test_production_rollback_audit.py
+FileNotFoundError: production_rollback_audit.py
+exit code 1
+```
+
+Green verification:
+
+```text
+python3 -m unittest deploy/radar/test_production_rollback_audit.py
+.....
+Ran 5 tests in 0.001s
+OK
+
+python3 -m unittest deploy/radar/test_release_host_gate.py deploy/radar/test_production_target_preflight.py deploy/radar/test_production_backup_audit.py deploy/radar/test_production_rollback_audit.py deploy/radar/test_production_promotion_manifest.py deploy/radar/test_production_promotion_audit.py deploy/radar/test_reliability_evidence.py
+.................................
+Ran 33 tests in 0.013s
+OK
+
+python3 -m py_compile deploy/radar/production_rollback_audit.py deploy/radar/test_production_rollback_audit.py deploy/radar/production_backup_audit.py deploy/radar/test_production_backup_audit.py deploy/radar/production_promotion_manifest.py deploy/radar/test_production_promotion_manifest.py deploy/radar/production_promotion_audit.py deploy/radar/test_production_promotion_audit.py deploy/radar/production_target_preflight.py deploy/radar/test_production_target_preflight.py
+exit code 0
+```
+
+The tool does not execute rollback. It records the acceptance criteria that the authorized rollback drill must satisfy before Task 6 can be closed.
 
 ## Current Production Promotion Audit Run
 

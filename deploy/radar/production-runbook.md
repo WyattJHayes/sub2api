@@ -191,6 +191,37 @@ The minimum manifest shape is:
 }
 ```
 
+## Production Rollback Evidence Audit
+
+After the rollback drill restores the previous digest and the accepted candidate is promoted again, audit the rollback evidence before closing the release:
+
+```bash
+python3 deploy/radar/production_rollback_audit.py \
+  --rollback-evidence /tmp/radar-production-rollback-evidence.json \
+  --expected-schema-migrations 255 \
+  --output /tmp/radar-production-rollback-audit.json
+```
+
+The rollback audit exits `0` only when the accepted candidate digest and previous digest are valid and distinct, the rollback image was available, rollback was executed, rollback smoke passed, schema migrations still match the expected release count, reported budget ledger totals are unchanged, the accepted candidate was restored, post-restore smoke passed, and the final active digest matches the accepted candidate. It exits `1` when the JSON result contains blockers and `2` when evidence cannot be read or parsed.
+
+Minimum rollback evidence shape:
+
+```json
+{
+  "accepted_candidate_digest": "sha256:...",
+  "previous_image_digest": "sha256:...",
+  "rollback_image_available": true,
+  "rollback_executed": true,
+  "rollback_smoke_ok": true,
+  "rollback_schema_migrations": 255,
+  "budget_ledger_total_before": "123.45",
+  "budget_ledger_total_after": "123.45",
+  "accepted_candidate_restored": true,
+  "post_restore_smoke_ok": true,
+  "final_active_digest": "sha256:..."
+}
+```
+
 ## Secret Rotation
 
 Rotate one identity at a time so the lease protocol continues to have a valid caller.
