@@ -1277,3 +1277,61 @@ exit code 0
 git diff --check
 exit code 0
 ```
+
+## Live Production Read-Only Recheck
+
+The production target was rechecked from the release worktree after the current
+continuation resumed. The commands used SSH in batch mode and performed only
+read-only inspection.
+
+Preflight artifacts:
+
+```text
+snapshot=/tmp/radar-production-target-snapshot-20260802-live.json
+preflight=/tmp/radar-production-target-preflight-20260802-live.json
+promotion_manifest=/tmp/radar-production-promotion-manifest-20260802-live.json
+promotion_audit=/tmp/radar-production-promotion-audit-20260802-live.json
+closure_evidence=/tmp/radar-production-release-closure-evidence-20260802-live.json
+closure_audit=/tmp/radar-production-release-closure-audit-20260802-live.json
+checked_at=2026-08-02T22:11:52Z
+```
+
+The live preflight remains fail-closed:
+
+```text
+ok=false
+promotion_ready=false
+production_exposure_event=true
+blockers=production_compose_project_running,production_target_container_present,production_target_container_running,production_target_container_healthy,production_env_mode_0600
+required_authorizations=confirm_target_dir,authorize_inactive_stack_start,authorize_env_chmod_0600,authorize_fresh_backup,authorize_digest_promotion,authorize_rollback_drill
+```
+
+The current promotion audit remains fail-closed because the target has no
+verified active production digest, fresh production backup, restore proof, or
+rollback image binding:
+
+```text
+ok=false
+promotion_ready=false
+blockers=production_preflight_ok,production_requires_operator_authorization,production_backup_sha256,production_backup_restore_verified,production_active_image_digest,rollback_previous_image_digest,rollback_image_available,rollback_digest_distinct_from_candidate
+```
+
+The final closure audit also remains fail-closed. Promotion, Smoke, rollback,
+and accepted-candidate restoration have not been executed.
+
+Manual host cross-checks found:
+
+```text
+production_compose_project=sub2api is absent from docker compose ls
+production_service_container=absent
+production_image_reference=weishaw/sub2api:latest
+production_override_image=sub2api-custom:0.1.151-disable-image-generation.1
+production_env_mode=644
+production_config_mode=600
+production_listener_8080=absent
+```
+
+The host has staging images and staging backups, including the accepted
+candidate digest, but no evidence that any of them is the active production
+digest or a fresh production backup. No production mutation occurred during
+this recheck.
