@@ -191,6 +191,45 @@ The minimum manifest shape is:
 }
 ```
 
+## Production Smoke Evidence Audit
+
+After promoting the accepted candidate digest, capture the production smoke evidence and audit it before starting rollback drill:
+
+```bash
+python3 deploy/radar/production_smoke_audit.py \
+  --smoke-evidence /tmp/radar-production-smoke-evidence.json \
+  --min-api-success-count 1 \
+  --output /tmp/radar-production-smoke-audit.json
+```
+
+The smoke audit exits `0` only when the active image digest matches the accepted candidate, the application is healthy, `/health` returns `200`, API smoke succeeds with enough successful calls, API errors are zero, P99 latency is at or below the recorded SLO, terminalization and evaluation outbox pending counts are zero, pricing source is valid, the pricing resource SHA256 is valid, pricing fallback failures are zero, artifact cleanup errors are zero, billing idempotency failures are zero, and runtime error counters are zero. It exits `1` when the JSON result contains blockers and `2` when evidence cannot be read or parsed.
+
+Minimum smoke evidence shape:
+
+```json
+{
+  "accepted_candidate_digest": "sha256:...",
+  "active_image_digest": "sha256:...",
+  "app_health": "healthy",
+  "health_http_status": 200,
+  "api_smoke_ok": true,
+  "api_success_count": 3,
+  "api_error_count": 0,
+  "p99_latency_ms": 480,
+  "p99_slo_ms": 500,
+  "terminalization_outbox_pending": 0,
+  "evaluation_outbox_pending": 0,
+  "pricing_source": "local",
+  "pricing_resource_sha256": "...",
+  "pricing_fallback_failure_count": 0,
+  "artifact_cleanup_error_count": 0,
+  "billing_idempotency_failures": 0,
+  "http_5xx_count": 0,
+  "panic_count": 0,
+  "control_plane_error_count": 0
+}
+```
+
 ## Production Rollback Evidence Audit
 
 After the rollback drill restores the previous digest and the accepted candidate is promoted again, audit the rollback evidence before closing the release:

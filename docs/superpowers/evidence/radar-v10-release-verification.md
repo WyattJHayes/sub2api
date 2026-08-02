@@ -856,6 +856,7 @@ production_active_digest_verified=false
 production_promotion_executed=false
 production_rollback_drill_executed=false
 accepted_candidate_restored_after_rollback=false
+production_smoke_audit_ready=true
 rollback_evidence_audit_ready=true
 ```
 
@@ -899,6 +900,47 @@ exit code 0
 ```
 
 The current production state would still fail this audit because the production target preflight is false, no fresh production backup SHA256 exists, no production backup restore verification exists, no active production image digest is verified, and required production config hashes cannot be bound to a running target.
+
+## Production Smoke Evidence Audit Tool
+
+Task 6 post-promotion smoke proof is now covered by a fail-closed JSON gate:
+
+```text
+deploy/radar/production_smoke_audit.py
+deploy/radar/test_production_smoke_audit.py
+```
+
+The audit consumes production smoke evidence after the accepted candidate digest has been promoted. It verifies active digest equality with the accepted candidate, application health, `/health` status, API smoke success, minimum API success count, zero API errors, P99 latency SLO, terminalization and evaluation outbox pending counts, pricing source and pricing resource hash, pricing fallback failures, artifact cleanup errors, billing idempotency failures, HTTP 5xx, panics, and control-plane errors.
+
+TDD red verification:
+
+```text
+python3 -m unittest deploy/radar/test_production_smoke_audit.py
+FileNotFoundError: production_smoke_audit.py
+exit code 1
+```
+
+Green verification:
+
+```text
+python3 -m unittest deploy/radar/test_production_smoke_audit.py
+.....
+Ran 5 tests in 0.001s
+OK
+
+python3 -m unittest deploy/radar/test_release_host_gate.py deploy/radar/test_production_target_preflight.py deploy/radar/test_production_backup_audit.py deploy/radar/test_production_smoke_audit.py deploy/radar/test_production_rollback_audit.py deploy/radar/test_production_promotion_manifest.py deploy/radar/test_production_promotion_audit.py deploy/radar/test_reliability_evidence.py
+......................................
+Ran 38 tests in 0.014s
+OK
+
+python3 -m py_compile deploy/radar/production_smoke_audit.py deploy/radar/test_production_smoke_audit.py deploy/radar/production_rollback_audit.py deploy/radar/test_production_rollback_audit.py deploy/radar/production_backup_audit.py deploy/radar/test_production_backup_audit.py deploy/radar/production_promotion_manifest.py deploy/radar/test_production_promotion_manifest.py deploy/radar/production_promotion_audit.py deploy/radar/test_production_promotion_audit.py deploy/radar/production_target_preflight.py deploy/radar/test_production_target_preflight.py
+exit code 0
+
+git diff --check
+exit code 0
+```
+
+The tool does not call production. It records the acceptance criteria that the authorized post-promotion smoke evidence must satisfy before rollback drill starts.
 
 ## Production Rollback Evidence Audit Tool
 
