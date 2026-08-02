@@ -91,6 +91,38 @@ If `/opt/sub2api` has no active Compose containers, stop the promotion path and 
 
 Treat the first `docker compose up` for an inactive production target as a production exposure event because it can bind host port `8080` and join the shared DGC network. Capture health, listeners, network aliases, image digests, config hashes, and backup checksums before continuing to the image promotion step.
 
+## Production Mutation Authorization Audit
+
+Before starting an inactive production stack or changing production files, record the operator authorization and audit it:
+
+```bash
+python3 deploy/radar/production_authorization_audit.py \
+  --authorization-evidence /tmp/radar-production-authorization-evidence.json \
+  --expected-target-dir /opt/sub2api \
+  --max-age-seconds 3600 \
+  --output /tmp/radar-production-authorization-audit.json
+```
+
+The audit exits `0` only when the target directory matches `/opt/sub2api`, the accepted candidate digest is valid, an operator and timezone-aware authorization timestamp are present, the authorization is fresh, and all six required authorizations are true. It exits `1` when the JSON result contains blockers and `2` when evidence cannot be read or parsed.
+
+Minimum authorization evidence shape:
+
+```json
+{
+  "target_dir": "/opt/sub2api",
+  "accepted_candidate_digest": "sha256:...",
+  "operator": "release-owner",
+  "authorized_at": "2026-08-02T21:00:00Z",
+  "checked_at": "2026-08-02T21:30:00Z",
+  "confirm_target_dir": true,
+  "authorize_inactive_stack_start": true,
+  "authorize_env_chmod_0600": true,
+  "authorize_fresh_backup": true,
+  "authorize_digest_promotion": true,
+  "authorize_rollback_drill": true
+}
+```
+
 ## Production Backup Evidence Audit
 
 After creating the fresh logical production backup and restore verification evidence, audit the backup evidence before adding it to the promotion manifest:

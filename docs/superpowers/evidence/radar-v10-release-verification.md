@@ -766,6 +766,45 @@ exit code 0
 
 This tool does not authorize production mutation by itself. It converts the current manual blocker into a repeatable JSON gate that must pass before fresh backup, immutable digest promotion, smoke checks, and rollback drill proceed.
 
+## Production Mutation Authorization Audit Tool
+
+The six required production mutation decisions are now covered by a fail-closed authorization audit:
+
+```text
+deploy/radar/production_authorization_audit.py
+deploy/radar/test_production_authorization_audit.py
+```
+
+The audit verifies the exact `/opt/sub2api` target, accepted candidate digest, operator identity, timezone-aware authorization freshness, and these six explicit decisions:
+
+```text
+confirm_target_dir
+authorize_inactive_stack_start
+authorize_env_chmod_0600
+authorize_fresh_backup
+authorize_digest_promotion
+authorize_rollback_drill
+```
+
+TDD red verification:
+
+```text
+python3 -m unittest deploy/radar/test_production_authorization_audit.py
+FileNotFoundError: production_authorization_audit.py
+exit code 1
+```
+
+Green verification:
+
+```text
+python3 -m unittest deploy/radar/test_production_authorization_audit.py
+.....
+Ran 5 tests in 0.001s
+OK
+```
+
+The tool does not authorize itself and does not mutate production. It makes the operator decision a concrete, time-bounded evidence artifact that can be checked before any production mutation.
+
 ## Production Target Preflight Tool Run
 
 The new fail-closed preflight gate was run against the current remote production target without uploading a file to the host. The script was streamed to remote Python over SSH and performed only read-only Docker, file metadata, hash, listener, and network inspection.
@@ -860,6 +899,7 @@ production_smoke_audit_ready=true
 rollback_evidence_audit_ready=true
 production_release_closure_evidence_builder_ready=true
 production_release_closure_audit_ready=true
+production_authorization_audit_ready=true
 ```
 
 ## Production Promotion Audit Tool
@@ -1020,12 +1060,12 @@ python3 -m unittest deploy/radar/test_production_release_closure_audit.py
 Ran 5 tests in 0.001s
 OK
 
-python3 -m unittest deploy/radar/test_release_host_gate.py deploy/radar/test_production_target_preflight.py deploy/radar/test_production_backup_audit.py deploy/radar/test_production_smoke_audit.py deploy/radar/test_production_rollback_audit.py deploy/radar/test_production_release_closure_evidence.py deploy/radar/test_production_release_closure_audit.py deploy/radar/test_production_promotion_manifest.py deploy/radar/test_production_promotion_audit.py deploy/radar/test_reliability_evidence.py
-..............................................
-Ran 46 tests in 0.015s
+python3 -m unittest deploy/radar/test_release_host_gate.py deploy/radar/test_production_target_preflight.py deploy/radar/test_production_authorization_audit.py deploy/radar/test_production_backup_audit.py deploy/radar/test_production_smoke_audit.py deploy/radar/test_production_rollback_audit.py deploy/radar/test_production_release_closure_evidence.py deploy/radar/test_production_release_closure_audit.py deploy/radar/test_production_promotion_manifest.py deploy/radar/test_production_promotion_audit.py deploy/radar/test_reliability_evidence.py
+...................................................
+Ran 51 tests in 0.038s
 OK
 
-python3 -m py_compile deploy/radar/production_release_closure_evidence.py deploy/radar/test_production_release_closure_evidence.py deploy/radar/production_release_closure_audit.py deploy/radar/test_production_release_closure_audit.py deploy/radar/production_smoke_audit.py deploy/radar/test_production_smoke_audit.py deploy/radar/production_rollback_audit.py deploy/radar/test_production_rollback_audit.py deploy/radar/production_backup_audit.py deploy/radar/test_production_backup_audit.py deploy/radar/production_promotion_manifest.py deploy/radar/test_production_promotion_manifest.py deploy/radar/production_promotion_audit.py deploy/radar/test_production_promotion_audit.py deploy/radar/production_target_preflight.py deploy/radar/test_production_target_preflight.py
+python3 -m py_compile deploy/radar/production_authorization_audit.py deploy/radar/test_production_authorization_audit.py deploy/radar/production_release_closure_evidence.py deploy/radar/test_production_release_closure_evidence.py deploy/radar/production_release_closure_audit.py deploy/radar/test_production_release_closure_audit.py deploy/radar/production_smoke_audit.py deploy/radar/test_production_smoke_audit.py deploy/radar/production_rollback_audit.py deploy/radar/test_production_rollback_audit.py deploy/radar/production_backup_audit.py deploy/radar/test_production_backup_audit.py deploy/radar/production_promotion_manifest.py deploy/radar/test_production_promotion_manifest.py deploy/radar/production_promotion_audit.py deploy/radar/test_production_promotion_audit.py deploy/radar/production_target_preflight.py deploy/radar/test_production_target_preflight.py
 exit code 0
 
 git diff --check
@@ -1072,6 +1112,21 @@ authorize_rollback_drill
 ```
 
 The refreshed `.env` mode check still reports `644`, expected `600`.
+
+## Latest Production Target Preflight Refresh
+
+After adding the production mutation authorization audit, the target was checked again with the same read-only command:
+
+```text
+ssh -o BatchMode=yes root@101.43.35.235 'python3 - check --target-dir /opt/sub2api --project sub2api --app-service sub2api --app-port 8080' < deploy/radar/production_target_preflight.py
+exit code 1
+checked_at=2026-08-02T21:57:22Z
+ok=false
+promotion_ready=false
+production_exposure_event=true
+```
+
+The five runtime blockers and six required authorizations are unchanged. No production mutation occurred during this refresh.
 
 ## Worktree Index Integrity Recovery
 
