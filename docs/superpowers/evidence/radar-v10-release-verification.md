@@ -857,3 +857,51 @@ exit code 0
 ```
 
 The current production state would still fail this audit because the production target preflight is false, no fresh production backup SHA256 exists, no production backup restore verification exists, no active production image digest is verified, and required production config hashes cannot be bound to a running target.
+
+## Current Production Promotion Audit Run
+
+A local promotion manifest was assembled from the accepted staging candidate, the latest fail-closed production target preflight, and the non-secret production configuration hashes. It intentionally left production-only fields empty where no current production state exists yet.
+
+Local artifacts:
+
+```text
+manifest=/tmp/radar-production-promotion-current-fail-20260802.json
+manifest_sha256=7871d66fa5afb96a712d8713526439915850e11338882b2e5722d7f6b7ddcc51
+result=/tmp/radar-production-promotion-current-audit-20260802.json
+result_sha256=92b6e1092f3f4f76179c756ef4d6ddfe925752acf27defad100abaafe7b1f98f
+checked_at=2026-08-02T17:18:38Z
+```
+
+Command:
+
+```text
+python3 deploy/radar/production_promotion_audit.py --manifest /tmp/radar-production-promotion-current-fail-20260802.json --output /tmp/radar-production-promotion-current-audit-20260802.json
+exit_code=1
+ok=false
+promotion_ready=false
+```
+
+Passing inputs:
+
+```text
+accepted_staging_image_digest=sha256:5c0b50508ba200a20fc3637e7d052f17cac900703bffc7e5334302791ddebf37
+staging_gate_ok=true
+migration_rehearsal_ok=true
+production_config_hashes=true
+```
+
+Failing inputs:
+
+```text
+production_preflight_ok
+production_requires_operator_authorization
+production_backup_sha256
+production_backup_restore_verified
+production_active_image_digest
+rollback_previous_image_digest
+rollback_image_available
+rollback_digest_distinct_from_candidate
+accepted_candidate_restoration_planned
+```
+
+This converts Task 6 Step 1 from a prose-only blocker into a machine-readable audit result. Production promotion remains stopped before any mutable production action.
