@@ -222,11 +222,11 @@ git commit -m "feat(radar): expose pricing fallback health"
 * `verify` compares a fresh capture with the saved state and checks disk thresholds.
 * Both commands accept repeated `--container` values and use only the Python standard library plus the Docker CLI.
 
-- [ ] **Step 1: Write failing pure gate tests**
+- [x] **Step 1: Write failing pure gate tests**
 
 Use literal snapshots to prove unchanged historical restart counts pass, any count increase fails, a moved start timestamp fails, unhealthy or absent containers fail, disk use above 85 percent fails, and free space below 10 GiB fails.
 
-- [ ] **Step 2: Verify red**
+- [x] **Step 2: Verify red**
 
 ```bash
 python3 -m unittest deploy/radar/test_release_host_gate.py
@@ -234,15 +234,15 @@ python3 -m unittest deploy/radar/test_release_host_gate.py
 
 Expected result: import fails because `release_host_gate.py` is absent.
 
-- [ ] **Step 3: Implement capture and verify**
+- [x] **Step 3: Implement capture and verify**
 
 Return exit code 0 only when every invariant passes. Emit one JSON result with individual checks and measured values. Never perform cleanup from this command.
 
-- [ ] **Step 4: Verify locally and on staging**
+- [x] **Step 4: Verify locally and on staging**
 
 Run unit tests, capture the four Radar process containers, wait through the chosen observation window, and verify the delta plus disk thresholds.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add deploy/radar/release_host_gate.py deploy/radar/test_release_host_gate.py deploy/radar/production-runbook.md

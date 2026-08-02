@@ -17,6 +17,36 @@ Before a release, confirm:
 5. The Gate Policy has distinct `quality_admin` and `release_manager` approvals with a validity window covering the run.
 6. The release subject, fault experiment, recovery evidence, and Worker identities share the same tenant and run scope.
 
+## Host Release Gate
+
+Capture a restart baseline before changing a staging or production image:
+
+```bash
+python3 deploy/radar/release_host_gate.py capture \
+  --container sub2api-radar-staging-sub2api-staging-1 \
+  --container sub2api-radar-staging-radar-runner-1 \
+  --container sub2api-radar-staging-radar-grader-1 \
+  --container sub2api-radar-staging-radar-statistics-1 \
+  --output /tmp/radar-host-gate-before.json
+```
+
+After the observation window, verify the fresh container state and host capacity:
+
+```bash
+python3 deploy/radar/release_host_gate.py verify \
+  --baseline /tmp/radar-host-gate-before.json \
+  --container sub2api-radar-staging-sub2api-staging-1 \
+  --container sub2api-radar-staging-radar-runner-1 \
+  --container sub2api-radar-staging-radar-grader-1 \
+  --container sub2api-radar-staging-radar-statistics-1 \
+  --disk-path / \
+  --max-used-percent 85 \
+  --min-free-gib 10 \
+  --output /tmp/radar-host-gate-after.json
+```
+
+The verifier exits `0` only when every captured container keeps the same container ID, the same start timestamp, no restart-count increase, `running=true`, `health=healthy`, root filesystem use is at or below 85 percent, and free space is at or above 10 GiB. Exit `1` means a release gate failed and the JSON result contains individual checks. Exit `2` means the gate could not inspect the host or parse its inputs. Do not clean images, volumes, or backups from this command path.
+
 ## Secret Rotation
 
 Rotate one identity at a time so the lease protocol continues to have a valid caller.

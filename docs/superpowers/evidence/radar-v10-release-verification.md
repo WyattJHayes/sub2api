@@ -197,3 +197,66 @@ radar_pricing_fallback_total
 ```
 
 The repository has an Ops SQL collector, but no existing Prometheus registry or generic application-gauge exporter in the current source. For this release fix, the metrics are exposed as a stable in-process series producer with literal tests, ready for the deployment probe or a future exporter to scrape without adding new dependencies.
+
+## Release Host Gate
+
+The host gate script records container ID, start timestamp, restart count, running state, and health state, then verifies a fresh capture against that baseline with disk capacity thresholds.
+
+Red verification:
+
+```text
+python3 -m unittest deploy/radar/test_release_host_gate.py
+FileNotFoundError: release_host_gate.py
+exit code 1
+```
+
+Green local verification:
+
+```text
+python3 -m unittest deploy/radar/test_release_host_gate.py
+.......
+Ran 7 tests in 0.001s
+OK
+
+python3 -m unittest deploy/radar/test_release_host_gate.py deploy/radar/test_reliability_evidence.py
+..........
+Ran 10 tests in 0.009s
+OK
+
+python3 -m py_compile deploy/radar/release_host_gate.py deploy/radar/test_release_host_gate.py
+exit code 0
+
+git diff --check
+exit code 0
+```
+
+Staging host verification:
+
+```text
+uploaded: deploy/radar/release_host_gate.py -> root@101.43.35.235:/tmp/radar-release-host-gate-20260802.py
+python3 /tmp/radar-release-host-gate-20260802.py capture ... --output /tmp/radar-host-gate-before-20260802.json
+exit code 0
+python3 /tmp/radar-release-host-gate-20260802.py verify ... --disk-path / --max-used-percent 85 --min-free-gib 10 --output /tmp/radar-host-gate-after-20260802.json
+exit code 0
+```
+
+Verified targets:
+
+```text
+sub2api-radar-staging-sub2api-staging-1
+sub2api-radar-staging-radar-runner-1
+sub2api-radar-staging-radar-grader-1
+sub2api-radar-staging-radar-statistics-1
+```
+
+Result summary:
+
+```text
+ok=true
+checks=22
+failures=0
+disk_used_percent=83.54
+disk_free_bytes=12156874752
+```
+
+The non-Radar container `compose-celery-worker-1` is still unhealthy on the shared host. It was deliberately excluded from the Radar release gate target set and remains a shared-host operational risk, not a blocker for the four observed Radar containers.
