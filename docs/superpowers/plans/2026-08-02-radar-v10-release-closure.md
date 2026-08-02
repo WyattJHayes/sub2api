@@ -109,7 +109,7 @@ All commands must exit zero.
 
 Build with the recorded Dockerfile, toolchain, build arguments, and pricing file. Extract `/app/sub2api` and require SHA256 `bfe1c72ef8f9d5f8a514f9a3df55d161af80522a0a7888dab1f031dc09d00a24`.
 
-- [ ] **Step 7: Commit the pure v10 baseline**
+- [x] **Step 7: Commit the pure v10 baseline**
 
 ```bash
 git add --all
@@ -126,7 +126,7 @@ git commit -m "release(radar): reconstruct v10 source baseline"
 * Consumes `ArtifactCleanupResult` and the cleanup error.
 * Produces `logArtifactCleanupResult(*slog.Logger, ArtifactCleanupResult, error)` with deterministic severity and structured fields.
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 Add tests that install a `slog.JSONHandler` over a buffer and call the real logging helper. Assert literal outcomes:
 
@@ -138,7 +138,7 @@ require.EqualValues(t, 0, record.Fields["failed"])
 
 Add separate tests for selected successful work at `INFO` and a returned error at `ERROR`.
 
-- [ ] **Step 2: Verify red**
+- [x] **Step 2: Verify red**
 
 ```bash
 go test ./internal/service -run 'TestLogArtifactCleanupResult' -count=1
@@ -146,11 +146,11 @@ go test ./internal/service -run 'TestLogArtifactCleanupResult' -count=1
 
 Expected result: compilation fails because `logArtifactCleanupResult` does not exist.
 
-- [ ] **Step 3: Implement the minimal helper**
+- [x] **Step 3: Implement the minimal helper**
 
 The helper emits `DEBUG` for an empty successful poll, `INFO` for selected successful work, and `ERROR` only when `err` is non-nil. `runOnce` delegates to the helper.
 
-- [ ] **Step 4: Verify green and regression scope**
+- [x] **Step 4: Verify green and regression scope**
 
 ```bash
 go test ./internal/service -run 'ArtifactCleanup' -count=1

@@ -123,3 +123,31 @@ built=2026-08-02T12:36:00Z
 ```
 
 The binary SHA256 exactly matches the running staging v10 binary. This proves the reconstructed source and build identity produce the deployed server byte for byte. The temporary frontend heap adjustment changed build scheduling only and had no effect on the release bytes.
+
+## Artifact Cleanup Log Severity
+
+The regression tests add direct `slog.JSONHandler` coverage for the cleanup polling helper.
+
+Red verification used a temporary detached worktree at commit `91c6d4694` with only the test diff applied. The command exited 1 as expected:
+
+```text
+go test ./internal/service -run '^TestLogArtifactCleanupResult' -count=1
+internal/service/evaluation_artifact_cleanup_test.go:74:2: undefined: logArtifactCleanupResult
+FAIL
+```
+
+Green verification in the release worktree:
+
+```text
+go test ./internal/service -run '^TestLogArtifactCleanupResult' -count=1
+ok  	github.com/Wei-Shaw/sub2api/internal/service	1.894s
+
+go test ./internal/service -run 'ArtifactCleanup' -count=1
+ok  	github.com/Wei-Shaw/sub2api/internal/service	1.256s
+
+go test ./internal/service ./internal/repository -count=1
+ok  	github.com/Wei-Shaw/sub2api/internal/service	96.771s
+ok  	github.com/Wei-Shaw/sub2api/internal/repository	3.824s
+```
+
+The implemented helper emits `DEBUG` for empty successful polls, `INFO` for selected successful work, and `ERROR` only when an error is returned. The structured fields retained are `component`, `selected`, `deleted`, `skipped`, and `failed`.

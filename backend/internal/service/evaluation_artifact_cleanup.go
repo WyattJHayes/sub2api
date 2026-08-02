@@ -4,12 +4,12 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
 
-	"github.com/Wei-Shaw/sub2api/internal/pkg/logger"
 	"github.com/google/uuid"
 )
 
@@ -116,11 +116,29 @@ func (s *EvaluationArtifactCleanupService) runOnce() {
 	ctx, cancel := context.WithTimeout(s.workerCtx, s.effectiveInterval())
 	defer cancel()
 	result, err := s.CleanupExpired(ctx)
+	logArtifactCleanupResult(slog.Default(), result, err)
+}
+
+func logArtifactCleanupResult(log *slog.Logger, result ArtifactCleanupResult, err error) {
+	if log == nil {
+		log = slog.Default()
+	}
+	fields := []any{
+		"component", "service.evaluation_artifact_cleanup",
+		"selected", result.Selected,
+		"deleted", result.Deleted,
+		"skipped", result.Skipped,
+		"failed", result.Failed,
+	}
 	if err != nil {
-		logger.LegacyPrintf("service.evaluation_artifact_cleanup", "[RadarArtifactCleanup] selected=%d deleted=%d skipped=%d failed=%d err=%v", result.Selected, result.Deleted, result.Skipped, result.Failed, err)
+		log.Error("radar_artifact_cleanup_poll", append(fields, "error", err)...)
 		return
 	}
-	logger.LegacyPrintf("service.evaluation_artifact_cleanup", "[RadarArtifactCleanup] selected=%d deleted=%d skipped=%d failed=%d", result.Selected, result.Deleted, result.Skipped, result.Failed)
+	if result.Selected == 0 {
+		log.Debug("radar_artifact_cleanup_poll", fields...)
+		return
+	}
+	log.Info("radar_artifact_cleanup_poll", fields...)
 }
 
 func (s *EvaluationArtifactCleanupService) CleanupExpired(ctx context.Context) (ArtifactCleanupResult, error) {

@@ -1,8 +1,11 @@
 package service
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
+	"log/slog"
 	"testing"
 	"time"
 
@@ -61,6 +64,61 @@ func (s *artifactCleanupSchedulerStub) ScheduleRecurring(name string, interval t
 
 func (s *artifactCleanupSchedulerStub) Cancel(name string) {
 	s.canceled = name
+}
+
+func captureArtifactCleanupLog(t *testing.T, result ArtifactCleanupResult, err error) map[string]any {
+	t.Helper()
+	var output bytes.Buffer
+	log := slog.New(slog.NewJSONHandler(&output, &slog.HandlerOptions{Level: slog.LevelDebug}))
+
+	logArtifactCleanupResult(log, result, err)
+
+	var record map[string]any
+	require.NoError(t, json.Unmarshal(output.Bytes(), &record))
+	return record
+}
+
+func TestLogArtifactCleanupResultEmptySuccessIsDebug(t *testing.T) {
+	record := captureArtifactCleanupLog(t, ArtifactCleanupResult{}, nil)
+
+	require.Equal(t, "DEBUG", record["level"])
+	require.Equal(t, "radar_artifact_cleanup_poll", record["msg"])
+	require.Equal(t, "service.evaluation_artifact_cleanup", record["component"])
+	require.EqualValues(t, 0, record["selected"])
+	require.EqualValues(t, 0, record["deleted"])
+	require.EqualValues(t, 0, record["skipped"])
+	require.EqualValues(t, 0, record["failed"])
+	require.NotContains(t, record, "error")
+}
+
+func TestLogArtifactCleanupResultSelectedSuccessIsInfo(t *testing.T) {
+	record := captureArtifactCleanupLog(t, ArtifactCleanupResult{
+		Selected: 3,
+		Deleted:  2,
+		Skipped:  1,
+	}, nil)
+
+	require.Equal(t, "INFO", record["level"])
+	require.EqualValues(t, 3, record["selected"])
+	require.EqualValues(t, 2, record["deleted"])
+	require.EqualValues(t, 1, record["skipped"])
+	require.EqualValues(t, 0, record["failed"])
+	require.NotContains(t, record, "error")
+}
+
+func TestLogArtifactCleanupResultFailureIsError(t *testing.T) {
+	record := captureArtifactCleanupLog(t, ArtifactCleanupResult{
+		Selected: 2,
+		Deleted:  1,
+		Failed:   1,
+	}, errors.New("object store unavailable"))
+
+	require.Equal(t, "ERROR", record["level"])
+	require.EqualValues(t, 2, record["selected"])
+	require.EqualValues(t, 1, record["deleted"])
+	require.EqualValues(t, 0, record["skipped"])
+	require.EqualValues(t, 1, record["failed"])
+	require.Equal(t, "object store unavailable", record["error"])
 }
 
 func TestEvaluationArtifactCleanupDeletesExpiredStatusesBeforeMarkingRows(t *testing.T) {
