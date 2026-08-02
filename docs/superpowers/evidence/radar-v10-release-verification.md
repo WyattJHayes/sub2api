@@ -544,3 +544,45 @@ Required operator decisions before production promotion:
 ```
 
 Until those items are confirmed, staging remains the highest verified environment for this candidate.
+
+Additional non-secret production target metadata was collected for handoff:
+
+```text
+/opt/sub2api/docker-compose.yml sha256=26de0d992725d414ca469e1e25ef3741b26b03edd7db4c9acac9157c05cda98c
+/opt/sub2api/docker-compose.override.yml sha256=2eeb002bdfad3182b83bbbc8232f51829669ca46856286a4c7ce295d3435f3fb
+/opt/sub2api/.env sha256=05c458f94e358cde0771ac8e05d611a4611ee5a486d54aa7f5512ff29e854d45
+/opt/sub2api/data/config.yaml sha256=f5e7033dc84dddbee47df8266acaa39f3f3edcc09b252e18380ab40f20c26d47
+/opt/sub2api/data/model_pricing.json sha256=31eb6ebcfb75476b30f4269174db061f4530b5075e07e23fba4b3b8f0c354d3f
+/opt/sub2api/data/model_pricing.sha256 sha256=d451145d0ea951f9fbb8b7a54cd60b09b09171b1ab5d19475b6949573e600431
+/opt/sub2api/redis_data/dump.rdb sha256=5ef54475ad66b13803821218cf024d467808dee2431e29e91fa91001bbb50bd8
+```
+
+Rendered production Compose shape:
+
+```text
+project=sub2api
+service=postgres image=postgres:18-alpine volume=/opt/sub2api/postgres_data:/var/lib/postgresql/data
+service=redis image=redis:8-alpine volume=/opt/sub2api/redis_data:/data
+service=sub2api image=sub2api-custom:0.1.151-disable-image-generation.1 port=0.0.0.0:8080->8080 volume=/opt/sub2api/data:/app/data networks=dgc-net,sub2api-network
+external_network=dramagenai-cloud_dgc-net
+```
+
+Production local data footprint:
+
+```text
+/opt/sub2api/postgres_data=103M
+/opt/sub2api/redis_data=380K
+/opt/sub2api/data=16M
+/opt/sub2api/backups=992K
+```
+
+Current host listeners relevant to the target:
+
+```text
+0.0.0.0:80 active
+0.0.0.0:443 active
+127.0.0.1:18080 active
+0.0.0.0:8080 inactive
+```
+
+No running container currently has the `sub2api` alias on `dramagenai-cloud_dgc-net`. Starting `/opt/sub2api` would create a new live production service surface on host port `8080` and on the DGC network, so it requires explicit release authorization.
