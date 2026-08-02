@@ -31,10 +31,24 @@ SHA_B = "sha256:" + "b" * 64
 HEX_A = "1" * 64
 
 
+def authorization_audit() -> dict[str, Any]:
+    return {
+        "schema_version": "radar-production-authorization-audit-v1",
+        "ok": True,
+        "summary": {
+            "target_dir": "/opt/sub2api",
+            "operator": "release-owner",
+            "accepted_candidate_digest": SHA_A,
+        },
+        "blockers": [],
+    }
+
+
 def closure_document(**overrides: Any) -> dict[str, Any]:
     document: dict[str, Any] = {
         "schema_version": closure_audit.INPUT_SCHEMA_VERSION,
         "accepted_candidate_digest": SHA_A,
+        "production_authorization_audit": authorization_audit(),
         "production_target_preflight": {
             "schema_version": "radar-production-target-preflight-v1",
             "ok": True,
@@ -110,6 +124,20 @@ class ProductionReleaseClosureAuditTests(unittest.TestCase):
         self.assertFalse(result["ok"], result)
         self.assertIn("production_target_preflight_ok", result["blockers"])
         self.assertIn("production_backup_audit_ok", result["blockers"])
+
+    def test_production_authorization_audit_must_pass(self) -> None:
+        result = closure_audit.audit_closure(
+            closure_document(
+                production_authorization_audit={
+                    "ok": False,
+                    "summary": {},
+                    "blockers": ["authorize_digest_promotion"],
+                }
+            )
+        )
+
+        self.assertFalse(result["ok"], result)
+        self.assertIn("production_authorization_audit_ok", result["blockers"])
 
     def test_promotion_and_smoke_audit_must_pass(self) -> None:
         result = closure_audit.audit_closure(

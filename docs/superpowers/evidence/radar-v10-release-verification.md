@@ -1033,7 +1033,7 @@ deploy/radar/production_release_closure_audit.py
 deploy/radar/test_production_release_closure_audit.py
 ```
 
-The builder assembles a final closure evidence bundle from the recorded target preflight, backup audit, promotion audit, smoke audit, rollback audit, accepted candidate digest, and the two explicit execution flags. Missing gate outputs become empty objects and execution flags default to false, so the closure audit still fails closed. The audit consumes that bundle and verifies target preflight, backup audit, promotion audit, production smoke audit, rollback audit, production promotion execution, rollback drill execution, and candidate digest consistency across promotion, smoke, rollback, and final active state.
+The builder assembles a final closure evidence bundle from the recorded authorization audit, target preflight, backup audit, promotion audit, smoke audit, rollback audit, accepted candidate digest, and the two explicit execution flags. Missing gate outputs become empty objects and execution flags default to false, so the closure audit still fails closed. The audit consumes that bundle and verifies authorization, target preflight, backup audit, promotion audit, production smoke audit, rollback audit, production promotion execution, rollback drill execution, and candidate digest consistency across authorization, promotion, smoke, rollback, and final active state.
 
 TDD red verification:
 
@@ -1062,7 +1062,7 @@ OK
 
 python3 -m unittest deploy/radar/test_release_host_gate.py deploy/radar/test_production_target_preflight.py deploy/radar/test_production_authorization_audit.py deploy/radar/test_production_backup_audit.py deploy/radar/test_production_smoke_audit.py deploy/radar/test_production_rollback_audit.py deploy/radar/test_production_release_closure_evidence.py deploy/radar/test_production_release_closure_audit.py deploy/radar/test_production_promotion_manifest.py deploy/radar/test_production_promotion_audit.py deploy/radar/test_reliability_evidence.py
 ...................................................
-Ran 51 tests in 0.038s
+Ran 52 tests in 0.022s
 OK
 
 python3 -m py_compile deploy/radar/production_authorization_audit.py deploy/radar/test_production_authorization_audit.py deploy/radar/production_release_closure_evidence.py deploy/radar/test_production_release_closure_evidence.py deploy/radar/production_release_closure_audit.py deploy/radar/test_production_release_closure_audit.py deploy/radar/production_smoke_audit.py deploy/radar/test_production_smoke_audit.py deploy/radar/production_rollback_audit.py deploy/radar/test_production_rollback_audit.py deploy/radar/production_backup_audit.py deploy/radar/test_production_backup_audit.py deploy/radar/production_promotion_manifest.py deploy/radar/test_production_promotion_manifest.py deploy/radar/production_promotion_audit.py deploy/radar/test_production_promotion_audit.py deploy/radar/production_target_preflight.py deploy/radar/test_production_target_preflight.py

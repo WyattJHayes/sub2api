@@ -300,6 +300,7 @@ After production promotion, smoke, rollback drill, and accepted candidate restor
 ```bash
 python3 deploy/radar/production_release_closure_evidence.py \
   --accepted-candidate-digest sha256:... \
+  --production-authorization-audit /tmp/radar-production-authorization-audit.json \
   --production-target-preflight /tmp/radar-production-target-preflight.json \
   --production-backup-audit /tmp/radar-production-backup-audit.json \
   --production-promotion-audit /tmp/radar-production-promotion-audit.json \
@@ -325,6 +326,15 @@ Minimum closure evidence shape:
 ```json
 {
   "accepted_candidate_digest": "sha256:...",
+  "production_authorization_audit": {
+    "ok": true,
+    "summary": {
+      "target_dir": "/opt/sub2api",
+      "operator": "release-owner",
+      "accepted_candidate_digest": "sha256:..."
+    },
+    "blockers": []
+  },
   "production_target_preflight": {
     "ok": true,
     "promotion_ready": true,

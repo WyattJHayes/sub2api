@@ -28,6 +28,7 @@ def audit_closure(document: dict[str, Any]) -> dict[str, Any]:
     blockers: list[str] = []
 
     accepted_digest = str(document.get("accepted_candidate_digest") or "")
+    authorization = _mapping(document.get("production_authorization_audit"))
     preflight = _mapping(document.get("production_target_preflight"))
     backup = _mapping(document.get("production_backup_audit"))
     promotion = _mapping(document.get("production_promotion_audit"))
@@ -48,6 +49,10 @@ def audit_closure(document: dict[str, Any]) -> dict[str, Any]:
     rollback_previous_digest = str(rollback_summary.get("previous_image_digest") or "")
     rollback_final_digest = str(rollback_summary.get("final_active_digest") or "")
     backup_sha256 = str(backup_summary.get("sha256") or "")
+    authorization_summary = _mapping(authorization.get("summary"))
+    authorization_candidate_digest = str(
+        authorization_summary.get("accepted_candidate_digest") or ""
+    )
 
     _add_check(
         checks,
@@ -56,6 +61,29 @@ def audit_closure(document: dict[str, Any]) -> dict[str, Any]:
         _valid_image_digest(accepted_digest),
         "accepted candidate digest must be sha256:<64 lowercase hex>",
         value=accepted_digest or None,
+    )
+
+    _add_check(
+        checks,
+        blockers,
+        "production_authorization_audit_ok",
+        authorization.get("ok") is True,
+        "production authorization audit must be ok",
+        evidence_blockers=_list_of_strings(authorization.get("blockers")),
+    )
+
+    _add_check(
+        checks,
+        blockers,
+        "authorization_candidate_digest_matches_candidate",
+        bool(
+            accepted_digest
+            and authorization_candidate_digest
+            and authorization_candidate_digest == accepted_digest
+        ),
+        "authorization candidate digest must match accepted candidate digest",
+        authorization_candidate_digest=authorization_candidate_digest or None,
+        accepted_candidate_digest=accepted_digest or None,
     )
 
     _add_check(
@@ -205,6 +233,7 @@ def audit_closure(document: dict[str, Any]) -> dict[str, Any]:
         "blockers": blockers,
         "summary": {
             "accepted_candidate_digest": accepted_digest,
+            "authorization_candidate_digest": authorization_candidate_digest,
             "promotion_candidate_digest": promotion_candidate_digest,
             "production_backup_sha256": backup_sha256,
             "smoke_active_digest": smoke_active_digest,

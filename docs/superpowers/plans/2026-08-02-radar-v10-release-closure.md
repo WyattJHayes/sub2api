@@ -333,7 +333,7 @@ git add docs/superpowers/evidence/radar-v10-release-verification.md
 git commit -m "release(radar): record production promotion and rollback"
 ```
 
-Current status: a final closure evidence builder and fail-closed final release closure audit are recorded. The final audit will only pass after production target preflight, backup audit, promotion audit, production smoke audit, rollback audit, promotion execution, and rollback drill evidence all pass with consistent candidate digests.
+Current status: a final closure evidence builder and fail-closed final release closure audit are recorded. The final audit will only pass after authorization, production target preflight, backup audit, promotion audit, production smoke audit, rollback audit, promotion execution, and rollback drill evidence all pass with consistent candidate digests.
 
 ## Self Review
 

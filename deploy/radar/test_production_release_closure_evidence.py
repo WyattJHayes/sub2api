@@ -35,6 +35,19 @@ SHA_B = "sha256:" + "b" * 64
 HEX_A = "1" * 64
 
 
+def authorization_audit() -> dict[str, Any]:
+    return {
+        "schema_version": "radar-production-authorization-audit-v1",
+        "ok": True,
+        "summary": {
+            "target_dir": "/opt/sub2api",
+            "operator": "release-owner",
+            "accepted_candidate_digest": SHA_A,
+        },
+        "blockers": [],
+    }
+
+
 def preflight_result() -> dict[str, Any]:
     return {
         "schema_version": "radar-production-target-preflight-v1",
@@ -102,6 +115,7 @@ class ProductionReleaseClosureEvidenceTests(unittest.TestCase):
     def test_builds_closure_evidence_from_gate_outputs(self) -> None:
         document = closure_builder.build_closure_evidence(
             accepted_candidate_digest=SHA_A,
+            production_authorization_audit=authorization_audit(),
             production_target_preflight=preflight_result(),
             production_backup_audit=backup_audit(),
             production_promotion_audit=promotion_audit(),
