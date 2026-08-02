@@ -91,9 +91,28 @@ If `/opt/sub2api` has no active Compose containers, stop the promotion path and 
 
 Treat the first `docker compose up` for an inactive production target as a production exposure event because it can bind host port `8080` and join the shared DGC network. Capture health, listeners, network aliases, image digests, config hashes, and backup checksums before continuing to the image promotion step.
 
-## Production Promotion Input Audit
+## Production Promotion Manifest And Input Audit
 
-Before changing the production image reference, create a promotion manifest that binds the accepted staging candidate, staging gate, migration rehearsal, production target preflight, fresh production backup, active production image digest, configuration hashes, rollback digest, and post-rollback restoration plan. Then run:
+Before changing the production image reference, generate a promotion manifest that binds the accepted staging candidate, staging gate, migration rehearsal, production target preflight, fresh production backup, active production image digest, configuration hashes, rollback digest, and post-rollback restoration plan. The manifest builder keeps missing production-only values empty so the audit fails closed until those values exist.
+
+```bash
+python3 deploy/radar/production_promotion_manifest.py \
+  --preflight-result /tmp/radar-production-target-preflight.json \
+  --target-snapshot /tmp/radar-production-target-snapshot.json \
+  --accepted-staging-image-digest sha256:... \
+  --staging-gate-ok \
+  --migration-rehearsal-ok \
+  --production-backup-path /opt/sub2api-backups/prod.dump \
+  --production-backup-sha256 ... \
+  --production-backup-restore-verified \
+  --production-active-image-digest sha256:... \
+  --rollback-previous-image-digest sha256:... \
+  --rollback-image-available \
+  --accepted-candidate-restoration-planned \
+  --output /tmp/radar-production-promotion-manifest.json
+```
+
+Then run the input audit:
 
 ```bash
 python3 deploy/radar/production_promotion_audit.py \
