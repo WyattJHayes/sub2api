@@ -1128,6 +1128,31 @@ production_exposure_event=true
 
 The five runtime blockers and six required authorizations are unchanged. No production mutation occurred during this refresh.
 
+## Final Authorization Blocker Refresh
+
+A final read-only preflight check on 2026-08-02 confirmed the production target remains inactive:
+
+```text
+checked_at=2026-08-02T22:07:50Z
+target_dir=/opt/sub2api
+ok=false
+promotion_ready=false
+production_exposure_event=true
+```
+
+The required authorization set remains:
+
+```text
+confirm_target_dir
+authorize_inactive_stack_start
+authorize_env_chmod_0600
+authorize_fresh_backup
+authorize_digest_promotion
+authorize_rollback_drill
+```
+
+No production mutation occurred during this check.
+
 ## Worktree Index Integrity Recovery
 
 On 2026-08-02, a read-only status refresh found that the worktree-specific Git index file was absent:
