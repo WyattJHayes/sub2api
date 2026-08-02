@@ -52,6 +52,24 @@ The verifier exits `0` only when every captured container keeps the same contain
 Before mutating an existing `/opt/sub2api` production directory, collect a read-only target snapshot and attach it to the release evidence:
 
 ```bash
+python3 deploy/radar/production_target_preflight.py capture \
+  --target-dir /opt/sub2api \
+  --project sub2api \
+  --output /tmp/radar-production-target-snapshot.json
+
+python3 deploy/radar/production_target_preflight.py evaluate \
+  --snapshot /tmp/radar-production-target-snapshot.json \
+  --project sub2api \
+  --app-service sub2api \
+  --app-port 8080 \
+  --output /tmp/radar-production-target-preflight.json
+```
+
+The tool exits `0` only when the production Compose project is running, the target application container is present, running, and healthy, `.env` is `0600`, host port `8080` is listening, and the DGC network exposes a Sub2API alias. Exit `1` means the JSON result contains blockers and required operator authorizations. Exit `2` means the tool could not capture or parse the target.
+
+Use these read-only commands as a manual cross-check when the tool reports a blocker:
+
+```bash
 docker compose ls
 cd /opt/sub2api
 docker compose ps --all --format json

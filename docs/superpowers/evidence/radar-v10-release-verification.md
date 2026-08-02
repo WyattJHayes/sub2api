@@ -675,3 +675,52 @@ The next safe production sequence remains:
 5. Record active production image digest and configuration hashes.
 6. Promote by immutable digest, run smoke checks, execute rollback drill, restore the accepted candidate, and record final evidence.
 ```
+
+## Production Target Preflight Tool
+
+The production target ambiguity is now covered by a fail-closed preflight tool:
+
+```text
+deploy/radar/production_target_preflight.py
+deploy/radar/test_production_target_preflight.py
+```
+
+The tool captures a read-only `/opt/sub2api` target snapshot and evaluates whether the production Compose project is already active and safe to use as a promotion target. It fails closed when the production project is absent, the application container is absent, created, stopped, or unhealthy, `.env` is not `0600`, host port `8080` is not listening for an active target, or the DGC network lacks a Sub2API alias.
+
+Inactive target output names the exact operator authorizations required before starting or promoting production:
+
+```text
+confirm_target_dir
+authorize_inactive_stack_start
+authorize_env_chmod_0600
+authorize_fresh_backup
+authorize_digest_promotion
+authorize_rollback_drill
+```
+
+TDD red verification:
+
+```text
+python3 -m unittest deploy/radar/test_production_target_preflight.py
+FileNotFoundError: production_target_preflight.py
+exit code 1
+```
+
+Green verification:
+
+```text
+python3 -m unittest deploy/radar/test_production_target_preflight.py
+.....
+Ran 5 tests in 0.001s
+OK
+
+python3 -m unittest deploy/radar/test_release_host_gate.py deploy/radar/test_production_target_preflight.py deploy/radar/test_reliability_evidence.py
+...............
+Ran 15 tests in 0.007s
+OK
+
+python3 -m py_compile deploy/radar/production_target_preflight.py deploy/radar/test_production_target_preflight.py
+exit code 0
+```
+
+This tool does not authorize production mutation by itself. It converts the current manual blocker into a repeatable JSON gate that must pass before fresh backup, immutable digest promotion, smoke checks, and rollback drill proceed.
