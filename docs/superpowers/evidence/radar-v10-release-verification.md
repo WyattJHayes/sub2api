@@ -1073,6 +1073,44 @@ authorize_rollback_drill
 
 The refreshed `.env` mode check still reports `644`, expected `600`.
 
+## Worktree Index Integrity Recovery
+
+On 2026-08-02, a read-only status refresh found that the worktree-specific Git index file was absent:
+
+```text
+index=/Users/weijiahao/Documents/Codex/2026-07-25/api-benchmark-web-deepseek-qwen-sft/.git/worktrees/radar-v10-release/index
+index_present=false
+```
+
+The symptom was a staged deletion for every tracked path together with the same paths reported as untracked. `HEAD` remained `caddc0681885b68b4b919165db07bbd94c108cee`, and the working tree contents matched `HEAD` when checked through a temporary index:
+
+```text
+temporary_index_status_count=0
+head_file_count=3534
+```
+
+Two files named `index 2` and `index 3` were present as historical intermediate indexes. Each contained staged and working differences, so neither was restored. The worktree index was reconstructed from the current `HEAD` tree without changing source files:
+
+```text
+git read-tree HEAD
+git status --short --branch
+## codex/radar-v10-release
+git ls-files | wc -l
+3534
+```
+
+Post-recovery verification:
+
+```text
+Ran 46 tests in 0.021s
+OK
+
+py_compile exit code 0
+git diff --check exit code 0
+```
+
+The recovery changed Git metadata only. No production target, staging container, backup, image, or application source was modified.
+
 ## Current Production Promotion Audit Run
 
 A local promotion manifest was assembled from the accepted staging candidate, the latest fail-closed production target preflight, and the non-secret production configuration hashes. It intentionally left production-only fields empty where no current production state exists yet.
