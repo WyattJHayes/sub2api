@@ -48,10 +48,31 @@ func (radarWorkerRouteRegistrationStub) ClaimAnalysisJob(c *gin.Context) {
 func (radarWorkerRouteRegistrationStub) CompleteAnalysisJob(c *gin.Context) {
 	c.Status(http.StatusNoContent)
 }
+func (radarWorkerRouteRegistrationStub) PublishReliabilitySnapshot(c *gin.Context) {
+	c.Status(http.StatusNoContent)
+}
 func (radarWorkerRouteRegistrationStub) PresignArtifact(c *gin.Context) {
 	c.Status(http.StatusNoContent)
 }
 func (radarWorkerRouteRegistrationStub) ConfirmArtifact(c *gin.Context) {
+	c.Status(http.StatusNoContent)
+}
+func (radarWorkerRouteRegistrationStub) FailAnalysisJob(c *gin.Context) {
+	c.Status(http.StatusNoContent)
+}
+func (radarWorkerRouteRegistrationStub) GetFaultExperiment(c *gin.Context) {
+	c.Status(http.StatusNoContent)
+}
+func (radarWorkerRouteRegistrationStub) ApplyFaultAction(c *gin.Context) {
+	c.Status(http.StatusNoContent)
+}
+func (radarWorkerRouteRegistrationStub) AppendFaultEvent(c *gin.Context) {
+	c.Status(http.StatusNoContent)
+}
+func (radarWorkerRouteRegistrationStub) GetRecoveryObservation(c *gin.Context) {
+	c.Status(http.StatusNoContent)
+}
+func (radarWorkerRouteRegistrationStub) PublishRecoveryEvidence(c *gin.Context) {
 	c.Status(http.StatusNoContent)
 }
 
@@ -73,6 +94,13 @@ func TestRegisterPrivateWorkerRoutesAddsRadarClaimEndpoints(t *testing.T) {
 		http.MethodPost + " /internal/radar/v1/leases:claim",
 		http.MethodPost + " /internal/radar/v1/grading-leases:claim",
 		http.MethodPost + " /internal/radar/v1/analysis-jobs:claim",
+		http.MethodPost + " /internal/radar/v1/reliability-snapshots",
+		http.MethodPost + " /internal/radar/v1/analysis-jobs/:id/fail",
+		http.MethodGet + " /internal/radar/v1/fault-experiments/:id",
+		http.MethodPost + " /internal/radar/v1/fault-experiments/:id/actions",
+		http.MethodPost + " /internal/radar/v1/fault-experiments/:id/events",
+		http.MethodGet + " /internal/radar/v1/recovery-evidence/:id/observation",
+		http.MethodPost + " /internal/radar/v1/recovery-evidence/:id",
 	} {
 		_, ok := registered[endpoint]
 		require.Truef(t, ok, "missing Radar worker endpoint %s", endpoint)

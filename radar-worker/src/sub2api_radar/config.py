@@ -4,6 +4,7 @@ from enum import StrEnum
 from functools import lru_cache
 from typing import Annotated
 from urllib.parse import urlparse
+from uuid import UUID
 
 from pydantic import Field, SecretStr, ValidationInfo, field_validator
 from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
@@ -32,8 +33,12 @@ class Settings(BaseSettings):
     mode: WorkerMode = WorkerMode.RUNNER
     request_timeout_seconds: float = Field(default=15.0, gt=0, le=120)
     connect_timeout_seconds: float = Field(default=5.0, gt=0, le=30)
+    max_request_retries: int = Field(default=2, ge=0, le=5)
     lease_ttl_seconds: int = Field(default=90, ge=15, le=900)
     heartbeat_interval_seconds: int | None = Field(default=None, ge=1, le=300)
+    metrics_enabled: bool = False
+    metrics_host: str = Field(default="127.0.0.1", min_length=1)
+    metrics_port: int = Field(default=9108, ge=1, le=65535)
     poll_interval_seconds: float = Field(default=5.0, gt=0, le=300)
     state_dir: str = Field(default="/var/lib/sub2api-radar")
     artifact_root: str = Field(default="/var/lib/sub2api-radar/artifacts", min_length=1)
@@ -48,6 +53,19 @@ class Settings(BaseSettings):
     grader_ids: Annotated[tuple[str, ...], NoDecode] = ()
     analysis_capabilities: Annotated[tuple[str, ...], NoDecode] = ()
     analysis_version: str = "v1"
+    load_plan_id: UUID | None = None
+    load_run_id: UUID | None = None
+    loadgen_evaluation_api_key: SecretStr | None = None
+    loadgen_image_digest: str | None = None
+    gateway_url: str | None = None
+    reliability_report_dir: str = "/var/lib/sub2api-radar/reports"
+    fault_experiment_id: UUID | None = None
+    chaos_target_worker_id: str | None = None
+    chaos_environment: str = "staging"
+    chaos_auto_rollback_seconds: float | None = Field(default=None, ge=0, le=3600)
+    recovery_evidence_id: UUID | None = None
+    recovery_observation_file: str | None = None
+    recovery_evidence_dir: str = "/var/lib/sub2api-radar/evidence"
 
     @field_validator("control_plane_url")
     @classmethod

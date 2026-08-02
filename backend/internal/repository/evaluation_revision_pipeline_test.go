@@ -238,11 +238,14 @@ func TestHeadAdvanceAppendsCellGlobalAndGateRequirements(t *testing.T) {
 func TestPartialPropagationFailureBlocksBatch(t *testing.T) {
 	ctx := context.Background()
 	fixture, gradingRepo, _, batch, _ := prepareRevisionBatchFixture(t)
+	const firstTenantID int64 = 771001
 	lease, err := gradingRepo.ClaimGradingLease(ctx, fixture.workerIDs[0], []string{"grader"}, time.Minute)
 	require.NoError(t, err)
 	_, err = gradingRepo.SubmitScore(ctx, lease.ID, lease.Token, service.ScoreSubmission{
 		Score: decimal.RequireFromString("0.62"), LeaseEpoch: lease.LeaseEpoch,
 	})
+	require.NoError(t, err)
+	_, err = integrationDB.ExecContext(ctx, `UPDATE evaluation_runs SET tenant_id=$2 WHERE id=$1`, batch.RunID, firstTenantID)
 	require.NoError(t, err)
 	event := revisionBatchOutboxEvent(t, batch.ID, "cell_recompute")
 	token := leaseRevisionPipelineEvent(t, event.ID, batch.ControlEpoch)
@@ -259,15 +262,19 @@ func TestPartialPropagationFailureBlocksBatch(t *testing.T) {
 	require.Equal(t, "statistics_failed", failureCode)
 	var alertCount int
 	require.NoError(t, integrationDB.QueryRowContext(ctx, `
-		SELECT COUNT(*) FROM evaluation_alerts WHERE cause='insufficient_evidence' AND status='open'`).Scan(&alertCount))
+		SELECT COUNT(*) FROM evaluation_alerts
+		WHERE tenant_id=$1 AND cause='insufficient_evidence' AND status='open'`, firstTenantID).Scan(&alertCount))
 	require.Positive(t, alertCount)
 
 	failedFixture, failedGradingRepo, _, failedBatch, _ := prepareRevisionBatchFixture(t)
+	const secondTenantID int64 = 771002
 	failedLease, err := failedGradingRepo.ClaimGradingLease(ctx, failedFixture.workerIDs[0], []string{"grader"}, time.Minute)
 	require.NoError(t, err)
 	require.NoError(t, failedGradingRepo.FailGradingLease(
 		ctx, failedLease.ID, failedLease.Token, "permanent", "grader_invalid_output", failedLease.LeaseEpoch,
 	))
+	_, err = integrationDB.ExecContext(ctx, `UPDATE evaluation_runs SET tenant_id=$2 WHERE id=$1`, failedBatch.RunID, secondTenantID)
+	require.NoError(t, err)
 	var failedBatchStatus service.RevisionBatchStatus
 	require.NoError(t, integrationDB.QueryRowContext(ctx, `
 		SELECT status FROM evaluation_revision_batches WHERE id=$1`, failedBatch.ID).Scan(&failedBatchStatus))

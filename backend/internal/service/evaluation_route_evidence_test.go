@@ -20,6 +20,7 @@ type trackedBillingEvidenceRepo struct {
 	finalizations []FinalizeRouteEvidenceInput
 	legacyCalls   int
 	state         RouteEvidencePatchState
+	conflictOnce  bool
 }
 
 func (r *trackedBillingEvidenceRepo) UpsertTransport(context.Context, RouteEvidence) error {
@@ -37,11 +38,35 @@ func (r *trackedBillingEvidenceRepo) CreateOpen(context.Context, CreateOpenRoute
 
 func (r *trackedBillingEvidenceRepo) PatchRouteEvidence(_ context.Context, _ string, patch RouteEvidencePatch) (RouteEvidencePatchState, error) {
 	r.patches = append(r.patches, patch)
+	if r.conflictOnce {
+		r.conflictOnce = false
+		r.state.Revision++
+		return r.state, &RouteEvidenceRevisionConflict{CurrentRevision: r.state.Revision}
+	}
 	r.state.Revision++
 	if patch.Billing != nil {
 		r.state.Billing = *patch.Billing
 	}
 	return r.state, nil
+}
+
+func TestRouteEvidenceRevisionTrackerRetriesRecoverableConflict(t *testing.T) {
+	repo := &trackedBillingEvidenceRepo{
+		state:        RouteEvidencePatchState{Revision: 0},
+		conflictOnce: true,
+	}
+	tracker := NewRouteEvidenceRevisionTracker(repo, "trace-1", repo.state)
+	status := "succeeded"
+
+	state, err := tracker.Patch(context.Background(), RouteEvidencePatch{
+		Transport: &TransportPatch{TransportStatus: &status},
+	})
+
+	require.NoError(t, err)
+	require.Equal(t, int64(2), state.Revision)
+	require.Len(t, repo.patches, 2)
+	require.Equal(t, int64(0), repo.patches[0].ExpectedRevision)
+	require.Equal(t, int64(1), repo.patches[1].ExpectedRevision)
 }
 
 func (r *trackedBillingEvidenceRepo) FinalizeRouteEvidence(_ context.Context, input FinalizeRouteEvidenceInput) (SealedRouteEvidence, error) {

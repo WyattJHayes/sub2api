@@ -35,6 +35,11 @@ func (r *radarGovernanceRepository) CreateRevisionBatch(ctx context.Context, inp
 		return nil, fmt.Errorf("begin revision batch creation: %w", err)
 	}
 	defer func() { _ = tx.Rollback() }()
+	if _, scoped := radarTenant(ctx); scoped {
+		if err := ensureRadarRunTenant(ctx, tx, input.RunID); err != nil {
+			return nil, err
+		}
+	}
 	if existing, err := loadRevisionBatchByIdempotencyKey(ctx, tx, input.IdempotencyKey); err != nil {
 		return nil, err
 	} else if existing != nil {

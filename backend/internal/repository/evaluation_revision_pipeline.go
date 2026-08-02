@@ -241,6 +241,14 @@ func revisionBatchCoverageComplete(ctx context.Context, tx *sql.Tx, batchID, run
 }
 
 func observeRevisionInsufficientEvidence(ctx context.Context, tx *sql.Tx, batchID uuid.UUID) error {
+	var tenantID int64
+	if err := tx.QueryRowContext(ctx, `
+		SELECT r.tenant_id
+		FROM evaluation_revision_batches b
+		JOIN evaluation_runs r ON r.id=b.run_id
+		WHERE b.id=$1`, batchID).Scan(&tenantID); err != nil {
+		return fmt.Errorf("load blocked revision tenant: %w", err)
+	}
 	rows, err := tx.QueryContext(ctx, `
 		SELECT DISTINCT
 		       COALESCE(NULLIF(event.payload->>'capability_domain',''),'global'),
@@ -275,7 +283,7 @@ func observeRevisionInsufficientEvidence(ctx context.Context, tx *sql.Tx, batchI
 		return fmt.Errorf("load blocked revision alert policy: %w", err)
 	}
 	for _, item := range scopes {
-		lockKey := strings.Join([]string{"revision-alert", item.route, item.domain, fmt.Sprint(policyVersion)}, ":")
+		lockKey := strings.Join([]string{"revision-alert", fmt.Sprint(tenantID), item.route, item.domain, fmt.Sprint(policyVersion)}, ":")
 		if _, err := tx.ExecContext(ctx, `SELECT pg_advisory_xact_lock(hashtextextended($1,0))`, lockKey); err != nil {
 			return fmt.Errorf("lock blocked revision alert identity: %w", err)
 		}
@@ -284,15 +292,15 @@ func observeRevisionInsufficientEvidence(ctx context.Context, tx *sql.Tx, batchI
 			UPDATE evaluation_alerts
 			SET status='open', severity='P0', acknowledged_at=NULL, resolved_at=NULL,
 			    first_seen_at=CASE WHEN status='resolved' THEN transaction_timestamp() ELSE first_seen_at END
-			WHERE model_route=$1 AND capability_domain=$2
-			  AND cause='insufficient_evidence' AND policy_version=$3
-			RETURNING id`, item.route, item.domain, policyVersion).Scan(&alertID)
+			WHERE tenant_id=$1 AND model_route=$2 AND capability_domain=$3
+			  AND cause='insufficient_evidence' AND policy_version=$4
+			RETURNING id`, tenantID, item.route, item.domain, policyVersion).Scan(&alertID)
 		if errors.Is(err, sql.ErrNoRows) {
 			err = tx.QueryRowContext(ctx, `
 				INSERT INTO evaluation_alerts (
-					id, model_route, capability_domain, cause, policy_version, status, severity
-				) VALUES ($1,$2,$3,'insufficient_evidence',$4,'open','P0')
-				RETURNING id`, uuid.New(), item.route, item.domain, policyVersion).Scan(&alertID)
+					id, tenant_id, model_route, capability_domain, cause, policy_version, status, severity
+				) VALUES ($1,$2,$3,$4,'insufficient_evidence',$5,'open','P0')
+				RETURNING id`, uuid.New(), tenantID, item.route, item.domain, policyVersion).Scan(&alertID)
 		}
 		if err != nil {
 			return fmt.Errorf("observe blocked revision alert: %w", err)

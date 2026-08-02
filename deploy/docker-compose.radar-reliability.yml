@@ -1,0 +1,42 @@
+name: sub2api-radar-staging
+
+services:
+  sub2api-staging:
+    networks:
+      control_plane: {}
+      radar_reliability_internal: {}
+
+  radar-loadgen:
+    extends:
+      file: ../radar-worker/deploy/docker-compose.reliability.yml
+      service: radar-loadgen
+    depends_on:
+      sub2api-staging:
+        condition: service_healthy
+    networks:
+      - radar_reliability_internal
+
+  radar-chaos-controller:
+    extends:
+      file: ../radar-worker/deploy/docker-compose.reliability.yml
+      service: radar-chaos-controller
+    depends_on:
+      sub2api-staging:
+        condition: service_healthy
+    networks:
+      - radar_reliability_internal
+
+  radar-recovery-verifier:
+    extends:
+      file: ../radar-worker/deploy/docker-compose.reliability.yml
+      service: radar-recovery-verifier
+    depends_on:
+      sub2api-staging:
+        condition: service_healthy
+    networks:
+      - radar_reliability_internal
+
+networks:
+  radar_reliability_internal:
+    name: sub2api-radar-staging-reliability
+    internal: true

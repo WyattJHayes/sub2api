@@ -1,4 +1,6 @@
-FROM sub2api/radar-worker:staging AS runtime
+ARG RADAR_WORKER_BASE_IMAGE=sub2api/radar-worker:staging
+
+FROM ${RADAR_WORKER_BASE_IMAGE} AS runtime
 
 ARG APP_UID=10001
 ARG APP_GID=10001
@@ -14,6 +16,11 @@ USER root
 RUN rm -rf /opt/radar-worker/src
 
 COPY pyproject.toml ./
+
+# The cached staging base predates the RFC 8785 signing dependency. Install
+# this small, pinned addition while reusing the remaining dependency layer.
+RUN python -m pip install --no-cache-dir "rfc8785>=0.1.4,<0.2"
+
 COPY src ./src
 
 # The cached staging image already contains the pinned Python dependency set.

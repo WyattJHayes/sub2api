@@ -835,7 +835,7 @@ event type、dedup key、causation ID、cause set hash、Revision Batch ID、Run
 
 ### 14.8 Policy 生命周期
 
-Policy 内容采用不可变版本。`evaluation_gate_policy_heads` 的主键为 `(deployment_environment, scope_type, scope_id)`，scope ID 使用非空 canonical value，全局 scope 使用保留值 `global`。激活与替代通过追加 `evaluation_gate_policy_events` 审计。激活事务锁定完整 scope key，校验审批与生效时间，追加 activation event 并推进 Head。Release Gate API 只接受与 current Policy Head 相同的 Policy ID，历史回放使用独立只读接口且不能生成发布授权。
+Policy 内容采用不可变版本。`evaluation_gate_policy_heads` 的主键为 `(tenant_id, deployment_environment, scope_type, scope_id)`，scope ID 使用非空 canonical value，全局 scope 使用保留值 `global`。激活与替代通过追加 `evaluation_gate_policy_events` 审计。激活事务锁定包含租户的完整 scope key，校验审批与生效时间，追加 activation event 并推进 Head。Release Gate API 只接受与 current Policy Head 相同的 Policy ID，历史回放使用独立只读接口且不能生成发布授权。
 
 Release Verifier 要求 Decision 的 Policy ID、hash 和 activation event 与 current Policy Head 完全一致。Policy 被替代、撤销、过期或适用 scope 改变时，旧 Decision 立即失效，并为相关 active Release 入队重新求值。Policy Head 没有 active 版本时，发布结果为 `insufficient_evidence`。
 

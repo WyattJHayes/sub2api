@@ -84,9 +84,10 @@ type EvidenceSubmission struct {
 }
 
 type EvidenceReceipt struct {
-	AssignmentID           uuid.UUID `json:"assignment_id"`
-	EvidenceManifestSHA256 string    `json:"evidence_manifest_sha256"`
-	AcceptedAt             time.Time `json:"accepted_at"`
+	AssignmentID           uuid.UUID   `json:"assignment_id"`
+	EvidenceManifestSHA256 string      `json:"evidence_manifest_sha256"`
+	ArtifactIDs            []uuid.UUID `json:"artifact_ids,omitempty"`
+	AcceptedAt             time.Time   `json:"accepted_at"`
 }
 
 type ArtifactPresignRequest struct {
@@ -97,13 +98,14 @@ type ArtifactPresignRequest struct {
 }
 
 type ArtifactUpload struct {
-	ID        uuid.UUID `json:"artifact_id"`
-	ObjectKey string    `json:"object_key"`
-	UploadURL string    `json:"upload_url"`
-	SHA256    string    `json:"sha256"`
-	Bytes     int64     `json:"bytes"`
-	MIMEType  string    `json:"mime_type"`
-	ExpiresAt time.Time `json:"expires_at"`
+	ID            uuid.UUID         `json:"artifact_id"`
+	ObjectKey     string            `json:"object_key"`
+	UploadURL     string            `json:"upload_url"`
+	UploadHeaders map[string]string `json:"upload_headers,omitempty"`
+	SHA256        string            `json:"sha256"`
+	Bytes         int64             `json:"bytes"`
+	MIMEType      string            `json:"mime_type"`
+	ExpiresAt     time.Time         `json:"expires_at"`
 }
 
 type ArtifactConfirmation struct {
@@ -115,13 +117,17 @@ type ArtifactConfirmation struct {
 }
 
 type ArtifactReceipt struct {
-	ID          uuid.UUID `json:"id"`
-	ObjectKey   string    `json:"object_key"`
-	SHA256      string    `json:"sha256"`
-	Bytes       int64     `json:"bytes"`
-	MIMEType    string    `json:"mime_type"`
-	ScanStatus  string    `json:"scan_status"`
-	ConfirmedAt time.Time `json:"confirmed_at,omitempty"`
+	ID          uuid.UUID  `json:"id"`
+	ObjectKey   string     `json:"object_key"`
+	SHA256      string     `json:"sha256"`
+	Bytes       int64      `json:"bytes"`
+	MIMEType    string     `json:"mime_type"`
+	ScanStatus  string     `json:"scan_status"`
+	ScanReason  string     `json:"scan_reason,omitempty"`
+	Scanner     string     `json:"scanner,omitempty"`
+	ScannedAt   *time.Time `json:"scanned_at,omitempty"`
+	ConfirmedAt time.Time  `json:"confirmed_at,omitempty"`
+	DeletedAt   *time.Time `json:"deleted_at,omitempty"`
 }
 
 type AssignmentTransition struct {

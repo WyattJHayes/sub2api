@@ -93,6 +93,7 @@ func TestMigrationsRunner_IsIdempotent_AndSchemaIsUpToDate(t *testing.T) {
 	requireColumn(t, tx, "evaluation_plans", "gateway_api_key_id", "bigint", 0, true)
 	requireForeignKeyOnDelete(t, tx, "evaluation_plans", "gateway_api_key_id", "api_keys", "NO ACTION")
 	requireIndex(t, tx, "evaluation_plans", "idx_evaluation_plans_gateway_api_key")
+	requireIndex(t, tx, "evaluation_artifacts", "idx_evaluation_artifacts_cleanup_due")
 
 	// redeem_codes: subscription fields
 	requireColumn(t, tx, "redeem_codes", "group_id", "bigint", 0, true)
@@ -256,6 +257,8 @@ func TestMigration198TrustedGovernanceSchema(t *testing.T) {
 	}
 	requireColumn(t, tx, "evaluation_release_subjects", "canonical_subject_bytes", "bytea", 0, false)
 	requireColumn(t, tx, "evaluation_release_subject_events", "sequence", "bigint", 0, false)
+	requireColumn(t, tx, "evaluation_gate_policy_approvals", "policy_hash", "character", 64, false)
+	requireColumn(t, tx, "evaluation_gate_policy_approvals", "evidence_hash", "character", 64, false)
 	requireColumn(t, tx, "evaluation_baseline_approvals", "effective_at", "timestamp with time zone", 0, false)
 	requireColumn(t, tx, "evaluation_baseline_approvals", "expires_at", "timestamp with time zone", 0, false)
 
@@ -270,6 +273,102 @@ func TestMigration198TrustedGovernanceSchema(t *testing.T) {
 	requireIndex(t, tx, "evaluation_gate_decisions", "uq_evaluation_gate_decisions_supersedes")
 	requireColumn(t, tx, "evaluation_gate_decision_heads", "release_subject_hash", "character", 64, false)
 	requireColumn(t, tx, "evaluation_gate_decision_heads", "decision_id", "uuid", 0, false)
+}
+
+func TestMigration202GatePolicyApprovalHardeningIsIdempotent(t *testing.T) {
+	tx := testTx(t)
+	ctx := context.Background()
+	schema := "migration_202_" + strings.ReplaceAll(uuid.NewString(), "-", "")
+	require.NoError(t, execRadarFixtureSQL(ctx, tx, `CREATE SCHEMA `+schema))
+	require.NoError(t, execRadarFixtureSQL(ctx, tx, `SELECT set_config('search_path', $1, true)`, schema+",public"))
+	require.NoError(t, execRadarFixtureSQL(ctx, tx, `
+		CREATE TABLE evaluation_gate_policies (
+			id UUID PRIMARY KEY,
+			policy_hash CHAR(64) NOT NULL
+		);
+		CREATE TABLE evaluation_gate_policy_approvals (
+			id UUID PRIMARY KEY,
+			policy_id UUID NOT NULL REFERENCES evaluation_gate_policies(id),
+			approver_id BIGINT NOT NULL,
+			role VARCHAR(32) NOT NULL CHECK (role = 'quality_admin'),
+			effective_at TIMESTAMPTZ NOT NULL,
+			expires_at TIMESTAMPTZ NOT NULL,
+			created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+			CHECK (expires_at > effective_at)
+		);
+		CREATE TABLE evaluation_gate_policy_events (
+			id UUID PRIMARY KEY,
+			policy_id UUID NOT NULL REFERENCES evaluation_gate_policies(id),
+			event_type VARCHAR(32) NOT NULL CHECK (event_type = 'created')
+		);
+	`))
+	policyID := uuid.New()
+	require.NoError(t, execRadarFixtureSQL(ctx, tx, `
+		INSERT INTO evaluation_gate_policies (id, policy_hash) VALUES ($1, $2)`, policyID, strings.Repeat("a", 64)))
+	require.NoError(t, execRadarFixtureSQL(ctx, tx, `
+		INSERT INTO evaluation_gate_policy_approvals
+			(id, policy_id, approver_id, role, effective_at, expires_at)
+		VALUES ($1, $2, 7, 'quality_admin', NOW() - INTERVAL '1 hour', NOW() + INTERVAL '1 hour')`, uuid.New(), policyID))
+
+	migrationPath := filepath.Join("..", "..", "migrations", "202_add_gate_policy_approvals.sql")
+	migrationSQL, err := os.ReadFile(migrationPath)
+	require.NoError(t, err)
+	_, err = tx.ExecContext(ctx, string(migrationSQL))
+	require.NoError(t, err)
+	_, err = tx.ExecContext(ctx, string(migrationSQL))
+	require.NoError(t, err, "migration 202 must remain idempotent")
+
+	var policyHash, evidenceHash string
+	require.NoError(t, tx.QueryRowContext(ctx, `
+		SELECT policy_hash, evidence_hash
+		FROM evaluation_gate_policy_approvals`).Scan(&policyHash, &evidenceHash))
+	require.Equal(t, strings.Repeat("a", 64), policyHash)
+	require.Equal(t, strings.Repeat("0", 64), evidenceHash)
+	var roleConstraint, eventConstraint bool
+	require.NoError(t, tx.QueryRowContext(ctx, `
+		SELECT EXISTS (
+			SELECT 1 FROM pg_constraint
+			WHERE conrelid='evaluation_gate_policy_approvals'::regclass
+			  AND conname='evaluation_gate_policy_approvals_role_check_v2')`).Scan(&roleConstraint))
+	require.NoError(t, tx.QueryRowContext(ctx, `
+		SELECT EXISTS (
+			SELECT 1 FROM pg_constraint
+			WHERE conrelid='evaluation_gate_policy_events'::regclass
+			  AND conname='evaluation_gate_policy_events_event_type_check_v2')`).Scan(&eventConstraint))
+	require.True(t, roleConstraint)
+	require.True(t, eventConstraint)
+}
+
+func TestMigration203TenantScopesGatePolicyHeads(t *testing.T) {
+	tx := testTx(t)
+	ctx := context.Background()
+
+	requireColumn(t, tx, "evaluation_gate_policy_heads", "tenant_id", "bigint", 0, false)
+	var primaryKey string
+	require.NoError(t, tx.QueryRowContext(ctx, `
+		SELECT pg_get_constraintdef(c.oid)
+		FROM pg_constraint c
+		WHERE c.conrelid='evaluation_gate_policy_heads'::regclass AND c.contype='p'`).Scan(&primaryKey))
+	require.Contains(t, primaryKey, "PRIMARY KEY (tenant_id, environment, scope_type, scope_id)")
+
+	var functionCount int
+	require.NoError(t, tx.QueryRowContext(ctx, `
+		SELECT COUNT(*)
+		FROM pg_proc p
+		JOIN pg_namespace n ON n.oid=p.pronamespace
+		WHERE n.nspname=current_schema() AND p.proname='advance_evaluation_gate_policy_head'
+		  AND p.pronargs=7`).Scan(&functionCount))
+	require.Equal(t, 1, functionCount)
+	var definition string
+	require.NoError(t, tx.QueryRowContext(ctx, `
+		SELECT pg_get_functiondef(p.oid)
+		FROM pg_proc p
+		JOIN pg_namespace n ON n.oid=p.pronamespace
+		WHERE n.nspname=current_schema() AND p.proname='advance_evaluation_gate_policy_head'
+		  AND p.pronargs=7`).Scan(&definition))
+	require.Contains(t, definition, "p_tenant_id")
+	require.Contains(t, definition, "tenant_id = p_tenant_id")
+	requireIndex(t, tx, "evaluation_role_bindings", "idx_evaluation_role_bindings_active_tenant")
 }
 
 func TestMigration198aBackfillsCanonicalReleaseSubjectBytes(t *testing.T) {
@@ -600,6 +699,75 @@ func TestMigration199GateEvidenceSchema(t *testing.T) {
 	requireCompositeForeignKey(t, tx, "evaluation_reliability_heads", []string{"head_event_id", "run_id"}, "evaluation_reliability_head_events", []string{"id", "run_id"})
 	requireCompositeForeignKey(t, tx, "evaluation_gate_evidence_manifests", []string{"release_subject_id", "run_id", "release_subject_hash"}, "evaluation_release_subjects", []string{"id", "run_id", "subject_hash"})
 	requireCompositeForeignKey(t, tx, "evaluation_release_authorizations", []string{"decision_id", "release_subject_hash"}, "evaluation_gate_decisions", []string{"id", "release_subject_hash"})
+}
+
+func TestMigration200ReliabilityAndRecoverySchema(t *testing.T) {
+	tx := testTx(t)
+	for _, table := range []string{
+		"evaluation_load_plans",
+		"evaluation_fault_experiments",
+		"evaluation_fault_experiment_events",
+		"evaluation_recovery_evidence",
+	} {
+		requireTable(t, tx, table)
+	}
+	requireColumns(t, tx, "evaluation_load_plans", []string{
+		"schema_version", "tenant_id", "canonical_plan_bytes", "load_plan_sha256",
+		"status", "created_by", "published_at",
+	})
+	requireColumns(t, tx, "evaluation_reliability_snapshots", []string{
+		"load_plan_id", "source_watermark", "request_count", "success_count",
+		"error_count", "timeout_count", "retry_count", "protocol_error_count",
+		"billing_idempotency_failures", "ttft_histogram_hash", "latency_histogram_hash",
+		"p99_latency_ms", "error_rate", "cost_amount",
+	})
+	requireColumns(t, tx, "evaluation_fault_experiments", []string{
+		"run_id", "load_plan_id", "fault_kind", "target_kind", "target_ref",
+		"status", "requested_by", "approved_by", "started_at", "finished_at",
+	})
+	requireColumns(t, tx, "evaluation_recovery_evidence", []string{
+		"run_id", "experiment_id", "recovery_generation", "source_watermark",
+		"canonical_evidence_bytes", "evidence_hash", "status", "rpo_ms", "rto_ms",
+		"duplicate_score_count", "deterministic_run_id",
+	})
+	requireCompositeForeignKey(t, tx, "evaluation_recovery_evidence",
+		[]string{"experiment_id", "run_id"}, "evaluation_fault_experiments", []string{"id", "run_id"})
+	requireIndex(t, tx, "evaluation_fault_experiment_events", "idx_evaluation_fault_experiment_events_experiment")
+
+	var snapshotCheck string
+	require.NoError(t, tx.QueryRowContext(context.Background(), `
+		SELECT pg_get_constraintdef(oid)
+		FROM pg_constraint
+		WHERE conrelid='evaluation_reliability_snapshots'::regclass
+		  AND conname='evaluation_reliability_snapshots_denominator_check'`).Scan(&snapshotCheck))
+	require.Contains(t, snapshotCheck, "success_count")
+	require.Contains(t, snapshotCheck, "request_count")
+
+	var immutableTrigger, writerTrigger bool
+	require.NoError(t, tx.QueryRowContext(context.Background(), `
+		SELECT EXISTS (
+			SELECT 1 FROM pg_trigger
+			WHERE tgrelid='evaluation_recovery_evidence'::regclass
+			  AND tgname='trg_evaluation_recovery_evidence_immutable'
+			  AND NOT tgisinternal
+		)`).Scan(&immutableTrigger))
+	require.True(t, immutableTrigger)
+	require.NoError(t, tx.QueryRowContext(context.Background(), `
+		SELECT EXISTS (
+			SELECT 1 FROM pg_trigger
+			WHERE tgrelid='evaluation_recovery_evidence'::regclass
+			  AND tgname='trg_evaluation_recovery_evidence_writer_protocol'
+			  AND NOT tgisinternal
+		)`).Scan(&writerTrigger))
+	require.True(t, writerTrigger)
+}
+
+func TestMigration200ReliabilityAndRecoverySQLIsIdempotent(t *testing.T) {
+	tx := testTx(t)
+	migrationPath := filepath.Join("..", "..", "migrations", "200_add_radar_reliability_and_dr.sql")
+	migrationSQL, err := os.ReadFile(migrationPath)
+	require.NoError(t, err)
+	require.NoError(t, execRadarFixtureSQL(context.Background(), tx, string(migrationSQL)))
 }
 
 func requireColumns(t *testing.T, tx *sql.Tx, table string, columns []string) {

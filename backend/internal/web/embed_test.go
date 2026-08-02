@@ -520,7 +520,6 @@ func TestFrontendServer_Middleware(t *testing.T) {
 
 		apiPaths := []string{
 			"/api/v1/users",
-			"/internal/radar/v1/grading-leases:claim",
 			"/models",
 			"/v1/models",
 			"/v1beta/chat",
@@ -651,11 +650,11 @@ func TestFrontendServer_Middleware(t *testing.T) {
 
 		// Request for existing static file
 		w := httptest.NewRecorder()
-		req := httptest.NewRequest(http.MethodGet, "/logo.svg", nil)
+		req := httptest.NewRequest(http.MethodGet, "/logo.png", nil)
 		router.ServeHTTP(w, req)
 
 		assert.Equal(t, http.StatusOK, w.Code)
-		assert.Contains(t, w.Header().Get("Content-Type"), "image/svg+xml")
+		assert.Contains(t, w.Header().Get("Content-Type"), "image/png")
 		assert.Empty(t, w.Header().Get("Cache-Control"))
 
 		entries, err := fs.ReadDir(server.distFS, "assets")
@@ -685,6 +684,16 @@ func TestEmbeddedFrontendBypassesBareVideoAPIRoutes(t *testing.T) {
 		"/videos/edits",
 		"/videos/extensions",
 		"/videos/request-123",
+	} {
+		require.True(t, shouldBypassEmbeddedFrontend(path), "path=%s", path)
+	}
+}
+
+func TestEmbeddedFrontendBypassesPrivateRadarWorkerRoutes(t *testing.T) {
+	for _, path := range []string{
+		"/internal/radar/v1/leases:claim",
+		"/internal/radar/v1/grading-leases:claim",
+		"/internal/radar/v1/analysis-jobs:claim",
 	} {
 		require.True(t, shouldBypassEmbeddedFrontend(path), "path=%s", path)
 	}
@@ -736,11 +745,11 @@ func TestServeEmbeddedFrontend(t *testing.T) {
 		router.Use(middleware)
 
 		w := httptest.NewRecorder()
-		req := httptest.NewRequest(http.MethodGet, "/logo.svg", nil)
+		req := httptest.NewRequest(http.MethodGet, "/logo.png", nil)
 		router.ServeHTTP(w, req)
 
 		assert.Equal(t, http.StatusOK, w.Code)
-		assert.Contains(t, w.Header().Get("Content-Type"), "image/svg+xml")
+		assert.Contains(t, w.Header().Get("Content-Type"), "image/png")
 	})
 
 	t.Run("serves_index_html_for_root", func(t *testing.T) {
@@ -783,7 +792,6 @@ func TestServeEmbeddedFrontend(t *testing.T) {
 
 		apiPaths := []string{
 			"/api/users",
-			"/internal/radar/v1/analysis-jobs:claim",
 			"/models",
 			"/v1/models",
 			"/v1beta/chat",

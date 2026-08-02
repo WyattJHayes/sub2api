@@ -20,11 +20,21 @@ import (
 )
 
 type evaluationGradingRepository struct {
-	db *sql.DB
+	db            *sql.DB
+	artifactStore service.EvaluationArtifactObjectStore
+	artifactScan  service.ArtifactScanner
 }
 
-func NewEvaluationGradingRepository(db *sql.DB) service.EvaluationGradingRepository {
-	return &evaluationGradingRepository{db: db}
+func NewEvaluationGradingRepository(db *sql.DB, artifactStores ...service.EvaluationArtifactObjectStore) service.EvaluationGradingRepository {
+	var artifactStore service.EvaluationArtifactObjectStore
+	if len(artifactStores) > 0 {
+		artifactStore = artifactStores[0]
+	}
+	return &evaluationGradingRepository{db: db, artifactStore: artifactStore}
+}
+
+func NewEvaluationGradingRepositoryWithArtifactDependencies(db *sql.DB, store service.EvaluationArtifactObjectStore, scanner service.ArtifactScanner) service.EvaluationGradingRepository {
+	return &evaluationGradingRepository{db: db, artifactStore: store, artifactScan: scanner}
 }
 
 func (r *evaluationGradingRepository) AuthenticateRunner(ctx context.Context, token string) (uuid.UUID, error) {
@@ -45,6 +55,7 @@ func (r *evaluationGradingRepository) SubmitEvidence(ctx context.Context, input 
 	}
 	digest := sha256.Sum256(bytes.TrimSpace(input.Evidence))
 	digestHex := hex.EncodeToString(digest[:])
+	artifactIDs := make([]uuid.UUID, 0, 1)
 	var expectedEpoch any
 	if input.LeaseEpoch > 0 {
 		expectedEpoch = input.LeaseEpoch
@@ -56,16 +67,23 @@ func (r *evaluationGradingRepository) SubmitEvidence(ctx context.Context, input 
 	defer func() { _ = tx.Rollback() }()
 	var sampleID uuid.UUID
 	var leaseEpoch int64
-	err = tx.QueryRowContext(ctx, `
+	assignmentQuery := `
 		SELECT a.sample_id, a.lease_epoch
 		FROM evaluation_assignments a
 		JOIN evaluation_samples s ON s.id = a.sample_id
 		JOIN evaluation_runs r ON r.id = s.run_id
-		JOIN evaluation_workers w ON w.id = a.leased_by AND w.status = 'active'
+		JOIN evaluation_workers w ON w.id = a.leased_by AND w.status = 'active' AND w.tenant_id = r.tenant_id
 		WHERE a.id = $1 AND a.sample_id = $2 AND a.lease_token_hash = $3 AND a.lease_expires_at > NOW()
 		  AND a.status IN ('leased', 'running') AND a.lease_epoch = r.control_epoch
-		  AND ($4::bigint IS NULL OR a.lease_epoch = $4)
-		FOR UPDATE`, input.AssignmentID, input.SampleID, hashToken(leaseToken), expectedEpoch).Scan(&sampleID, &leaseEpoch)
+		  AND ($4::bigint IS NULL OR a.lease_epoch = $4)`
+	assignmentArgs := []any{input.AssignmentID, input.SampleID, hashToken(leaseToken), expectedEpoch}
+	if workerID, bound := service.RadarWorkerID(ctx); bound {
+		assignmentQuery += ` AND a.leased_by = $5`
+		assignmentQuery += ` AND w.tenant_id > 0`
+		assignmentArgs = append(assignmentArgs, workerID)
+	}
+	assignmentQuery += ` FOR UPDATE`
+	err = tx.QueryRowContext(ctx, assignmentQuery, assignmentArgs...).Scan(&sampleID, &leaseEpoch)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, service.ErrLeaseFenced
 	}
@@ -87,6 +105,53 @@ func (r *evaluationGradingRepository) SubmitEvidence(ctx context.Context, input 
 	if evidenceCount == 0 || unsealedCount > 0 {
 		return nil, service.ErrRouteEvidenceNotSealed
 	}
+	if r.artifactStore != nil {
+		rows, err := tx.QueryContext(ctx, `
+			SELECT id, object_key, sha256, byte_count, mime_type, scan_status,
+			       scan_reason, scan_provider, scanned_at, confirmed_at, deleted_at
+			FROM evaluation_artifacts
+			WHERE assignment_id = $1
+			ORDER BY created_at, id`, input.AssignmentID)
+		if err != nil {
+			return nil, fmt.Errorf("load evidence manifest artifacts: %w", err)
+		}
+		artifacts := make([]service.ArtifactReceipt, 0)
+		for rows.Next() {
+			var artifact service.ArtifactReceipt
+			var scanReason, scanner sql.NullString
+			var scannedAt, confirmedAt, deletedAt sql.NullTime
+			if err := rows.Scan(
+				&artifact.ID, &artifact.ObjectKey, &artifact.SHA256, &artifact.Bytes, &artifact.MIMEType, &artifact.ScanStatus,
+				&scanReason, &scanner, &scannedAt, &confirmedAt, &deletedAt,
+			); err != nil {
+				rows.Close()
+				return nil, fmt.Errorf("scan evidence manifest artifact: %w", err)
+			}
+			artifact.ScanReason = scanReason.String
+			artifact.Scanner = scanner.String
+			if scannedAt.Valid {
+				artifact.ScannedAt = &scannedAt.Time
+			}
+			if confirmedAt.Valid {
+				artifact.ConfirmedAt = confirmedAt.Time
+			}
+			if deletedAt.Valid {
+				artifact.DeletedAt = &deletedAt.Time
+			}
+			artifacts = append(artifacts, artifact)
+		}
+		if err := rows.Err(); err != nil {
+			rows.Close()
+			return nil, fmt.Errorf("iterate evidence manifest artifacts: %w", err)
+		}
+		rows.Close()
+		var artifactID uuid.UUID
+		digestHex, artifactID, err = bindEvidenceManifestArtifact(input.Evidence, artifacts)
+		if err != nil {
+			return nil, err
+		}
+		artifactIDs = append(artifactIDs, artifactID)
+	}
 	if _, err := tx.ExecContext(ctx, `
 		UPDATE evaluation_assignments
 		SET evidence_manifest = $2::jsonb, status = 'evidence_uploaded', heartbeat_at = NOW(), updated_at = NOW()
@@ -99,7 +164,7 @@ func (r *evaluationGradingRepository) SubmitEvidence(ctx context.Context, input 
 	if err := tx.Commit(); err != nil {
 		return nil, fmt.Errorf("commit evidence submission: %w", err)
 	}
-	return &service.EvidenceReceipt{AssignmentID: input.AssignmentID, EvidenceManifestSHA256: digestHex, AcceptedAt: time.Now().UTC()}, nil
+	return &service.EvidenceReceipt{AssignmentID: input.AssignmentID, EvidenceManifestSHA256: digestHex, ArtifactIDs: artifactIDs, AcceptedAt: time.Now().UTC()}, nil
 }
 
 func validArtifactSHA256(value string) bool {
@@ -115,15 +180,11 @@ func validArtifactSHA256(value string) bool {
 	return true
 }
 
-func artifactUploadURL(objectKey string) string {
-	// The staging worker understands this scheme as a local volume target. A
-	// production object-store adapter can replace this URL without changing
-	// the database or worker protocol.
-	return "staging://" + objectKey
-}
-
 func (r *evaluationGradingRepository) PresignArtifact(ctx context.Context, assignmentID uuid.UUID, leaseToken string, input service.ArtifactPresignRequest) (*service.ArtifactUpload, error) {
-	if r == nil || r.db == nil || assignmentID == uuid.Nil || strings.TrimSpace(leaseToken) == "" || input.Bytes <= 0 || input.Bytes > 1024*1024*1024 || !validArtifactSHA256(input.SHA256) || strings.TrimSpace(input.MIMEType) == "" || len(input.MIMEType) > 100 {
+	if r == nil || r.db == nil || r.artifactStore == nil {
+		return nil, service.ErrArtifactObjectStoreUnavailable
+	}
+	if assignmentID == uuid.Nil || strings.TrimSpace(leaseToken) == "" || input.Bytes <= 0 || input.Bytes > 1024*1024*1024 || !validArtifactSHA256(input.SHA256) || strings.TrimSpace(input.MIMEType) == "" || len(input.MIMEType) > 100 {
 		return nil, service.ErrArtifactInvalid
 	}
 	input.MIMEType = strings.TrimSpace(input.MIMEType)
@@ -138,31 +199,58 @@ func (r *evaluationGradingRepository) PresignArtifact(ctx context.Context, assig
 	}
 	defer func() { _ = tx.Rollback() }()
 	var runID, sampleID uuid.UUID
-	err = tx.QueryRowContext(ctx, `
-		SELECT s.run_id, a.sample_id FROM evaluation_assignments a
+	var runTenantID int64
+	assignmentQuery := `
+		SELECT s.run_id, a.sample_id, r.tenant_id FROM evaluation_assignments a
 		JOIN evaluation_samples s ON s.id = a.sample_id
 		JOIN evaluation_runs r ON r.id = s.run_id
-		JOIN evaluation_workers w ON w.id = a.leased_by AND w.status = 'active'
+		JOIN evaluation_workers w ON w.id = a.leased_by AND w.status = 'active' AND w.tenant_id = r.tenant_id
 		WHERE a.id = $1 AND a.lease_token_hash = $2 AND a.lease_expires_at > NOW()
 		  AND a.status IN ('leased', 'running') AND a.lease_epoch = r.control_epoch
-		  AND ($3::bigint IS NULL OR a.lease_epoch = $3) FOR UPDATE`, assignmentID, hashToken(leaseToken), expectedEpoch).Scan(&runID, &sampleID)
+		  AND ($3::bigint IS NULL OR a.lease_epoch = $3)`
+	assignmentArgs := []any{assignmentID, hashToken(leaseToken), expectedEpoch}
+	if workerID, bound := service.RadarWorkerID(ctx); bound {
+		assignmentQuery += ` AND a.leased_by = $4`
+		assignmentQuery += ` AND w.tenant_id > 0`
+		assignmentArgs = append(assignmentArgs, workerID)
+	}
+	assignmentQuery += ` FOR UPDATE`
+	err = tx.QueryRowContext(ctx, assignmentQuery, assignmentArgs...).Scan(&runID, &sampleID, &runTenantID)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, service.ErrLeaseFenced
 	}
 	if err != nil {
 		return nil, fmt.Errorf("lock artifact assignment: %w", err)
 	}
+	if workerID, bound := service.RadarWorkerID(ctx); bound {
+		if runTenantID <= 0 {
+			return nil, service.ErrRadarForbidden
+		}
+		if err := ensureRadarWorkerRunTenant(ctx, tx, workerID, runID); err != nil {
+			return nil, err
+		}
+	}
 	var existing service.ArtifactUpload
 	var existingExpires time.Time
 	err = tx.QueryRowContext(ctx, `
 		SELECT id, object_key, sha256, byte_count, mime_type, retention_deadline
 		FROM evaluation_artifacts
-		WHERE assignment_id = $1 AND sha256 = $2 AND byte_count = $3 AND mime_type = $4
-		ORDER BY created_at DESC LIMIT 1`, assignmentID, input.SHA256, input.Bytes, input.MIMEType).Scan(
+		WHERE assignment_id = $1 AND sha256 = $2 AND byte_count = $3 AND mime_type = $4 AND tenant_id = $5
+		ORDER BY created_at DESC LIMIT 1`, assignmentID, input.SHA256, input.Bytes, input.MIMEType, runTenantID).Scan(
 		&existing.ID, &existing.ObjectKey, &existing.SHA256, &existing.Bytes, &existing.MIMEType, &existingExpires)
 	if err == nil {
-		existing.UploadURL = artifactUploadURL(existing.ObjectKey)
-		existing.ExpiresAt = existingExpires
+		objectUpload, err := r.artifactStore.PresignPut(ctx, service.ArtifactObjectPutRequest{
+			ObjectKey: existing.ObjectKey,
+			Bytes:     existing.Bytes,
+			MIMEType:  existing.MIMEType,
+			SHA256:    existing.SHA256,
+		}, 0)
+		if err != nil {
+			return nil, fmt.Errorf("presign existing artifact upload: %w", err)
+		}
+		existing.UploadURL = objectUpload.URL
+		existing.UploadHeaders = objectUpload.Headers
+		existing.ExpiresAt = objectUpload.ExpiresAt
 		if err := tx.Commit(); err != nil {
 			return nil, fmt.Errorf("commit idempotent artifact presign: %w", err)
 		}
@@ -175,19 +263,34 @@ func (r *evaluationGradingRepository) PresignArtifact(ctx context.Context, assig
 	objectKey := fmt.Sprintf("evaluation-artifacts/%s/%s/%s", runID, sampleID, artifactID)
 	var expiresAt time.Time
 	if err := tx.QueryRowContext(ctx, `
-		INSERT INTO evaluation_artifacts (id, run_id, sample_id, assignment_id, object_key, sha256, byte_count, mime_type, retention_deadline)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, NOW() + INTERVAL '30 days')
-		RETURNING retention_deadline`, artifactID, runID, sampleID, assignmentID, objectKey, input.SHA256, input.Bytes, input.MIMEType).Scan(&expiresAt); err != nil {
+		INSERT INTO evaluation_artifacts (id, run_id, sample_id, assignment_id, object_key, sha256, byte_count, mime_type, retention_deadline, tenant_id)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, NOW() + INTERVAL '30 days', $9)
+		RETURNING retention_deadline`, artifactID, runID, sampleID, assignmentID, objectKey, input.SHA256, input.Bytes, input.MIMEType, runTenantID).Scan(&expiresAt); err != nil {
 		return nil, fmt.Errorf("create artifact upload: %w", err)
 	}
 	if err := tx.Commit(); err != nil {
 		return nil, fmt.Errorf("commit artifact presign: %w", err)
 	}
-	return &service.ArtifactUpload{ID: artifactID, ObjectKey: objectKey, UploadURL: artifactUploadURL(objectKey), SHA256: input.SHA256, Bytes: input.Bytes, MIMEType: input.MIMEType, ExpiresAt: expiresAt}, nil
+	objectUpload, err := r.artifactStore.PresignPut(ctx, service.ArtifactObjectPutRequest{
+		ObjectKey: objectKey,
+		Bytes:     input.Bytes,
+		MIMEType:  input.MIMEType,
+		SHA256:    input.SHA256,
+	}, 0)
+	if err != nil {
+		return nil, fmt.Errorf("presign artifact upload: %w", err)
+	}
+	return &service.ArtifactUpload{ID: artifactID, ObjectKey: objectKey, UploadURL: objectUpload.URL, UploadHeaders: objectUpload.Headers, SHA256: input.SHA256, Bytes: input.Bytes, MIMEType: input.MIMEType, ExpiresAt: objectUpload.ExpiresAt}, nil
 }
 
 func (r *evaluationGradingRepository) ConfirmArtifact(ctx context.Context, assignmentID uuid.UUID, leaseToken string, input service.ArtifactConfirmation) (*service.ArtifactReceipt, error) {
-	if r == nil || r.db == nil || assignmentID == uuid.Nil || input.ArtifactID == uuid.Nil || strings.TrimSpace(leaseToken) == "" || input.Bytes < 0 || !validArtifactSHA256(input.SHA256) || strings.TrimSpace(input.ObjectKey) == "" {
+	if r == nil || r.db == nil || r.artifactStore == nil {
+		return nil, service.ErrArtifactObjectStoreUnavailable
+	}
+	if r.artifactScan == nil {
+		return nil, service.ErrArtifactScannerUnavailable
+	}
+	if assignmentID == uuid.Nil || input.ArtifactID == uuid.Nil || strings.TrimSpace(leaseToken) == "" || input.Bytes < 0 || !validArtifactSHA256(input.SHA256) || strings.TrimSpace(input.ObjectKey) == "" {
 		return nil, service.ErrArtifactInvalid
 	}
 	input.ObjectKey = strings.TrimSpace(input.ObjectKey)
@@ -196,60 +299,232 @@ func (r *evaluationGradingRepository) ConfirmArtifact(ctx context.Context, assig
 	if input.LeaseEpoch > 0 {
 		expectedEpoch = input.LeaseEpoch
 	}
+	active, err := artifactLeaseActive(ctx, r.db, assignmentID, leaseToken, expectedEpoch)
+	if err != nil {
+		return nil, err
+	}
+	if !active {
+		return nil, service.ErrLeaseFenced
+	}
+	observed, err := loadArtifactReceipt(ctx, r.db, input.ArtifactID, assignmentID, false)
+	if err != nil {
+		return nil, err
+	}
+	if observed.DeletedAt != nil {
+		return nil, service.ErrArtifactNotFound
+	}
+	if !artifactConfirmationMatches(*observed, input) {
+		return nil, service.ErrArtifactObjectMismatch
+	}
+	if !observed.ConfirmedAt.IsZero() {
+		return observed, confirmedArtifactError(*observed)
+	}
+	objectMetadata, err := r.artifactStore.Head(ctx, observed.ObjectKey)
+	if err != nil {
+		return nil, fmt.Errorf("verify artifact object metadata: %w", err)
+	}
+	if err := verifyArtifactObjectMetadata(service.ArtifactObjectMetadata{
+		ObjectKey: observed.ObjectKey,
+		Bytes:     observed.Bytes,
+		MIMEType:  observed.MIMEType,
+		SHA256:    observed.SHA256,
+	}, *objectMetadata); err != nil {
+		return nil, err
+	}
+	scanResult, scanErr := r.artifactScan.Scan(ctx, observed.ObjectKey, *objectMetadata)
+	if scanErr != nil {
+		scanResult.Status = service.ArtifactScanFailed
+		if strings.TrimSpace(scanResult.Reason) == "" {
+			scanResult.Reason = scanErr.Error()
+		}
+	}
+	if scanResult.ScannedAt.IsZero() {
+		scanResult.ScannedAt = time.Now().UTC()
+	}
+	if scanResult.Status == service.ArtifactScanClean && strings.TrimSpace(scanResult.Scanner) == "" {
+		scanResult.Status = service.ArtifactScanFailed
+		scanResult.Reason = "scanner identity is missing"
+	}
+
 	tx, err := beginRadarWriterTx(ctx, r.db, "worker")
 	if err != nil {
 		return nil, fmt.Errorf("begin artifact confirmation: %w", err)
 	}
 	defer func() { _ = tx.Rollback() }()
-	var active bool
+	active, err = artifactLeaseActive(ctx, tx, assignmentID, leaseToken, expectedEpoch)
+	if err != nil {
+		return nil, err
+	}
+	if !active {
+		return nil, service.ErrLeaseFenced
+	}
+	receipt, err := loadArtifactReceipt(ctx, tx, input.ArtifactID, assignmentID, true)
+	if err != nil {
+		return nil, err
+	}
+	if receipt.DeletedAt != nil {
+		return nil, service.ErrArtifactNotFound
+	}
+	if !artifactConfirmationMatches(*receipt, input) || !artifactReceiptIdentityMatches(*observed, *receipt) {
+		return nil, service.ErrArtifactObjectMismatch
+	}
+	if !receipt.ConfirmedAt.IsZero() {
+		if err := tx.Commit(); err != nil {
+			return nil, fmt.Errorf("commit idempotent artifact confirmation: %w", err)
+		}
+		return receipt, confirmedArtifactError(*receipt)
+	}
+	receipt.ScanStatus = string(scanResult.Status)
+	receipt.ScanReason = scanResult.Reason
+	receipt.Scanner = scanResult.Scanner
+	receipt.ScannedAt = &scanResult.ScannedAt
+	if scanResult.Status != service.ArtifactScanClean {
+		if _, err := tx.ExecContext(ctx, `
+			UPDATE evaluation_artifacts
+			SET scan_status = $2, scan_reason = $3, scan_provider = $4, scanned_at = $5
+			WHERE id = $1`, input.ArtifactID, scanResult.Status, scanResult.Reason, scanResult.Scanner, scanResult.ScannedAt); err != nil {
+			return nil, fmt.Errorf("persist artifact scan result: %w", err)
+		}
+		if err := tx.Commit(); err != nil {
+			return nil, fmt.Errorf("commit artifact scan result: %w", err)
+		}
+		if scanErr != nil {
+			return receipt, fmt.Errorf("%w: %v", service.ErrArtifactScanFailed, scanErr)
+		}
+		return receipt, artifactScanResultError(scanResult)
+	}
 	if err := tx.QueryRowContext(ctx, `
+		UPDATE evaluation_artifacts
+		SET confirmed_at = NOW(), scan_status = 'clean', scan_reason = $2,
+		    scan_provider = $3, scanned_at = $4
+		WHERE id = $1 RETURNING confirmed_at`, input.ArtifactID, scanResult.Reason, scanResult.Scanner, scanResult.ScannedAt).Scan(&receipt.ConfirmedAt); err != nil {
+		return nil, fmt.Errorf("confirm artifact: %w", err)
+	}
+	if err := tx.Commit(); err != nil {
+		return nil, fmt.Errorf("commit artifact confirmation: %w", err)
+	}
+	return receipt, nil
+}
+
+func (r *evaluationGradingRepository) PresignGradingArtifactRead(ctx context.Context, workerID, leaseID uuid.UUID, leaseToken string, artifactID uuid.UUID, leaseEpoch int64) (*service.ArtifactDownload, error) {
+	if r == nil || r.db == nil || r.artifactStore == nil {
+		return nil, service.ErrArtifactObjectStoreUnavailable
+	}
+	if workerID == uuid.Nil || leaseID == uuid.Nil || artifactID == uuid.Nil || strings.TrimSpace(leaseToken) == "" || leaseEpoch <= 0 {
+		return nil, service.ErrLeaseFenced
+	}
+	download := &service.ArtifactDownload{ArtifactID: artifactID}
+	err := r.db.QueryRowContext(ctx, `
+		SELECT ea.id, ea.object_key, ea.sha256, ea.byte_count, ea.mime_type
+		FROM evaluation_grading_jobs g
+		JOIN evaluation_artifacts ea ON ea.assignment_id = g.assignment_id
+		JOIN evaluation_workers w ON w.id = g.leased_by AND w.status = 'active'
+		JOIN evaluation_runs run ON run.id = g.run_id
+		LEFT JOIN evaluation_revision_batches batch
+		  ON batch.id = g.revision_batch_id AND batch.run_id = g.run_id
+		WHERE g.id = $1 AND g.lease_token_hash = $2 AND g.leased_by = $3
+		  AND w.tenant_id = run.tenant_id AND w.tenant_id > 0
+		  AND g.status = 'leased' AND g.lease_expires_at > NOW()
+		  AND ea.id = $4 AND ea.tenant_id = run.tenant_id
+		  AND ea.scan_status = 'clean' AND ea.confirmed_at IS NOT NULL
+		  AND ea.deleted_at IS NULL AND g.lease_epoch = $5
+		  AND ((g.work_origin = 'regrade' AND batch.status = 'running' AND g.lease_epoch = batch.control_epoch)
+		       OR (COALESCE(g.work_origin, 'initial') <> 'regrade' AND g.lease_epoch = run.control_epoch))`,
+		leaseID, hashToken(leaseToken), workerID, artifactID, leaseEpoch,
+	).Scan(&download.ArtifactID, &download.ObjectKey, &download.SHA256, &download.Bytes, &download.MIMEType)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, service.ErrLeaseFenced
+	}
+	if err != nil {
+		return nil, fmt.Errorf("authorize grading artifact read: %w", err)
+	}
+	download.DownloadURL, download.ExpiresAt, err = r.artifactStore.PresignGet(ctx, download.ObjectKey, 5*time.Minute)
+	if err != nil {
+		return nil, fmt.Errorf("presign grading artifact read: %w", err)
+	}
+	return download, nil
+}
+
+type artifactReceiptQueryer interface {
+	QueryRowContext(context.Context, string, ...any) *sql.Row
+}
+
+func artifactLeaseActive(ctx context.Context, queryer artifactReceiptQueryer, assignmentID uuid.UUID, leaseToken string, expectedEpoch any) (bool, error) {
+	var active bool
+	query := `
 		SELECT EXISTS (
 			SELECT 1
 			FROM evaluation_assignments a
 			JOIN evaluation_samples s ON s.id = a.sample_id
 			JOIN evaluation_runs r ON r.id = s.run_id
-			JOIN evaluation_workers w ON w.id = a.leased_by AND w.status = 'active'
+			JOIN evaluation_workers w ON w.id = a.leased_by AND w.status = 'active' AND w.tenant_id = r.tenant_id
 			WHERE a.id = $1 AND a.lease_token_hash = $2 AND a.lease_expires_at > NOW()
 			  AND a.status IN ('leased', 'running') AND a.lease_epoch = r.control_epoch
-			  AND ($3::bigint IS NULL OR a.lease_epoch = $3)
-		)`, assignmentID, hashToken(leaseToken), expectedEpoch).Scan(&active); err != nil {
-		return nil, fmt.Errorf("check artifact lease: %w", err)
+			  AND ($3::bigint IS NULL OR a.lease_epoch = $3)`
+	args := []any{assignmentID, hashToken(leaseToken), expectedEpoch}
+	if workerID, bound := service.RadarWorkerID(ctx); bound {
+		query += ` AND a.leased_by = $4`
+		query += ` AND w.tenant_id > 0`
+		args = append(args, workerID)
 	}
-	if !active {
-		return nil, service.ErrLeaseFenced
+	query += `
+		)`
+	if err := queryer.QueryRowContext(ctx, query, args...).Scan(&active); err != nil {
+		return false, fmt.Errorf("check artifact lease: %w", err)
+	}
+	return active, nil
+}
+
+func loadArtifactReceipt(ctx context.Context, queryer artifactReceiptQueryer, artifactID, assignmentID uuid.UUID, forUpdate bool) (*service.ArtifactReceipt, error) {
+	query := `
+		SELECT id, object_key, sha256, byte_count, mime_type, scan_status,
+		       scan_reason, scan_provider, scanned_at, confirmed_at, deleted_at
+		FROM evaluation_artifacts WHERE id = $1 AND assignment_id = $2`
+	if forUpdate {
+		query += " FOR UPDATE"
 	}
 	var receipt service.ArtifactReceipt
-	var confirmedAt sql.NullTime
-	err = tx.QueryRowContext(ctx, `
-		SELECT id, object_key, sha256, byte_count, mime_type, scan_status, confirmed_at
-		FROM evaluation_artifacts WHERE id = $1 AND assignment_id = $2 FOR UPDATE`, input.ArtifactID, assignmentID).Scan(
-		&receipt.ID, &receipt.ObjectKey, &receipt.SHA256, &receipt.Bytes, &receipt.MIMEType, &receipt.ScanStatus, &confirmedAt)
+	var confirmedAt, scannedAt, deletedAt sql.NullTime
+	var scanReason, scanner sql.NullString
+	err := queryer.QueryRowContext(ctx, query, artifactID, assignmentID).Scan(
+		&receipt.ID, &receipt.ObjectKey, &receipt.SHA256, &receipt.Bytes, &receipt.MIMEType, &receipt.ScanStatus,
+		&scanReason, &scanner, &scannedAt, &confirmedAt, &deletedAt)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, service.ErrArtifactNotFound
 	}
 	if err != nil {
 		return nil, fmt.Errorf("load artifact confirmation: %w", err)
 	}
-	if receipt.ObjectKey != input.ObjectKey || receipt.SHA256 != input.SHA256 || receipt.Bytes != input.Bytes {
-		return nil, service.ErrArtifactObjectMismatch
+	receipt.ScanReason = scanReason.String
+	receipt.Scanner = scanner.String
+	if scannedAt.Valid {
+		receipt.ScannedAt = &scannedAt.Time
 	}
 	if confirmedAt.Valid {
 		receipt.ConfirmedAt = confirmedAt.Time
-		if err := tx.Commit(); err != nil {
-			return nil, fmt.Errorf("commit idempotent artifact confirmation: %w", err)
-		}
-		return &receipt, nil
 	}
-	if err := tx.QueryRowContext(ctx, `
-		UPDATE evaluation_artifacts SET confirmed_at = NOW(), scan_status = 'clean'
-		WHERE id = $1 RETURNING confirmed_at`, input.ArtifactID).Scan(&receipt.ConfirmedAt); err != nil {
-		return nil, fmt.Errorf("confirm artifact: %w", err)
-	}
-	receipt.ScanStatus = "clean"
-	if err := tx.Commit(); err != nil {
-		return nil, fmt.Errorf("commit artifact confirmation: %w", err)
+	if deletedAt.Valid {
+		receipt.DeletedAt = &deletedAt.Time
 	}
 	return &receipt, nil
+}
+
+func artifactConfirmationMatches(receipt service.ArtifactReceipt, input service.ArtifactConfirmation) bool {
+	return receipt.ID == input.ArtifactID && receipt.ObjectKey == input.ObjectKey && receipt.SHA256 == input.SHA256 && receipt.Bytes == input.Bytes
+}
+
+func artifactReceiptIdentityMatches(left, right service.ArtifactReceipt) bool {
+	return left.ID == right.ID && left.ObjectKey == right.ObjectKey && left.SHA256 == right.SHA256 && left.Bytes == right.Bytes && left.MIMEType == right.MIMEType
+}
+
+func confirmedArtifactError(receipt service.ArtifactReceipt) error {
+	if receipt.ScanStatus == string(service.ArtifactScanClean) {
+		return nil
+	}
+	return artifactScanResultError(service.ArtifactScanResult{
+		Status: service.ArtifactScanStatus(receipt.ScanStatus),
+		Reason: receipt.ScanReason,
+	})
 }
 
 func (r *evaluationGradingRepository) CompleteAssignment(ctx context.Context, assignmentID uuid.UUID, leaseToken string, leaseEpoch ...int64) error {
@@ -319,6 +594,39 @@ func (r *evaluationGradingRepository) AuthenticateWorker(ctx context.Context, to
 	return uuid.Nil, errors.New("evaluation worker credentials are invalid")
 }
 
+func (r *evaluationGradingRepository) TouchWorkerHeartbeat(ctx context.Context, workerID uuid.UUID, workerKind string) error {
+	if r == nil || r.db == nil {
+		return errors.New("nil evaluation grading repository")
+	}
+	workerKind = strings.TrimSpace(workerKind)
+	if workerID == uuid.Nil || workerKind == "" {
+		return errors.New("evaluation worker identity is required")
+	}
+	tx, err := beginRadarWriterTx(ctx, r.db, "worker")
+	if err != nil {
+		return fmt.Errorf("begin evaluation worker heartbeat: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+	result, err := tx.ExecContext(ctx, `
+		UPDATE evaluation_workers
+		SET last_heartbeat_at = NOW(), updated_at = NOW()
+		WHERE id = $1 AND worker_kind = $2 AND status = 'active'`, workerID, workerKind)
+	if err != nil {
+		return fmt.Errorf("heartbeat evaluation worker: %w", err)
+	}
+	affected, err := result.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("inspect evaluation worker heartbeat: %w", err)
+	}
+	if affected == 0 {
+		return errors.New("evaluation worker is unavailable")
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit evaluation worker heartbeat: %w", err)
+	}
+	return nil
+}
+
 func (r *evaluationGradingRepository) ClaimGradingLease(ctx context.Context, workerID uuid.UUID, graderIDs []string, leaseTTL time.Duration) (*service.GradingLease, error) {
 	if r == nil || r.db == nil {
 		return nil, errors.New("nil evaluation grading repository")
@@ -335,9 +643,10 @@ func (r *evaluationGradingRepository) ClaimGradingLease(ctx context.Context, wor
 	var kind string
 	var capabilities pq.StringArray
 	var workerImageDigest sql.NullString
+	var workerTenantID int64
 	if err := tx.QueryRowContext(ctx, `
-		SELECT worker_kind, capabilities, image_digest FROM evaluation_workers
-		WHERE id = $1 AND status = 'active' AND claim_mode = 'open' FOR UPDATE`, workerID).Scan(&kind, &capabilities, &workerImageDigest); err != nil {
+		SELECT worker_kind, capabilities, image_digest, tenant_id FROM evaluation_workers
+		WHERE id = $1 AND status = 'active' AND claim_mode = 'open' FOR UPDATE`, workerID).Scan(&kind, &capabilities, &workerImageDigest, &workerTenantID); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return nil, errors.New("evaluation grader worker is unavailable")
 		}
@@ -345,6 +654,9 @@ func (r *evaluationGradingRepository) ClaimGradingLease(ctx context.Context, wor
 	}
 	if kind != "grader" {
 		return nil, service.ErrWorkerKindMismatch
+	}
+	if boundWorker, bound := service.RadarWorkerID(ctx); bound && (boundWorker != workerID || workerTenantID <= 0) {
+		return nil, service.ErrRadarForbidden
 	}
 	allowed := authorizedWorkerCapabilities(graderIDs, capabilities)
 	if len(allowed) == 0 {
@@ -377,6 +689,7 @@ func (r *evaluationGradingRepository) ClaimGradingLease(ctx context.Context, wor
 		LEFT JOIN evaluation_revision_batches batch
 		  ON batch.id = g.revision_batch_id AND batch.run_id = g.run_id
 		WHERE g.grader_id = ANY($1::text[])
+		  AND ($2::bigint = 0 OR run.tenant_id = $2)
 		  AND a.status IN ('evidence_uploaded', 'completed')
 		  AND (g.status = 'pending' OR (g.status = 'leased' AND g.lease_expires_at <= NOW()))
 		  AND (
@@ -386,7 +699,7 @@ func (r *evaluationGradingRepository) ClaimGradingLease(ctx context.Context, wor
 		  )
 		ORDER BY g.created_at, g.id
 		FOR UPDATE OF g SKIP LOCKED
-		LIMIT 1`, pq.Array(allowed)).Scan(
+		LIMIT 1`, pq.Array(allowed), workerTenantID).Scan(
 		&lease.ID, &lease.RunID, &lease.SampleID, &lease.AssignmentID,
 		&lease.GraderID, &lease.GraderVersion, &lease.Attempt, &jobStatus,
 		&workOrigin, &revisionBatchID, &gradingInputHash, &lease.RecoveryGeneration,
@@ -449,22 +762,36 @@ func (r *evaluationGradingRepository) ClaimGradingLease(ctx context.Context, wor
 		lease.RouteTraceID = routeTrace.String
 	}
 	artifactRows, artifactErr := tx.QueryContext(ctx, `
-		SELECT id, object_key, sha256, byte_count, mime_type, scan_status, confirmed_at
+		SELECT id, object_key, sha256, byte_count, mime_type, scan_status,
+		       scan_reason, scan_provider, scanned_at, confirmed_at, deleted_at
 		FROM evaluation_artifacts
 		WHERE assignment_id = $1 AND confirmed_at IS NOT NULL AND scan_status = 'clean'
+		  AND deleted_at IS NULL
 		ORDER BY created_at, id`, lease.AssignmentID)
 	if artifactErr != nil {
 		return nil, fmt.Errorf("load grading evidence artifacts: %w", artifactErr)
 	}
 	for artifactRows.Next() {
 		var receipt service.ArtifactReceipt
-		var confirmedAt sql.NullTime
-		if err := artifactRows.Scan(&receipt.ID, &receipt.ObjectKey, &receipt.SHA256, &receipt.Bytes, &receipt.MIMEType, &receipt.ScanStatus, &confirmedAt); err != nil {
+		var scanReason, scanner sql.NullString
+		var scannedAt, confirmedAt, deletedAt sql.NullTime
+		if err := artifactRows.Scan(
+			&receipt.ID, &receipt.ObjectKey, &receipt.SHA256, &receipt.Bytes, &receipt.MIMEType, &receipt.ScanStatus,
+			&scanReason, &scanner, &scannedAt, &confirmedAt, &deletedAt,
+		); err != nil {
 			artifactRows.Close()
 			return nil, fmt.Errorf("scan grading evidence artifact: %w", err)
 		}
+		receipt.ScanReason = scanReason.String
+		receipt.Scanner = scanner.String
+		if scannedAt.Valid {
+			receipt.ScannedAt = &scannedAt.Time
+		}
 		if confirmedAt.Valid {
 			receipt.ConfirmedAt = confirmedAt.Time
+		}
+		if deletedAt.Valid {
+			receipt.DeletedAt = &deletedAt.Time
 		}
 		lease.Evidence = append(lease.Evidence, receipt)
 	}
@@ -521,19 +848,26 @@ func (r *evaluationGradingRepository) HeartbeatGradingLease(ctx context.Context,
 			UPDATE evaluation_grading_jobs g
 			SET lease_expires_at = NOW() + $3::interval, heartbeat_at = NOW(), updated_at = NOW()
 			WHERE g.id = $1 AND g.status = 'leased'
-			  AND g.lease_token_hash = $2 AND g.lease_expires_at > NOW()
-			  AND EXISTS (SELECT 1 FROM evaluation_workers w
-			              WHERE w.id = g.leased_by AND w.status = 'active')
+				AND g.lease_token_hash = $2 AND g.lease_expires_at > NOW()
+				AND EXISTS (SELECT 1 FROM evaluation_workers w
+				              JOIN evaluation_runs run ON run.id = g.run_id
+				              WHERE w.id = g.leased_by AND w.status = 'active' AND w.tenant_id = run.tenant_id)
 			  AND ((g.work_origin = 'regrade' AND EXISTS (
 			          SELECT 1 FROM evaluation_revision_batches batch
 			          WHERE batch.id = g.revision_batch_id AND batch.run_id = g.run_id
 			            AND batch.status = 'running' AND g.lease_epoch = batch.control_epoch))
-			       OR (COALESCE(g.work_origin, 'initial') <> 'regrade' AND EXISTS (
-			          SELECT 1 FROM evaluation_runs run
-			          WHERE run.id = g.run_id AND g.lease_epoch = run.control_epoch)))`
+				       OR (COALESCE(g.work_origin, 'initial') <> 'regrade' AND EXISTS (
+				          SELECT 1 FROM evaluation_runs run
+				          WHERE run.id = g.run_id AND g.lease_epoch = run.control_epoch)))`
 		args := []any{leaseID, hashToken(leaseToken), postgresInterval(extendBy)}
+		nextArg := 4
+		if workerID, bound := service.RadarWorkerID(ctx); bound {
+			query += fmt.Sprintf(` AND g.leased_by = $%d`, nextArg)
+			args = append(args, workerID)
+			nextArg++
+		}
 		if len(leaseEpoch) > 0 && leaseEpoch[0] > 0 {
-			query += ` AND lease_epoch = $4`
+			query += fmt.Sprintf(` AND g.lease_epoch = $%d`, nextArg)
 			args = append(args, leaseEpoch[0])
 		}
 		query += ` RETURNING lease_expires_at`
@@ -597,7 +931,7 @@ func (r *evaluationGradingRepository) SubmitScore(ctx context.Context, leaseID u
 		runEpoch                                  int64
 		runStatus                                 string
 	}
-	err = tx.QueryRowContext(ctx, `
+	leaseQuery := `
 		SELECT g.run_id, g.sample_id, g.assignment_id, g.grader_id, g.grader_version,
 		       a.status, a.attempt, g.work_origin, g.revision_batch_id, g.grading_input_hash,
 		       g.recovery_generation, g.lease_token_hash, g.lease_expires_at, g.leased_by, g.lease_epoch,
@@ -605,8 +939,15 @@ func (r *evaluationGradingRepository) SubmitScore(ctx context.Context, leaseID u
 		FROM evaluation_grading_jobs g
 		JOIN evaluation_assignments a ON a.id = g.assignment_id
 		JOIN evaluation_runs run ON run.id = g.run_id
-		JOIN evaluation_workers w ON w.id = g.leased_by AND w.status = 'active'
-		WHERE g.id = $1 FOR UPDATE`, leaseID).Scan(
+		JOIN evaluation_workers w ON w.id = g.leased_by AND w.status = 'active' AND w.tenant_id = run.tenant_id
+		WHERE g.id = $1`
+	leaseArgs := []any{leaseID}
+	if workerID, bound := service.RadarWorkerID(ctx); bound {
+		leaseQuery += ` AND g.leased_by = $2`
+		leaseArgs = append(leaseArgs, workerID)
+	}
+	leaseQuery += ` FOR UPDATE`
+	err = tx.QueryRowContext(ctx, leaseQuery, leaseArgs...).Scan(
 		&job.runID, &job.sampleID, &job.assignmentID, &job.graderID, &job.graderVersion,
 		&job.assignmentStatus, &job.assignmentAttempt, &job.workOrigin, &job.revisionBatchID,
 		&job.gradingInputHash, &job.recoveryGeneration, &job.leaseHash, &job.leaseExpires,
@@ -1027,12 +1368,20 @@ func (r *evaluationGradingRepository) FailGradingLease(ctx context.Context, leas
 		workerID                            sql.NullString
 		leaseEpoch                          sql.NullInt64
 	}
-	if err := tx.QueryRowContext(ctx, `
-		SELECT run_id, assignment_id, sample_id, grader_id, grader_version, work_origin,
-		       revision_batch_id, grading_input_hash, recovery_generation, leased_by, lease_epoch
-		FROM evaluation_grading_jobs
-		WHERE id=$1 AND status='leased' AND lease_token_hash=$2 AND lease_expires_at > NOW()
-		FOR UPDATE`, leaseID, hashToken(leaseToken)).Scan(
+	leaseQuery := `
+		SELECT g.run_id, g.assignment_id, g.sample_id, g.grader_id, g.grader_version, g.work_origin,
+		       g.revision_batch_id, g.grading_input_hash, g.recovery_generation, g.leased_by, g.lease_epoch
+		FROM evaluation_grading_jobs g
+		JOIN evaluation_runs run ON run.id = g.run_id
+		JOIN evaluation_workers w ON w.id = g.leased_by AND w.status = 'active' AND w.tenant_id = run.tenant_id
+		WHERE g.id=$1 AND g.status='leased' AND g.lease_token_hash=$2 AND g.lease_expires_at > NOW()`
+	leaseArgs := []any{leaseID, hashToken(leaseToken)}
+	if workerID, bound := service.RadarWorkerID(ctx); bound {
+		leaseQuery += ` AND g.leased_by = $3`
+		leaseArgs = append(leaseArgs, workerID)
+	}
+	leaseQuery += ` FOR UPDATE`
+	if err := tx.QueryRowContext(ctx, leaseQuery, leaseArgs...).Scan(
 		&job.runID, &job.assignmentID, &job.sampleID, &job.graderID, &job.graderVersion,
 		&job.workOrigin, &job.revisionBatchID, &job.gradingInputHash,
 		&job.recoveryGeneration, &job.workerID, &job.leaseEpoch); err != nil {
@@ -1137,7 +1486,8 @@ func (r *evaluationGradingRepository) ClaimAnalysisJob(ctx context.Context, work
 	var kind string
 	var registered pq.StringArray
 	var workerImageDigest sql.NullString
-	if err := tx.QueryRowContext(ctx, `SELECT worker_kind, capabilities, image_digest FROM evaluation_workers WHERE id = $1 AND status = 'active' AND claim_mode = 'open' FOR UPDATE`, workerID).Scan(&kind, &registered, &workerImageDigest); err != nil {
+	var workerTenantID int64
+	if err := tx.QueryRowContext(ctx, `SELECT worker_kind, capabilities, image_digest, tenant_id FROM evaluation_workers WHERE id = $1 AND status = 'active' AND claim_mode = 'open' FOR UPDATE`, workerID).Scan(&kind, &registered, &workerImageDigest, &workerTenantID); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return nil, errors.New("statistics worker is unavailable")
 		}
@@ -1145,6 +1495,9 @@ func (r *evaluationGradingRepository) ClaimAnalysisJob(ctx context.Context, work
 	}
 	if kind != "statistics" {
 		return nil, service.ErrWorkerKindMismatch
+	}
+	if boundWorker, bound := service.RadarWorkerID(ctx); bound && (boundWorker != workerID || workerTenantID <= 0) {
+		return nil, service.ErrRadarForbidden
 	}
 	allowed := authorizedWorkerCapabilities(capabilities, registered)
 	if len(allowed) == 0 {
@@ -1165,13 +1518,14 @@ func (r *evaluationGradingRepository) ClaimAnalysisJob(ctx context.Context, work
 		JOIN evaluation_runs run ON run.id=job.run_id
 		LEFT JOIN evaluation_revision_batches batch ON batch.id=job.revision_batch_id
 		WHERE job.capability_domain = ANY($1::text[])
+		  AND ($2::bigint = 0 OR run.tenant_id = $2)
 		  AND (job.status = 'pending' OR (job.status = 'leased' AND job.lease_expires_at <= NOW()))
 		  AND (
 			(job.work_origin IN ('initial','reclaimed')
 			 AND run.status NOT IN ('paused','cancelled','completed','failed'))
 			OR (job.work_origin='regrade' AND batch.status='running')
 		  )
-		ORDER BY job.created_at, job.id FOR UPDATE OF job SKIP LOCKED LIMIT 1`, pq.Array(allowed)).Scan(
+		ORDER BY job.created_at, job.id FOR UPDATE OF job SKIP LOCKED LIMIT 1`, pq.Array(allowed), workerTenantID).Scan(
 		&lease.ID, &lease.RunID, &lease.CapabilityDomain, &lease.ModelRoute, &lease.Window,
 		&lease.AnalysisVersion, &lease.WindowStart, &jobStatus, &lease.Scope, &lease.WorkOrigin,
 		&revisionBatchID, &inputSetHash, &lease.AggregateRevision)
@@ -1434,7 +1788,7 @@ func (r *evaluationGradingRepository) CompleteAnalysisJob(ctx context.Context, j
 		FROM evaluation_analysis_jobs job
 		JOIN evaluation_runs run ON run.id = job.run_id
 		LEFT JOIN evaluation_workers w ON w.id = job.leased_by
-		WHERE job.id = $1 FOR UPDATE`, jobID).Scan(
+		WHERE job.id = $1 AND (w.id IS NULL OR w.tenant_id = run.tenant_id) FOR UPDATE OF job`, jobID).Scan(
 		&job.runID, &job.domain, &job.route, &job.window, &job.version, &job.windowStart,
 		&job.status, &job.leaseHash, &job.leaseExpires, &job.leasedBy, &job.leaseEpoch,
 		&job.runEpoch, &job.runStatus, &job.workerStatus, &job.snapshotID)
@@ -1443,6 +1797,12 @@ func (r *evaluationGradingRepository) CompleteAnalysisJob(ctx context.Context, j
 	}
 	if err != nil {
 		return nil, fmt.Errorf("load analysis job: %w", err)
+	}
+	if boundWorker, bound := service.RadarWorkerID(ctx); bound {
+		leasedWorker, parseErr := uuid.Parse(job.leasedBy.String)
+		if !job.leasedBy.Valid || parseErr != nil || leasedWorker != boundWorker {
+			return nil, service.ErrRadarForbidden
+		}
 	}
 	if submission.RunID == uuid.Nil {
 		submission.RunID = job.runID
@@ -1524,6 +1884,73 @@ func (r *evaluationGradingRepository) CompleteAnalysisJob(ctx context.Context, j
 		return nil, fmt.Errorf("reconcile evaluation run after analysis completion: %w", err)
 	}
 	return r.loadAggregateSnapshot(ctx, r.db, snapshotID, job.windowStart)
+}
+
+// FailAnalysisJob releases a statistics lease after an analyzer failure while
+// preserving the failure code for reconciliation and operator review.
+func (r *evaluationGradingRepository) FailAnalysisJob(ctx context.Context, jobID uuid.UUID, leaseToken, failureCode string, leaseEpoch ...int64) error {
+	if r == nil || r.db == nil || jobID == uuid.Nil || strings.TrimSpace(leaseToken) == "" {
+		return service.ErrAnalysisJobFenced
+	}
+	epoch := int64(0)
+	if len(leaseEpoch) > 0 {
+		epoch = leaseEpoch[0]
+	}
+	failureCode = strings.TrimSpace(failureCode)
+	if failureCode == "" || len(failureCode) > 200 {
+		return service.ErrAnalysisJobInvalid
+	}
+	tx, err := beginRadarWriterTx(ctx, r.db, "worker")
+	if err != nil {
+		return fmt.Errorf("begin analysis failure: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+	var status string
+	var leaseHash sql.NullString
+	var leaseExpires sql.NullTime
+	var leasedBy uuid.NullUUID
+	var jobEpoch sql.NullInt64
+	if err := tx.QueryRowContext(ctx, `
+		SELECT job.status, job.lease_token_hash, job.lease_expires_at, job.leased_by, job.lease_epoch
+		FROM evaluation_analysis_jobs job
+		JOIN evaluation_runs run ON run.id = job.run_id
+		LEFT JOIN evaluation_workers w ON w.id = job.leased_by
+		WHERE job.id=$1 AND (w.id IS NULL OR w.tenant_id = run.tenant_id) FOR UPDATE OF job`, jobID).
+		Scan(&status, &leaseHash, &leaseExpires, &leasedBy, &jobEpoch); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return service.ErrAnalysisJobFenced
+		}
+		return fmt.Errorf("load analysis job for failure: %w", err)
+	}
+	if boundWorker, bound := service.RadarWorkerID(ctx); bound {
+		if !leasedBy.Valid || leasedBy.UUID != boundWorker {
+			return service.ErrRadarForbidden
+		}
+	}
+	if status == "failed" {
+		if err := tx.Commit(); err != nil {
+			return fmt.Errorf("commit idempotent analysis failure: %w", err)
+		}
+		return nil
+	}
+	if status != "leased" || !leaseHash.Valid || leaseHash.String != hashToken(leaseToken) || !leaseExpires.Valid || !leaseExpires.Time.After(time.Now()) || !leasedBy.Valid || !jobEpoch.Valid || (epoch > 0 && jobEpoch.Int64 != epoch) {
+		return service.ErrAnalysisJobFenced
+	}
+	result, err := tx.ExecContext(ctx, `
+		UPDATE evaluation_analysis_jobs
+		SET status='failed', failure_code=$2, lease_token_hash=NULL, leased_by=NULL,
+			lease_expires_at=NULL, heartbeat_at=NULL, finished_at=NOW(), updated_at=NOW()
+		WHERE id=$1 AND status='leased' AND lease_token_hash=$3`, jobID, failureCode, hashToken(leaseToken))
+	if err != nil {
+		return fmt.Errorf("fail analysis job: %w", err)
+	}
+	if affected, _ := result.RowsAffected(); affected != 1 {
+		return service.ErrAnalysisJobFenced
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit analysis failure: %w", err)
+	}
+	return nil
 }
 
 func (r *evaluationGradingRepository) findScoreBySubmissionKey(ctx context.Context, key string) (*service.Score, error) {

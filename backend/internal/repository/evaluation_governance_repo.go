@@ -34,9 +34,15 @@ func (r *radarGovernanceRepository) ListPermissions(ctx context.Context, actorID
 	if err := r.valid(); err != nil {
 		return nil, err
 	}
-	rows, err := r.db.QueryContext(ctx, `
+	rolesQuery := `
 		SELECT role FROM evaluation_role_bindings
-		WHERE actor_id = $1 AND enabled = TRUE AND scope = '{}'::jsonb`, actorID)
+		WHERE actor_id = $1 AND enabled = TRUE AND scope = '{}'::jsonb`
+	rolesArgs := []any{actorID}
+	if tenantID, scoped := radarTenant(ctx); scoped {
+		rolesQuery += ` AND tenant_id = $2`
+		rolesArgs = append(rolesArgs, tenantID)
+	}
+	rows, err := r.db.QueryContext(ctx, rolesQuery, rolesArgs...)
 	if err != nil {
 		return nil, fmt.Errorf("list radar roles: %w", err)
 	}
@@ -56,12 +62,19 @@ func (r *radarGovernanceRepository) ListPermissions(ctx context.Context, actorID
 	}
 	if len(seen) == 0 {
 		var bootstrap bool
-		if err := r.db.QueryRowContext(ctx, `
+		bootstrapQuery := `
 			SELECT EXISTS (
 				SELECT 1 FROM users u
 				WHERE u.id = $1 AND u.role = 'admin' AND u.status = 'active' AND u.deleted_at IS NULL
-				  AND NOT EXISTS (SELECT 1 FROM evaluation_role_bindings WHERE enabled = TRUE)
-			)`, actorID).Scan(&bootstrap); err != nil {
+			  AND NOT EXISTS (SELECT 1 FROM evaluation_role_bindings WHERE enabled = TRUE`
+		bootstrapArgs := []any{actorID}
+		if tenantID, scoped := radarTenant(ctx); scoped {
+			bootstrapQuery += ` AND tenant_id = $2`
+			bootstrapArgs = append(bootstrapArgs, tenantID)
+		}
+		bootstrapQuery += `)
+			)`
+		if err := r.db.QueryRowContext(ctx, bootstrapQuery, bootstrapArgs...).Scan(&bootstrap); err != nil {
 			return nil, fmt.Errorf("check radar RBAC bootstrap: %w", err)
 		}
 		if !bootstrap {
@@ -97,8 +110,8 @@ func radarPermissions(role service.RadarRole) []service.RadarPermission {
 	all := map[service.RadarRole][]service.RadarPermission{
 		service.RoleViewer:         {service.PermissionView},
 		service.RoleTestOperator:   {service.PermissionView, service.PermissionRunStart, service.PermissionRunRetry, service.PermissionRunControl, service.PermissionWorkerManage},
-		service.RoleQualityAdmin:   {service.PermissionView, service.PermissionDatasetManage, service.PermissionDatasetPublish, service.PermissionPolicyManage, service.PermissionBaselineQualityApprove},
-		service.RoleReleaseManager: {service.PermissionView, service.PermissionGateDecide, service.PermissionGateWaive, service.PermissionBaselineReleaseApprove},
+		service.RoleQualityAdmin:   {service.PermissionView, service.PermissionDatasetManage, service.PermissionDatasetPublish, service.PermissionPolicyManage, service.PermissionPolicyApprove, service.PermissionBaselineQualityApprove, service.PermissionLoadPlanManage},
+		service.RoleReleaseManager: {service.PermissionView, service.PermissionGateDecide, service.PermissionGateWaive, service.PermissionPolicyApprove, service.PermissionBaselineReleaseApprove},
 		service.RolePlatformAdmin:  {service.PermissionView, service.PermissionRoleManage, service.PermissionRouteAction, service.PermissionEvaluationKeyManage},
 	}
 	return all[role]
@@ -168,6 +181,17 @@ func (r *radarGovernanceRepository) CreateRoleBinding(ctx context.Context, input
 	if input.ActorID <= 0 || input.CreatedBy <= 0 || len(radarPermissions(input.Role)) == 0 {
 		return nil, errors.New("invalid radar role binding")
 	}
+	if tenantID, scoped := radarTenant(ctx); scoped {
+		if authenticatedActor, bound := service.RadarActorID(ctx); bound {
+			if input.CreatedBy != authenticatedActor {
+				return nil, service.ErrRadarForbidden
+			}
+		} else if input.ActorID != tenantID || input.CreatedBy != tenantID {
+			// Calls without an authenticated actor may only create the legacy
+			// self-binding. Cross-actor writes require the request identity.
+			return nil, service.ErrRadarForbidden
+		}
+	}
 	if len(strings.TrimSpace(string(input.Scope))) == 0 {
 		input.Scope = json.RawMessage(`{}`)
 	}
@@ -176,6 +200,10 @@ func (r *radarGovernanceRepository) CreateRoleBinding(ctx context.Context, input
 		return nil, errors.New("scoped radar role bindings are not supported")
 	}
 	input.Scope = json.RawMessage(`{}`)
+	tenantID := input.ActorID
+	if scopedTenant, scoped := radarTenant(ctx); scoped {
+		tenantID = scopedTenant
+	}
 	id := uuid.New()
 	var out service.RadarRoleBinding
 	var createdBy sql.NullInt64
@@ -185,10 +213,10 @@ func (r *radarGovernanceRepository) CreateRoleBinding(ctx context.Context, input
 	}
 	defer func() { _ = tx.Rollback() }()
 	err = tx.QueryRowContext(ctx, `
-		INSERT INTO evaluation_role_bindings (id, actor_id, role, scope, created_by)
-		VALUES ($1, $2, $3, $4::jsonb, $5)
-		ON CONFLICT (actor_id, role, md5(scope::text)) WHERE enabled DO UPDATE SET enabled = TRUE
-		RETURNING id, actor_id, role, scope, enabled, created_by, created_at, disabled_at`, id, input.ActorID, input.Role, string(input.Scope), input.CreatedBy).
+		INSERT INTO evaluation_role_bindings (id, actor_id, role, scope, created_by, tenant_id)
+		VALUES ($1, $2, $3, $4::jsonb, $5, $6)
+		ON CONFLICT (tenant_id, actor_id, role, md5(scope::text)) WHERE enabled DO UPDATE SET enabled = TRUE
+		RETURNING id, actor_id, role, scope, enabled, created_by, created_at, disabled_at`, id, input.ActorID, input.Role, string(input.Scope), input.CreatedBy, tenantID).
 		Scan(&out.ID, &out.ActorID, &out.Role, &out.Scope, &out.Enabled, &createdBy, &out.CreatedAt, &out.DisabledAt)
 	if err != nil {
 		return nil, fmt.Errorf("create radar role binding: %w", err)
@@ -206,12 +234,21 @@ func (r *radarGovernanceRepository) DisableRoleBinding(ctx context.Context, id u
 	if err := r.valid(); err != nil {
 		return err
 	}
+	if authenticatedActor, bound := service.RadarActorID(ctx); bound && actorID != authenticatedActor {
+		return service.ErrRadarForbidden
+	}
 	tx, err := beginRadarWriterTx(ctx, r.db, "api")
 	if err != nil {
 		return fmt.Errorf("begin disable radar role binding: %w", err)
 	}
 	defer func() { _ = tx.Rollback() }()
-	result, err := tx.ExecContext(ctx, `UPDATE evaluation_role_bindings SET enabled = FALSE, disabled_at = COALESCE(disabled_at, NOW()) WHERE id = $1 AND enabled = TRUE`, id)
+	query := `UPDATE evaluation_role_bindings SET enabled = FALSE, disabled_at = COALESCE(disabled_at, NOW()) WHERE id = $1 AND enabled = TRUE`
+	args := []any{id}
+	if tenantID, scoped := radarTenant(ctx); scoped {
+		query += ` AND tenant_id = $2`
+		args = append(args, tenantID)
+	}
+	result, err := tx.ExecContext(ctx, query, args...)
 	if err != nil {
 		return fmt.Errorf("disable radar role binding: %w", err)
 	}
@@ -230,9 +267,17 @@ func (r *radarGovernanceRepository) ListRoleBindings(ctx context.Context, actorI
 	}
 	query := `SELECT id, actor_id, role, scope, enabled, created_by, created_at, disabled_at FROM evaluation_role_bindings`
 	args := []any{}
+	conditions := []string{}
 	if actorID != nil {
-		query += ` WHERE actor_id = $1`
+		conditions = append(conditions, `actor_id = $1`)
 		args = append(args, *actorID)
+	}
+	if tenantID, scoped := radarTenant(ctx); scoped {
+		conditions = append(conditions, fmt.Sprintf("tenant_id = $%d", len(args)+1))
+		args = append(args, tenantID)
+	}
+	if len(conditions) > 0 {
+		query += ` WHERE ` + strings.Join(conditions, ` AND `)
 	}
 	query += ` ORDER BY created_at DESC`
 	rows, err := r.db.QueryContext(ctx, query, args...)
@@ -263,14 +308,21 @@ func (r *radarGovernanceRepository) ProposeBaseline(ctx context.Context, input s
 	if err := r.valid(); err != nil {
 		return nil, err
 	}
+	if tenantID, scoped := radarTenant(ctx); scoped && input.ProposedBy != tenantID {
+		return nil, service.ErrRadarForbidden
+	}
 	id := uuid.New()
+	baselineTenantID := input.ProposedBy
+	if tenantID, scoped := radarTenant(ctx); scoped {
+		baselineTenantID = tenantID
+	}
 	var b service.RadarBaseline
 	tx, err := beginRadarWriterTx(ctx, r.db, "api")
 	if err != nil {
 		return nil, fmt.Errorf("begin propose radar baseline: %w", err)
 	}
 	defer func() { _ = tx.Rollback() }()
-	err = tx.QueryRowContext(ctx, `INSERT INTO evaluation_baselines (id, model_route, run_id, dataset_manifest_sha256, evidence_hash, route_profile_version, policy_version, proposed_by) VALUES ($1,$2,$3,$4,$5,$6,$7,$8) RETURNING id,model_route,run_id,dataset_manifest_sha256,evidence_hash,route_profile_version,policy_version,status,proposed_by,proposed_at,activated_at,retired_at`, id, input.ModelRoute, input.RunID, input.DatasetManifestSHA256, input.EvidenceHash, input.RouteProfileVersion, input.PolicyVersion, input.ProposedBy).Scan(&b.ID, &b.ModelRoute, &b.RunID, &b.DatasetManifestSHA256, &b.EvidenceHash, &b.RouteProfileVersion, &b.PolicyVersion, &b.Status, &b.ProposedBy, &b.ProposedAt, &b.ActivatedAt, &b.RetiredAt)
+	err = tx.QueryRowContext(ctx, `INSERT INTO evaluation_baselines (id, model_route, run_id, dataset_manifest_sha256, evidence_hash, route_profile_version, policy_version, proposed_by, tenant_id) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9) RETURNING id,model_route,run_id,dataset_manifest_sha256,evidence_hash,route_profile_version,policy_version,status,proposed_by,proposed_at,activated_at,retired_at`, id, input.ModelRoute, input.RunID, input.DatasetManifestSHA256, input.EvidenceHash, input.RouteProfileVersion, input.PolicyVersion, input.ProposedBy, baselineTenantID).Scan(&b.ID, &b.ModelRoute, &b.RunID, &b.DatasetManifestSHA256, &b.EvidenceHash, &b.RouteProfileVersion, &b.PolicyVersion, &b.Status, &b.ProposedBy, &b.ProposedAt, &b.ActivatedAt, &b.RetiredAt)
 	if err != nil {
 		return nil, fmt.Errorf("propose radar baseline: %w", err)
 	}
@@ -290,13 +342,19 @@ func (r *radarGovernanceRepository) GetBaseline(ctx context.Context, id uuid.UUI
 		return nil, err
 	}
 	var b service.RadarBaseline
-	err := r.db.QueryRowContext(ctx, `
+	query := `
 		SELECT b.id,b.model_route,b.run_id,b.dataset_manifest_sha256,b.evidence_hash,b.route_profile_version,
 		       b.policy_version,CASE WHEN EXISTS (SELECT 1 FROM evaluation_baseline_heads h WHERE h.baseline_id=b.id) THEN 'active' ELSE b.status END,
 		       b.proposed_by,b.proposed_at,
 		       COALESCE(b.activated_at,(SELECT MIN(e.created_at) FROM evaluation_baseline_events e WHERE e.baseline_id=b.id AND e.event_type='activated')),
 		       b.retired_at
-		FROM evaluation_baselines b WHERE b.id=$1`, id).Scan(&b.ID, &b.ModelRoute, &b.RunID, &b.DatasetManifestSHA256, &b.EvidenceHash, &b.RouteProfileVersion, &b.PolicyVersion, &b.Status, &b.ProposedBy, &b.ProposedAt, &b.ActivatedAt, &b.RetiredAt)
+		FROM evaluation_baselines b WHERE b.id=$1`
+	args := []any{id}
+	if tenantID, scoped := radarTenant(ctx); scoped {
+		query += ` AND b.tenant_id=$2`
+		args = append(args, tenantID)
+	}
+	err := r.db.QueryRowContext(ctx, query, args...).Scan(&b.ID, &b.ModelRoute, &b.RunID, &b.DatasetManifestSHA256, &b.EvidenceHash, &b.RouteProfileVersion, &b.PolicyVersion, &b.Status, &b.ProposedBy, &b.ProposedAt, &b.ActivatedAt, &b.RetiredAt)
 	if err != nil {
 		return nil, err
 	}
@@ -320,6 +378,15 @@ func (r *radarGovernanceRepository) ApproveBaseline(ctx context.Context, input s
 		return nil, fmt.Errorf("begin approve radar baseline: %w", err)
 	}
 	defer func() { _ = tx.Rollback() }()
+	if tenantID, scoped := radarTenant(ctx); scoped {
+		var ownerID int64
+		if err := tx.QueryRowContext(ctx, `SELECT tenant_id FROM evaluation_baselines WHERE id=$1`, input.BaselineID).Scan(&ownerID); err != nil {
+			return nil, err
+		}
+		if ownerID != tenantID {
+			return nil, service.ErrRadarForbidden
+		}
+	}
 	err = tx.QueryRowContext(ctx, `INSERT INTO evaluation_baseline_approvals (id,baseline_id,approver_id,role,evidence_hash,effective_at,expires_at) VALUES ($1,$2,$3,$4,$5,$6,$7) ON CONFLICT (baseline_id,approver_id,role) DO NOTHING RETURNING id,baseline_id,approver_id,role,evidence_hash,effective_at,expires_at,created_at`, id, input.BaselineID, input.ApproverID, input.Role, input.EvidenceHash, input.EffectiveAt, input.ExpiresAt).Scan(&a.ID, &a.BaselineID, &a.ApproverID, &a.Role, &a.EvidenceHash, &a.EffectiveAt, &a.ExpiresAt, &a.CreatedAt)
 	if errors.Is(err, sql.ErrNoRows) {
 		err = tx.QueryRowContext(ctx, `SELECT id,baseline_id,approver_id,role,evidence_hash,effective_at,expires_at,created_at FROM evaluation_baseline_approvals WHERE baseline_id=$1 AND approver_id=$2 AND role=$3`, input.BaselineID, input.ApproverID, input.Role).Scan(&a.ID, &a.BaselineID, &a.ApproverID, &a.Role, &a.EvidenceHash, &a.EffectiveAt, &a.ExpiresAt, &a.CreatedAt)
@@ -361,9 +428,20 @@ func (r *radarGovernanceRepository) CreateGatePolicy(ctx context.Context, input 
 	if err := r.valid(); err != nil {
 		return nil, err
 	}
+	if tenantID, scoped := radarTenant(ctx); scoped && input.CreatedBy != tenantID {
+		return nil, service.ErrRadarForbidden
+	}
 	id := uuid.New()
+	policyTenantID := input.CreatedBy
+	if tenantID, scoped := radarTenant(ctx); scoped {
+		policyTenantID = tenantID
+	}
 	if !input.ApprovalExpiresAt.After(input.EnforcementStartsAt) {
 		return nil, errors.New("gate policy approval must outlive enforcement start")
+	}
+	policyHash, err := service.DigestCanonicalJSON(input.Policy)
+	if err != nil {
+		return nil, fmt.Errorf("canonicalize radar gate policy: %w", err)
 	}
 	var p service.RadarGatePolicyRecord
 	tx, err := beginRadarWriterTx(ctx, r.db, "api")
@@ -371,44 +449,142 @@ func (r *radarGovernanceRepository) CreateGatePolicy(ctx context.Context, input 
 		return nil, fmt.Errorf("begin create radar gate policy: %w", err)
 	}
 	defer func() { _ = tx.Rollback() }()
-	err = tx.QueryRowContext(ctx, `INSERT INTO evaluation_gate_policies (id,version,policy,policy_hash,enforcement_starts_at,created_by) VALUES ($1,$2,$3::jsonb,$4,$5,$6) ON CONFLICT (version) DO NOTHING RETURNING id,version,policy,policy_hash,enforcement_starts_at,created_by,created_at,retired_at`, id, input.Version, string(input.Policy), input.PolicyHash, input.EnforcementStartsAt, input.CreatedBy).Scan(&p.ID, &p.Version, &p.Policy, &p.PolicyHash, &p.EnforcementStartsAt, &p.CreatedBy, &p.CreatedAt, &p.RetiredAt)
+	created := true
+	err = tx.QueryRowContext(ctx, `INSERT INTO evaluation_gate_policies (id,version,policy,policy_hash,enforcement_starts_at,created_by,tenant_id) VALUES ($1,$2,$3::jsonb,$4,$5,$6,$7) ON CONFLICT (version) DO NOTHING RETURNING id,version,policy,policy_hash,enforcement_starts_at,created_by,created_at,retired_at`, id, input.Version, string(input.Policy), policyHash, input.EnforcementStartsAt, input.CreatedBy, policyTenantID).Scan(&p.ID, &p.Version, &p.Policy, &p.PolicyHash, &p.EnforcementStartsAt, &p.CreatedBy, &p.CreatedAt, &p.RetiredAt)
 	if errors.Is(err, sql.ErrNoRows) {
+		created = false
 		err = tx.QueryRowContext(ctx, `SELECT id,version,policy,policy_hash,enforcement_starts_at,created_by,created_at,retired_at FROM evaluation_gate_policies WHERE version=$1`, input.Version).Scan(&p.ID, &p.Version, &p.Policy, &p.PolicyHash, &p.EnforcementStartsAt, &p.CreatedBy, &p.CreatedAt, &p.RetiredAt)
-		if err == nil && (p.PolicyHash != input.PolicyHash || string(p.Policy) != string(input.Policy)) {
+		if err == nil && p.PolicyHash != policyHash {
 			return nil, errors.New("gate policy version already exists with different content")
+		}
+		if err == nil {
+			if tenantID, scoped := radarTenant(ctx); scoped {
+				var existingTenantID int64
+				if err := tx.QueryRowContext(ctx, `SELECT tenant_id FROM evaluation_gate_policies WHERE id=$1`, p.ID).Scan(&existingTenantID); err != nil {
+					return nil, fmt.Errorf("load existing gate policy tenant: %w", err)
+				}
+				if existingTenantID != tenantID {
+					return nil, service.ErrRadarForbidden
+				}
+			}
 		}
 	}
 	if err != nil {
 		return nil, fmt.Errorf("create radar gate policy: %w", err)
 	}
-	var approvalEffectiveAt, approvalExpiresAt time.Time
-	err = tx.QueryRowContext(ctx, `
-		INSERT INTO evaluation_gate_policy_approvals
-			(id,policy_id,approver_id,role,effective_at,expires_at)
-		VALUES ($1,$2,$3,'quality_admin',$4,$5)
-		ON CONFLICT (policy_id,approver_id,role) DO NOTHING
-		RETURNING effective_at,expires_at`, uuid.New(), p.ID, input.CreatedBy, input.EnforcementStartsAt, input.ApprovalExpiresAt).Scan(&approvalEffectiveAt, &approvalExpiresAt)
-	if errors.Is(err, sql.ErrNoRows) {
-		err = tx.QueryRowContext(ctx, `
-			SELECT effective_at,expires_at FROM evaluation_gate_policy_approvals
-			WHERE policy_id=$1 AND approver_id=$2 AND role='quality_admin'`, p.ID, input.CreatedBy).Scan(&approvalEffectiveAt, &approvalExpiresAt)
-	}
-	if err != nil {
-		return nil, fmt.Errorf("record gate policy approval: %w", err)
-	}
-	if !approvalEffectiveAt.Equal(input.EnforcementStartsAt) || !approvalExpiresAt.Equal(input.ApprovalExpiresAt) {
-		return nil, errors.New("gate policy approval already exists with different validity")
-	}
-	if _, err := tx.ExecContext(ctx, `
-		INSERT INTO evaluation_gate_policy_events (id, policy_id, event_type, policy_hash, actor_id)
-		VALUES ($1, $2, 'created', $3, $4)
-		ON CONFLICT (policy_id, event_type, environment, scope_type, scope_id) DO NOTHING`, uuid.New(), p.ID, p.PolicyHash, p.CreatedBy); err != nil {
-		return nil, fmt.Errorf("record radar gate policy creation: %w", err)
+	if created {
+		if _, err := tx.ExecContext(ctx, `
+			INSERT INTO evaluation_gate_policy_events (id, policy_id, event_type, policy_hash, actor_id)
+			VALUES ($1, $2, 'created', $3, $4)`, uuid.New(), p.ID, p.PolicyHash, p.CreatedBy); err != nil {
+			return nil, fmt.Errorf("record radar gate policy creation: %w", err)
+		}
 	}
 	if err := tx.Commit(); err != nil {
 		return nil, fmt.Errorf("commit create radar gate policy: %w", err)
 	}
 	return &p, nil
+}
+
+func (r *radarGovernanceRepository) ApproveGatePolicy(ctx context.Context, input service.RadarGatePolicyApprovalInput) (*service.RadarGatePolicyApprovalRecord, error) {
+	if err := r.valid(); err != nil {
+		return nil, err
+	}
+	if input.PolicyID == uuid.Nil || input.ApproverID <= 0 {
+		return nil, errors.New("gate policy and approver are required")
+	}
+	if input.Role != service.RoleQualityAdmin && input.Role != service.RoleReleaseManager {
+		return nil, errors.New("gate policy approval role must be quality_admin or release_manager")
+	}
+	if !validLowerHexSHA256(input.PolicyHash) || !validLowerHexSHA256(input.EvidenceHash) {
+		return nil, errors.New("gate policy approval hashes must be lowercase SHA256")
+	}
+	if input.EffectiveAt.IsZero() || input.ExpiresAt.IsZero() || !input.ExpiresAt.After(input.EffectiveAt) {
+		return nil, errors.New("gate policy approval window is invalid")
+	}
+	if input.EffectiveAt.After(time.Now().UTC()) {
+		return nil, errors.New("gate policy approval cannot begin in the future")
+	}
+	tx, err := beginRadarWriterTx(ctx, r.db, "api")
+	if err != nil {
+		return nil, fmt.Errorf("begin gate policy approval: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+	var creatorID, policyTenantID int64
+	var currentHash string
+	var enforcementStartsAt time.Time
+	var retiredAt sql.NullTime
+	if err := tx.QueryRowContext(ctx, `
+		SELECT created_by, tenant_id, policy_hash, enforcement_starts_at, retired_at
+		FROM evaluation_gate_policies WHERE id=$1 FOR SHARE`, input.PolicyID).
+		Scan(&creatorID, &policyTenantID, &currentHash, &enforcementStartsAt, &retiredAt); err != nil {
+		return nil, fmt.Errorf("load gate policy for approval: %w", err)
+	}
+	if retiredAt.Valid {
+		return nil, errors.New("retired gate policy cannot be approved")
+	}
+	if creatorID == input.ApproverID {
+		return nil, errors.New("gate policy creator cannot approve the same policy")
+	}
+	if currentHash != input.PolicyHash {
+		return nil, errors.New("gate policy approval hash does not match current policy")
+	}
+	if input.EffectiveAt.After(enforcementStartsAt) || !input.ExpiresAt.After(enforcementStartsAt) {
+		return nil, errors.New("gate policy approval must cover enforcement start")
+	}
+	if tenantID, scoped := radarTenant(ctx); scoped && policyTenantID != tenantID {
+		return nil, service.ErrRadarForbidden
+	}
+	var roleBound bool
+	if err := tx.QueryRowContext(ctx, `
+		SELECT EXISTS (
+			SELECT 1 FROM evaluation_role_bindings
+			WHERE actor_id=$1 AND role=$2 AND enabled=TRUE AND scope='{}'::jsonb AND tenant_id=$3
+		)`, input.ApproverID, input.Role, policyTenantID).Scan(&roleBound); err != nil {
+		return nil, fmt.Errorf("check gate policy approver role: %w", err)
+	}
+	if !roleBound {
+		return nil, service.ErrRadarForbidden
+	}
+	var out service.RadarGatePolicyApprovalRecord
+	var created bool
+	err = tx.QueryRowContext(ctx, `
+		INSERT INTO evaluation_gate_policy_approvals
+			(id,policy_id,approver_id,role,policy_hash,evidence_hash,effective_at,expires_at)
+		VALUES ($1,$2,$3,$4,$5,$6,$7,$8)
+		ON CONFLICT (policy_id,approver_id,role) DO NOTHING
+		RETURNING id,policy_id,approver_id,role,policy_hash,evidence_hash,effective_at,expires_at,created_at`,
+		uuid.New(), input.PolicyID, input.ApproverID, input.Role, input.PolicyHash, input.EvidenceHash,
+		input.EffectiveAt, input.ExpiresAt).
+		Scan(&out.ID, &out.PolicyID, &out.ApproverID, &out.Role, &out.PolicyHash, &out.EvidenceHash, &out.EffectiveAt, &out.ExpiresAt, &out.CreatedAt)
+	if errors.Is(err, sql.ErrNoRows) {
+		err = tx.QueryRowContext(ctx, `
+			SELECT id,policy_id,approver_id,role,policy_hash,evidence_hash,effective_at,expires_at,created_at
+			FROM evaluation_gate_policy_approvals
+			WHERE policy_id=$1 AND approver_id=$2 AND role=$3`, input.PolicyID, input.ApproverID, input.Role).
+			Scan(&out.ID, &out.PolicyID, &out.ApproverID, &out.Role, &out.PolicyHash, &out.EvidenceHash, &out.EffectiveAt, &out.ExpiresAt, &out.CreatedAt)
+		if err == nil && (out.PolicyHash != input.PolicyHash || out.EvidenceHash != input.EvidenceHash ||
+			!out.EffectiveAt.Equal(input.EffectiveAt) || !out.ExpiresAt.Equal(input.ExpiresAt)) {
+			return nil, errors.New("gate policy approval already exists with different evidence or validity")
+		}
+	} else {
+		created = err == nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("record gate policy approval: %w", err)
+	}
+	if created {
+		if _, err := tx.ExecContext(ctx, `
+			INSERT INTO evaluation_gate_policy_events
+				(id,policy_id,event_type,policy_hash,environment,scope_type,scope_id,actor_id)
+			VALUES ($1,$2,'approved',$3,'approval',$4,$5,$6)`, uuid.New(), input.PolicyID, input.PolicyHash,
+			input.Role, strconv.FormatInt(input.ApproverID, 10), input.ApproverID); err != nil {
+			return nil, fmt.Errorf("record gate policy approval event: %w", err)
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return nil, fmt.Errorf("commit gate policy approval: %w", err)
+	}
+	return &out, nil
 }
 
 func (r *radarGovernanceRepository) CreateReleaseSubject(ctx context.Context, input service.ReleaseSubjectInput) (*service.ReleaseSubjectRecord, error) {
@@ -430,6 +606,9 @@ func (r *radarGovernanceRepository) CreateReleaseSubject(ctx context.Context, in
 		return nil, fmt.Errorf("begin create release subject: %w", err)
 	}
 	defer func() { _ = tx.Rollback() }()
+	if err := ensureRadarRunTenant(ctx, tx, input.RunID); err != nil {
+		return nil, err
+	}
 	validBinding, err := validateFrozenReleaseSubjectBinding(ctx, tx, input.RunID, canonical.Subject)
 	if err != nil {
 		return nil, fmt.Errorf("validate frozen run binding: %w", err)
@@ -440,8 +619,8 @@ func (r *radarGovernanceRepository) CreateReleaseSubject(ctx context.Context, in
 	record := &service.ReleaseSubjectRecord{ID: uuid.New(), RunID: input.RunID, SubjectHash: canonical.SHA256, Subject: canonical.Subject}
 	var raw []byte
 	err = tx.QueryRowContext(ctx, `
-		INSERT INTO evaluation_release_subjects (id, run_id, subject_hash, canonical_subject, canonical_subject_bytes)
-		VALUES ($1, $2, $3, $4::jsonb, $5)
+		INSERT INTO evaluation_release_subjects (id, run_id, subject_hash, canonical_subject, canonical_subject_bytes, tenant_id)
+		VALUES ($1, $2, $3, $4::jsonb, $5, (SELECT tenant_id FROM evaluation_runs WHERE id=$2))
 		ON CONFLICT (run_id, subject_hash) DO NOTHING
 		RETURNING canonical_subject_bytes, created_at`, record.ID, record.RunID, record.SubjectHash, string(canonical.Bytes), []byte(canonical.Bytes)).Scan(&raw, &record.CreatedAt)
 	if errors.Is(err, sql.ErrNoRows) {
@@ -459,6 +638,51 @@ func (r *radarGovernanceRepository) CreateReleaseSubject(ctx context.Context, in
 		return nil, fmt.Errorf("commit release subject: %w", err)
 	}
 	return record, nil
+}
+
+func (r *radarGovernanceRepository) GetReleaseSubject(ctx context.Context, id uuid.UUID) (*service.ReleaseSubjectRecord, error) {
+	if err := r.valid(); err != nil {
+		return nil, err
+	}
+	if id == uuid.Nil {
+		return nil, errors.New("release subject is required")
+	}
+	query := `
+		SELECT rs.id,rs.run_id,rs.subject_hash,rs.canonical_subject,rs.created_at,
+		       COALESCE(event.event_type='activated' AND event.effective_at <= transaction_timestamp() AND event.expires_at > transaction_timestamp(), FALSE),
+		       event.effective_at,event.expires_at
+		FROM evaluation_release_subjects rs
+		LEFT JOIN LATERAL (
+			SELECT event_type,effective_at,expires_at
+			FROM evaluation_release_subject_events
+			WHERE release_subject_id=rs.id
+			  AND effective_at <= transaction_timestamp()
+			ORDER BY sequence DESC LIMIT 1
+		) event ON TRUE
+		WHERE rs.id=$1`
+	args := []any{id}
+	if tenantID, scoped := radarTenant(ctx); scoped {
+		query += ` AND rs.tenant_id=$2`
+		args = append(args, tenantID)
+	}
+	var record service.ReleaseSubjectRecord
+	var raw []byte
+	var effectiveAt, expiresAt sql.NullTime
+	if err := r.db.QueryRowContext(ctx, query, args...).Scan(
+		&record.ID, &record.RunID, &record.SubjectHash, &raw, &record.CreatedAt, &record.Active, &effectiveAt, &expiresAt,
+	); err != nil {
+		return nil, err
+	}
+	if err := json.Unmarshal(raw, &record.Subject); err != nil {
+		return nil, fmt.Errorf("decode release subject: %w", err)
+	}
+	if effectiveAt.Valid {
+		record.EffectiveAt = &effectiveAt.Time
+	}
+	if expiresAt.Valid {
+		record.ExpiresAt = &expiresAt.Time
+	}
+	return &record, nil
 }
 
 func validateFrozenReleaseSubjectBinding(ctx context.Context, tx *sql.Tx, runID uuid.UUID, subject service.ReleaseSubject) (bool, error) {
@@ -577,6 +801,18 @@ func (r *radarGovernanceRepository) appendReleaseSubjectEvent(ctx context.Contex
 		return nil, err
 	}
 	defer func() { _ = tx.Rollback() }()
+	if tenantID, scoped := radarTenant(ctx); scoped {
+		var ownerID sql.NullInt64
+		if err := tx.QueryRowContext(ctx, `
+			SELECT tenant_id
+			FROM evaluation_release_subjects
+			WHERE id=$1`, subjectID).Scan(&ownerID); err != nil {
+			return nil, err
+		}
+		if !ownerID.Valid || ownerID.Int64 != tenantID {
+			return nil, service.ErrRadarForbidden
+		}
+	}
 	if _, err := tx.ExecContext(ctx, `SELECT pg_advisory_xact_lock(hashtextextended($1,0))`, "release-subject:"+subjectID.String()); err != nil {
 		return nil, err
 	}
@@ -611,32 +847,57 @@ func (r *radarGovernanceRepository) ActivateGatePolicy(ctx context.Context, inpu
 		return nil, fmt.Errorf("begin activate gate policy: %w", err)
 	}
 	defer func() { _ = tx.Rollback() }()
-	if _, err := tx.ExecContext(ctx, `SELECT pg_advisory_xact_lock(hashtextextended($1, 0))`, "policy:"+scope.Environment+":"+scope.ScopeType+":"+scope.ScopeID); err != nil {
+	var tenantID int64
+	if err := tx.QueryRowContext(ctx, `SELECT tenant_id FROM evaluation_gate_policies WHERE id=$1`, input.PolicyID).Scan(&tenantID); err != nil {
+		return nil, err
+	}
+	if requestTenant, scoped := radarTenant(ctx); scoped && tenantID != requestTenant {
+		return nil, service.ErrRadarForbidden
+	}
+	if _, err := tx.ExecContext(ctx, `SELECT pg_advisory_xact_lock(hashtextextended($1, 0))`, fmt.Sprintf("policy:%d:%s:%s:%s", tenantID, scope.Environment, scope.ScopeType, scope.ScopeID)); err != nil {
 		return nil, fmt.Errorf("lock gate policy lineage: %w", err)
 	}
 	var policyHash string
 	var eligible bool
 	if err := tx.QueryRowContext(ctx, `
 		SELECT p.policy_hash,
-		       p.enforcement_starts_at <= transaction_timestamp() AND p.retired_at IS NULL
-		       AND EXISTS (
-			 SELECT 1 FROM evaluation_gate_policy_approvals a
-			 JOIN evaluation_role_bindings rb
-			   ON rb.actor_id=a.approver_id AND rb.role=a.role AND rb.enabled=TRUE AND rb.scope='{}'::jsonb
-			 WHERE a.policy_id=p.id AND a.effective_at <= transaction_timestamp()
-			   AND a.expires_at > transaction_timestamp()
-		       )
-		FROM evaluation_gate_policies p WHERE p.id=$1`, input.PolicyID).Scan(&policyHash, &eligible); err != nil {
+		       p.retired_at IS NULL
+		       AND COUNT(*) FILTER (
+				WHERE rb.actor_id IS NOT NULL AND a.role='quality_admin' AND a.approver_id <> p.created_by
+				  AND a.effective_at <= transaction_timestamp() AND a.expires_at > transaction_timestamp()
+				  AND a.effective_at <= p.enforcement_starts_at AND a.expires_at > p.enforcement_starts_at
+			) >= 1
+		       AND COUNT(*) FILTER (
+				WHERE rb.actor_id IS NOT NULL AND a.role='release_manager' AND a.approver_id <> p.created_by
+				  AND a.effective_at <= transaction_timestamp() AND a.expires_at > transaction_timestamp()
+				  AND a.effective_at <= p.enforcement_starts_at AND a.expires_at > p.enforcement_starts_at
+			) >= 1
+		       AND COUNT(DISTINCT a.approver_id) FILTER (
+				WHERE rb.actor_id IS NOT NULL AND a.approver_id <> p.created_by
+				  AND a.effective_at <= transaction_timestamp() AND a.expires_at > transaction_timestamp()
+				  AND a.effective_at <= p.enforcement_starts_at AND a.expires_at > p.enforcement_starts_at
+			) >= 2
+		FROM evaluation_gate_policies p
+		LEFT JOIN evaluation_gate_policy_approvals a
+		  ON a.policy_id=p.id AND a.policy_hash=p.policy_hash
+		LEFT JOIN evaluation_role_bindings rb
+		  ON rb.actor_id=a.approver_id AND rb.role=a.role AND rb.enabled=TRUE
+		 AND rb.scope='{}'::jsonb AND rb.tenant_id=p.tenant_id
+		WHERE p.id=$1
+		GROUP BY p.id,p.policy_hash,p.created_by,p.enforcement_starts_at,p.retired_at`, input.PolicyID).Scan(&policyHash, &eligible); err != nil {
 		return nil, fmt.Errorf("load gate policy version: %w", err)
 	}
 	if !eligible {
 		return nil, errors.New("gate policy is outside its activation window")
 	}
-	head := &service.RadarGatePolicyHead{Scope: scope}
+	head := &service.RadarGatePolicyHead{Scope: scope, PolicyHash: policyHash}
 	err = tx.QueryRowContext(ctx, `
 		SELECT policy_id,event_id,updated_at FROM evaluation_gate_policy_heads
-		WHERE environment=$1 AND scope_type=$2 AND scope_id=$3`, scope.Environment, scope.ScopeType, scope.ScopeID).Scan(&head.PolicyID, &head.EventID, &head.UpdatedAt)
+		WHERE tenant_id=$1 AND environment=$2 AND scope_type=$3 AND scope_id=$4`, tenantID, scope.Environment, scope.ScopeType, scope.ScopeID).Scan(&head.PolicyID, &head.EventID, &head.UpdatedAt)
 	if err == nil && head.PolicyID == input.PolicyID {
+		if input.ExpectedPolicyID != nil && *input.ExpectedPolicyID != head.PolicyID {
+			return nil, service.ErrGovernanceHeadConflict
+		}
 		if commitErr := tx.Commit(); commitErr != nil {
 			return nil, commitErr
 		}
@@ -662,8 +923,8 @@ func (r *radarGovernanceRepository) ActivateGatePolicy(ctx context.Context, inpu
 		return nil, fmt.Errorf("record gate policy activation: %w", err)
 	}
 	var advanced bool
-	if err := tx.QueryRowContext(ctx, `SELECT advance_evaluation_gate_policy_head($1,$2,$3,$4,$5,$6)`,
-		scope.Environment, scope.ScopeType, scope.ScopeID, input.PolicyID, head.EventID, current).Scan(&advanced); err != nil {
+	if err := tx.QueryRowContext(ctx, `SELECT advance_evaluation_gate_policy_head($1,$2,$3,$4,$5,$6,$7)`,
+		tenantID, scope.Environment, scope.ScopeType, scope.ScopeID, input.PolicyID, head.EventID, current).Scan(&advanced); err != nil {
 		return nil, fmt.Errorf("advance gate policy head: %w", err)
 	}
 	if !advanced {
@@ -673,7 +934,7 @@ func (r *radarGovernanceRepository) ActivateGatePolicy(ctx context.Context, inpu
 		return nil, err
 	}
 	head.PolicyID = input.PolicyID
-	if err := tx.QueryRowContext(ctx, `SELECT updated_at FROM evaluation_gate_policy_heads WHERE environment=$1 AND scope_type=$2 AND scope_id=$3`, scope.Environment, scope.ScopeType, scope.ScopeID).Scan(&head.UpdatedAt); err != nil {
+	if err := tx.QueryRowContext(ctx, `SELECT updated_at FROM evaluation_gate_policy_heads WHERE tenant_id=$1 AND environment=$2 AND scope_type=$3 AND scope_id=$4`, tenantID, scope.Environment, scope.ScopeType, scope.ScopeID).Scan(&head.UpdatedAt); err != nil {
 		return nil, err
 	}
 	if err := tx.Commit(); err != nil {
@@ -698,13 +959,25 @@ func (r *radarGovernanceRepository) ActivateBaselineHead(ctx context.Context, in
 		return nil, fmt.Errorf("begin activate baseline head: %w", err)
 	}
 	defer func() { _ = tx.Rollback() }()
+	if tenantID, scoped := radarTenant(ctx); scoped {
+		var ownerID int64
+		if err := tx.QueryRowContext(ctx, `SELECT tenant_id FROM evaluation_baselines WHERE id=$1`, input.BaselineID).Scan(&ownerID); err != nil {
+			return nil, err
+		}
+		if ownerID != tenantID {
+			return nil, service.ErrRadarForbidden
+		}
+	}
 	var quality, release, approvers int
 	if err := tx.QueryRowContext(ctx, `
 		SELECT COUNT(*) FILTER (WHERE a.role='quality_admin'), COUNT(*) FILTER (WHERE a.role='release_manager'),
 		       COUNT(DISTINCT a.approver_id)
 		FROM evaluation_baseline_approvals a
+		JOIN evaluation_baselines b
+		  ON b.id=a.baseline_id
 		JOIN evaluation_role_bindings rb
 		  ON rb.actor_id=a.approver_id AND rb.role=a.role AND rb.enabled=TRUE AND rb.scope='{}'::jsonb
+		 AND rb.tenant_id=b.tenant_id
 		WHERE a.baseline_id=$1 AND a.effective_at <= transaction_timestamp()
 		  AND a.expires_at > transaction_timestamp()`, input.BaselineID).Scan(&quality, &release, &approvers); err != nil {
 		return nil, err
@@ -1013,12 +1286,14 @@ func enqueueEvidenceSigningKeyReevaluation(ctx context.Context, tx *sql.Tx, reco
 func observeRevokedEvidenceSigningKeyAlerts(ctx context.Context, tx *sql.Tx, record *service.EvidenceSigningKeyRecord) error {
 	_, err := tx.ExecContext(ctx, `
 		WITH affected AS (
-			SELECT DISTINCT regexp_replace(s.model_route, '^(baseline|candidate):', '') AS model_route,
+			SELECT DISTINCT r.tenant_id,
+			       regexp_replace(s.model_route, '^(baseline|candidate):', '') AS model_route,
 			       c.capability_domain
 			FROM evaluation_route_evidence e
 			JOIN evaluation_assignments a ON a.id=e.assignment_id
 			JOIN evaluation_samples s ON s.id=a.sample_id
 			JOIN evaluation_cases c ON c.id=s.case_id
+			JOIN evaluation_runs r ON r.id=e.evaluation_run_id
 			WHERE e.signing_key_id=$1
 		), policy AS (
 			SELECT COALESCE(MAX(version), 1) AS policy_version FROM evaluation_gate_policies
@@ -1027,20 +1302,22 @@ func observeRevokedEvidenceSigningKeyAlerts(ctx context.Context, tx *sql.Tx, rec
 			SET status='open', acknowledged_at=NULL, resolved_at=NULL,
 			    first_seen_at=CASE WHEN alerts.status='resolved' THEN transaction_timestamp() ELSE alerts.first_seen_at END
 			FROM affected, policy
-			WHERE alerts.model_route=affected.model_route
+			WHERE alerts.tenant_id=affected.tenant_id
+			  AND alerts.model_route=affected.model_route
 			  AND alerts.capability_domain=affected.capability_domain
 			  AND alerts.cause='insufficient_evidence'
 			  AND alerts.policy_version=policy.policy_version
 			RETURNING alerts.id
 		), inserted AS (
 			INSERT INTO evaluation_alerts
-				(id, model_route, capability_domain, cause, policy_version, status, severity, first_seen_at)
-			SELECT gen_random_uuid(), affected.model_route, affected.capability_domain,
+				(id, tenant_id, model_route, capability_domain, cause, policy_version, status, severity, first_seen_at)
+			SELECT gen_random_uuid(), affected.tenant_id, affected.model_route, affected.capability_domain,
 			       'insufficient_evidence', policy.policy_version, 'open', 'P0', transaction_timestamp()
 			FROM affected, policy
 			WHERE NOT EXISTS (
 				SELECT 1 FROM evaluation_alerts alerts
-				WHERE alerts.model_route=affected.model_route
+				WHERE alerts.tenant_id=affected.tenant_id
+				  AND alerts.model_route=affected.model_route
 				  AND alerts.capability_domain=affected.capability_domain
 				  AND alerts.cause='insufficient_evidence'
 				  AND alerts.policy_version=policy.policy_version
@@ -1080,14 +1357,36 @@ func (r *radarGovernanceRepository) RecordGateDecision(ctx context.Context, inpu
 	if len(input.SourceWatermark) == 0 {
 		input.SourceWatermark = json.RawMessage(`{}`)
 	}
+	tenantID := int64(0)
+	if scopedTenant, scoped := radarTenant(ctx); scoped {
+		tenantID = scopedTenant
+		if err := ensureRadarRunTenant(ctx, tx, input.RunID); err != nil {
+			return nil, err
+		}
+		var policyOwner int64
+		if err := tx.QueryRowContext(ctx, `SELECT tenant_id FROM evaluation_gate_policies WHERE id=$1`, input.PolicyID).Scan(&policyOwner); err != nil {
+			return nil, err
+		}
+		if policyOwner != tenantID {
+			return nil, service.ErrRadarForbidden
+		}
+	}
+	if err := validateGateReliabilityWatermark(ctx, tx, input.RunID, input.PolicyID, input.SourceWatermark); err != nil {
+		return nil, err
+	}
+	if isRadarGateReliabilityWatermark(input.SourceWatermark) {
+		if err := validateCurrentGateAuthority(ctx, tx, input.RunID, input.PolicyID, input.ReleaseSubjectHash); err != nil {
+			return nil, err
+		}
+	}
 	err = tx.QueryRowContext(ctx, `
 		INSERT INTO evaluation_gate_decisions
-			(id,run_id,baseline_id,policy_id,status,rule_ids,evidence,evidence_hash,release_subject_hash,source_watermark,supersedes_decision_id,cause_set_hash)
-		VALUES ($1,$2,$3,$4,$5,$6,$7::jsonb,$8,$9,$10::jsonb,$11,$12)
+			(id,run_id,baseline_id,policy_id,status,rule_ids,evidence,evidence_hash,release_subject_hash,source_watermark,supersedes_decision_id,cause_set_hash,tenant_id)
+		VALUES ($1,$2,$3,$4,$5,$6,$7::jsonb,$8,$9,$10::jsonb,$11,$12,$13)
 		ON CONFLICT (run_id,policy_id,evidence_hash) DO NOTHING
 		RETURNING id,run_id,baseline_id,policy_id,status,rule_ids,evidence,evidence_hash,release_subject_hash,source_watermark,supersedes_decision_id,cause_set_hash,created_at`,
 		id, input.RunID, input.BaselineID, input.PolicyID, input.Status, pq.Array(input.RuleIDs), string(input.Evidence), input.EvidenceHash,
-		input.ReleaseSubjectHash, string(input.SourceWatermark), input.SupersedesDecisionID, input.CauseSetHash).Scan(
+		input.ReleaseSubjectHash, string(input.SourceWatermark), input.SupersedesDecisionID, input.CauseSetHash, tenantID).Scan(
 		&d.ID, &d.RunID, &d.BaselineID, &d.PolicyID, &d.Status, &pqStringArray{&d.RuleIDs}, &d.Evidence, &d.EvidenceHash,
 		&d.ReleaseSubjectHash, &d.SourceWatermark, &d.SupersedesDecisionID, &d.CauseSetHash, &d.CreatedAt)
 	if errors.Is(err, sql.ErrNoRows) {
@@ -1117,6 +1416,57 @@ func (r *radarGovernanceRepository) RecordGateDecision(ctx context.Context, inpu
 	}
 	if err := tx.Commit(); err != nil {
 		return nil, fmt.Errorf("commit record radar gate decision: %w", err)
+	}
+	return &d, nil
+}
+
+func recordRadarGateDecisionTx(ctx context.Context, tx *sql.Tx, input service.RadarGateDecisionInput, tenantID int64) (*service.RadarGateDecisionRecord, error) {
+	if tx == nil {
+		return nil, errors.New("radar gate decision transaction is required")
+	}
+	id := uuid.New()
+	var d service.RadarGateDecisionRecord
+	inserted := true
+	err := tx.QueryRowContext(ctx, `
+		INSERT INTO evaluation_gate_decisions
+			(id,run_id,baseline_id,policy_id,status,rule_ids,evidence,evidence_hash,release_subject_hash,source_watermark,supersedes_decision_id,cause_set_hash,tenant_id)
+		VALUES ($1,$2,$3,$4,$5,$6,$7::jsonb,$8,$9,$10::jsonb,$11,$12,$13)
+		ON CONFLICT (run_id,policy_id,evidence_hash) DO NOTHING
+		RETURNING id,run_id,baseline_id,policy_id,status,rule_ids,evidence,evidence_hash,release_subject_hash,source_watermark,supersedes_decision_id,cause_set_hash,created_at`,
+		id, input.RunID, input.BaselineID, input.PolicyID, input.Status, pq.Array(input.RuleIDs), string(input.Evidence), input.EvidenceHash,
+		input.ReleaseSubjectHash, string(input.SourceWatermark), input.SupersedesDecisionID, input.CauseSetHash, tenantID).Scan(
+		&d.ID, &d.RunID, &d.BaselineID, &d.PolicyID, &d.Status, &pqStringArray{&d.RuleIDs}, &d.Evidence, &d.EvidenceHash,
+		&d.ReleaseSubjectHash, &d.SourceWatermark, &d.SupersedesDecisionID, &d.CauseSetHash, &d.CreatedAt)
+	if errors.Is(err, sql.ErrNoRows) {
+		inserted = false
+		var storedTenantID int64
+		err = tx.QueryRowContext(ctx, `
+			SELECT id,run_id,baseline_id,policy_id,status,rule_ids,evidence,evidence_hash,release_subject_hash,source_watermark,supersedes_decision_id,cause_set_hash,created_at,tenant_id
+			FROM evaluation_gate_decisions WHERE run_id=$1 AND policy_id=$2 AND evidence_hash=$3`, input.RunID, input.PolicyID, input.EvidenceHash).Scan(
+			&d.ID, &d.RunID, &d.BaselineID, &d.PolicyID, &d.Status, &pqStringArray{&d.RuleIDs}, &d.Evidence, &d.EvidenceHash,
+			&d.ReleaseSubjectHash, &d.SourceWatermark, &d.SupersedesDecisionID, &d.CauseSetHash, &d.CreatedAt, &storedTenantID)
+		if err == nil && (storedTenantID != tenantID || d.ReleaseSubjectHash != input.ReleaseSubjectHash || d.CauseSetHash != input.CauseSetHash) {
+			return nil, service.ErrGovernanceHeadConflict
+		}
+	}
+	if err != nil {
+		return nil, fmt.Errorf("record radar gate decision: %w", err)
+	}
+	if inserted {
+		if _, err := tx.ExecContext(ctx, `
+			INSERT INTO evaluation_gate_decision_events (id, decision_id, event_type, supersedes_decision_id, source_watermark)
+			VALUES ($1, $2, 'recorded', $3, $4::jsonb)`, uuid.New(), d.ID, d.SupersedesDecisionID, string(d.SourceWatermark)); err != nil {
+			return nil, fmt.Errorf("record radar gate decision event: %w", err)
+		}
+	}
+	current, err := advanceRadarGateDecisionHead(ctx, tx, &d)
+	if err != nil {
+		return nil, err
+	}
+	if current {
+		if err := reconcileRevisionBatchesForGateDecision(ctx, tx, &d); err != nil {
+			return nil, err
+		}
 	}
 	return &d, nil
 }
@@ -1260,7 +1610,11 @@ func (r *radarGovernanceRepository) ObserveAlert(ctx context.Context, input serv
 	if observed.IsZero() {
 		observed = time.Now().UTC()
 	}
-	err = tx.QueryRowContext(ctx, `INSERT INTO evaluation_alerts (id,model_route,capability_domain,cause,policy_version,status,severity,attribution_confidence,first_seen_at) VALUES ($1,$2,$3,$4,$5,'open',$6,$7,$8) ON CONFLICT (model_route,capability_domain,cause,policy_version) DO UPDATE SET status=CASE WHEN evaluation_alerts.status='resolved' THEN 'open' ELSE evaluation_alerts.status END, first_seen_at=CASE WHEN evaluation_alerts.status='resolved' THEN EXCLUDED.first_seen_at ELSE evaluation_alerts.first_seen_at END RETURNING id,model_route,capability_domain,cause,policy_version,status,severity,attribution_confidence,first_seen_at,acknowledged_at,resolved_at,recovery_test_id`, id, input.ModelRoute, input.CapabilityDomain, input.Cause, input.PolicyVersion, input.Severity, input.Confidence, observed).Scan(&a.ID, &a.ModelRoute, &a.CapabilityDomain, &a.Cause, &a.PolicyVersion, &a.Status, &a.Severity, &a.AttributionConfidence, &a.FirstSeenAt, &a.AcknowledgedAt, &a.ResolvedAt, &a.RecoveryTestID)
+	tenantID := int64(0)
+	if scopedTenant, scoped := radarTenant(ctx); scoped {
+		tenantID = scopedTenant
+	}
+	err = tx.QueryRowContext(ctx, `INSERT INTO evaluation_alerts (id,tenant_id,model_route,capability_domain,cause,policy_version,status,severity,attribution_confidence,first_seen_at) VALUES ($1,$2,$3,$4,$5,$6,'open',$7,$8,$9) ON CONFLICT (tenant_id,model_route,capability_domain,cause,policy_version) DO UPDATE SET status=CASE WHEN evaluation_alerts.status='resolved' THEN 'open' ELSE evaluation_alerts.status END, first_seen_at=CASE WHEN evaluation_alerts.status='resolved' THEN EXCLUDED.first_seen_at ELSE evaluation_alerts.first_seen_at END RETURNING id,model_route,capability_domain,cause,policy_version,status,severity,attribution_confidence,first_seen_at,acknowledged_at,resolved_at,recovery_test_id`, id, tenantID, input.ModelRoute, input.CapabilityDomain, input.Cause, input.PolicyVersion, input.Severity, input.Confidence, observed).Scan(&a.ID, &a.ModelRoute, &a.CapabilityDomain, &a.Cause, &a.PolicyVersion, &a.Status, &a.Severity, &a.AttributionConfidence, &a.FirstSeenAt, &a.AcknowledgedAt, &a.ResolvedAt, &a.RecoveryTestID)
 	if err != nil {
 		return nil, err
 	}
@@ -1285,7 +1639,13 @@ func (r *radarGovernanceRepository) transitionAlert(ctx context.Context, id uuid
 		return err
 	}
 	defer tx.Rollback()
-	res, err := tx.ExecContext(ctx, `UPDATE evaluation_alerts SET `+update+` WHERE id=$1 AND status<>'resolved'`, id)
+	query := `UPDATE evaluation_alerts SET ` + update + ` WHERE id=$1 AND status<>'resolved'`
+	args := []any{id}
+	if tenantID, scoped := radarTenant(ctx); scoped {
+		query += ` AND tenant_id=$2`
+		args = append(args, tenantID)
+	}
+	res, err := tx.ExecContext(ctx, query, args...)
 	if err != nil {
 		return err
 	}
@@ -1307,7 +1667,13 @@ func (r *radarGovernanceRepository) RecordAlertRecovery(ctx context.Context, id,
 		return err
 	}
 	defer tx.Rollback()
-	if _, err = tx.ExecContext(ctx, `UPDATE evaluation_alerts SET recovery_test_id=$2 WHERE id=$1`, id, recoveryTestID); err != nil {
+	query := `UPDATE evaluation_alerts SET recovery_test_id=$2 WHERE id=$1`
+	args := []any{id, recoveryTestID}
+	if tenantID, scoped := radarTenant(ctx); scoped {
+		query += ` AND tenant_id=$3`
+		args = append(args, tenantID)
+	}
+	if _, err = tx.ExecContext(ctx, query, args...); err != nil {
 		return err
 	}
 	event := struct {
@@ -1334,7 +1700,14 @@ func (r *radarGovernanceRepository) RecordAttribution(ctx context.Context, input
 		return nil, fmt.Errorf("begin record radar attribution: %w", err)
 	}
 	defer func() { _ = tx.Rollback() }()
-	err = tx.QueryRowContext(ctx, `INSERT INTO evaluation_attributions (id,alert_id,cause,confidence,route_slices,evidence_hash) VALUES ($1,$2,$3,$4,$5::jsonb,$6) RETURNING id,alert_id,cause,confidence,route_slices,evidence_hash,created_at`, id, input.AlertID, input.Cause, input.Confidence, string(input.RouteSlices), input.EvidenceHash).Scan(&a.ID, &a.AlertID, &a.Cause, &a.Confidence, &a.RouteSlices, &a.EvidenceHash, &a.CreatedAt)
+	query := `INSERT INTO evaluation_attributions (id,alert_id,cause,confidence,route_slices,evidence_hash) SELECT $1,a.id,$3,$4,$5::jsonb,$6 FROM evaluation_alerts a WHERE a.id=$2`
+	args := []any{id, input.AlertID, input.Cause, input.Confidence, string(input.RouteSlices), input.EvidenceHash}
+	if tenantID, scoped := radarTenant(ctx); scoped {
+		query += ` AND a.tenant_id=$7`
+		args = append(args, tenantID)
+	}
+	query += ` RETURNING id,alert_id,cause,confidence,route_slices,evidence_hash,created_at`
+	err = tx.QueryRowContext(ctx, query, args...).Scan(&a.ID, &a.AlertID, &a.Cause, &a.Confidence, &a.RouteSlices, &a.EvidenceHash, &a.CreatedAt)
 	if err != nil {
 		return nil, err
 	}
@@ -1348,7 +1721,13 @@ func (r *radarGovernanceRepository) GetAlert(ctx context.Context, id uuid.UUID) 
 		return nil, err
 	}
 	var a service.RadarAlertRecord
-	err := r.db.QueryRowContext(ctx, `SELECT id,model_route,capability_domain,cause,policy_version,status,severity,attribution_confidence,first_seen_at,acknowledged_at,resolved_at,recovery_test_id FROM evaluation_alerts WHERE id=$1`, id).Scan(&a.ID, &a.ModelRoute, &a.CapabilityDomain, &a.Cause, &a.PolicyVersion, &a.Status, &a.Severity, &a.AttributionConfidence, &a.FirstSeenAt, &a.AcknowledgedAt, &a.ResolvedAt, &a.RecoveryTestID)
+	query := `SELECT id,model_route,capability_domain,cause,policy_version,status,severity,attribution_confidence,first_seen_at,acknowledged_at,resolved_at,recovery_test_id FROM evaluation_alerts WHERE id=$1`
+	args := []any{id}
+	if tenantID, scoped := radarTenant(ctx); scoped {
+		query += ` AND tenant_id=$2`
+		args = append(args, tenantID)
+	}
+	err := r.db.QueryRowContext(ctx, query, args...).Scan(&a.ID, &a.ModelRoute, &a.CapabilityDomain, &a.Cause, &a.PolicyVersion, &a.Status, &a.Severity, &a.AttributionConfidence, &a.FirstSeenAt, &a.AcknowledgedAt, &a.ResolvedAt, &a.RecoveryTestID)
 	if err != nil {
 		return nil, err
 	}
@@ -1384,18 +1763,28 @@ func (r *radarGovernanceRepository) ListModelHealth(ctx context.Context) ([]serv
 	if err := r.valid(); err != nil {
 		return nil, err
 	}
-	rows, err := r.db.QueryContext(ctx, `
+	query := `
 		SELECT model_route, capability_domain,
 		       aggregate->>'baseline_score', aggregate->>'candidate_score',
 		       aggregate->>'delta_pp', aggregate->>'ci_low_pp', aggregate->>'ci_high_pp',
 		       aggregate->>'effective_pair_count', window_start
 		FROM (
 			SELECT DISTINCT ON (model_route, capability_domain)
-			       model_route, capability_domain, aggregate, window_start
-			FROM evaluation_aggregate_snapshots
+			       s.model_route, s.capability_domain, s.aggregate, s.window_start
+			FROM evaluation_aggregate_snapshots s
+			JOIN evaluation_runs r ON r.id=s.run_id
+			WHERE 1=1
+			`
+	args := []any{}
+	if tenantID, scoped := radarTenant(ctx); scoped {
+		query += ` AND r.tenant_id=$1`
+		args = append(args, tenantID)
+	}
+	query += `
 			ORDER BY model_route, capability_domain, window_start DESC, created_at DESC
 		) latest
-		ORDER BY model_route, capability_domain`)
+		ORDER BY model_route, capability_domain`
+	rows, err := r.db.QueryContext(ctx, query, args...)
 	if err != nil {
 		return nil, fmt.Errorf("list radar model health: %w", err)
 	}
@@ -1432,7 +1821,7 @@ func (r *radarGovernanceRepository) ListRuns(ctx context.Context) ([]service.Rad
 	if err := r.valid(); err != nil {
 		return nil, err
 	}
-	rows, err := r.db.QueryContext(ctx, `
+	query := `
 		SELECT r.id, r.plan_id, r.trigger_source, r.status,
 			CASE WHEN EXISTS (SELECT 1 FROM evaluation_pair_specs p WHERE p.run_id = r.id)
 				AND (SELECT COUNT(*) FROM evaluation_pair_specs p WHERE p.run_id = r.id) =
@@ -1441,7 +1830,14 @@ func (r *radarGovernanceRepository) ListRuns(ctx context.Context) ([]service.Rad
 					2 * (SELECT COUNT(*) FROM evaluation_pair_specs p WHERE p.run_id = r.id)
 				THEN 'bound' ELSE 'legacy-unbound' END AS contract_status,
 			r.created_at, r.started_at, r.finished_at
-		FROM evaluation_runs r ORDER BY r.created_at DESC LIMIT 200`)
+		FROM evaluation_runs r`
+	args := []any{}
+	if tenantID, scoped := radarTenant(ctx); scoped {
+		query += ` WHERE r.tenant_id=$1`
+		args = append(args, tenantID)
+	}
+	query += ` ORDER BY r.created_at DESC LIMIT 200`
+	rows, err := r.db.QueryContext(ctx, query, args...)
 	if err != nil {
 		return nil, fmt.Errorf("list radar runs: %w", err)
 	}
@@ -1461,7 +1857,14 @@ func (r *radarGovernanceRepository) ListAlerts(ctx context.Context) ([]service.R
 	if err := r.valid(); err != nil {
 		return nil, err
 	}
-	rows, err := r.db.QueryContext(ctx, `SELECT id, model_route, capability_domain, cause, severity, status, attribution_confidence, first_seen_at FROM evaluation_alerts ORDER BY first_seen_at DESC LIMIT 200`)
+	query := `SELECT id, model_route, capability_domain, cause, severity, status, attribution_confidence, first_seen_at FROM evaluation_alerts`
+	args := []any{}
+	if tenantID, scoped := radarTenant(ctx); scoped {
+		query += ` WHERE tenant_id=$1`
+		args = append(args, tenantID)
+	}
+	query += ` ORDER BY first_seen_at DESC LIMIT 200`
+	rows, err := r.db.QueryContext(ctx, query, args...)
 	if err != nil {
 		return nil, fmt.Errorf("list radar alerts: %w", err)
 	}
@@ -1481,7 +1884,14 @@ func (r *radarGovernanceRepository) ListGates(ctx context.Context) ([]service.Ra
 	if err := r.valid(); err != nil {
 		return nil, err
 	}
-	rows, err := r.db.QueryContext(ctx, `SELECT id, run_id, status, COALESCE(rule_ids[1], ''), created_at FROM evaluation_gate_decisions ORDER BY created_at DESC LIMIT 200`)
+	query := `SELECT d.id, d.run_id, d.status, COALESCE(d.rule_ids[1], ''), d.created_at FROM evaluation_gate_decisions d`
+	args := []any{}
+	if tenantID, scoped := radarTenant(ctx); scoped {
+		query += ` WHERE d.tenant_id=$1`
+		args = append(args, tenantID)
+	}
+	query += ` ORDER BY d.created_at DESC LIMIT 200`
+	rows, err := r.db.QueryContext(ctx, query, args...)
 	if err != nil {
 		return nil, fmt.Errorf("list radar gates: %w", err)
 	}
@@ -1501,7 +1911,14 @@ func (r *radarGovernanceRepository) ListWorkers(ctx context.Context) ([]service.
 	if err := r.valid(); err != nil {
 		return nil, err
 	}
-	rows, err := r.db.QueryContext(ctx, `SELECT id, name, worker_kind, status, last_heartbeat_at, capabilities FROM evaluation_workers ORDER BY name`)
+	query := `SELECT id, name, worker_kind, status, last_heartbeat_at, capabilities FROM evaluation_workers`
+	args := []any{}
+	if tenantID, scoped := radarTenant(ctx); scoped {
+		query += ` WHERE tenant_id=$1`
+		args = append(args, tenantID)
+	}
+	query += ` ORDER BY name`
+	rows, err := r.db.QueryContext(ctx, query, args...)
 	if err != nil {
 		return nil, fmt.Errorf("list radar workers: %w", err)
 	}
@@ -1658,6 +2075,9 @@ func (r *radarGovernanceRepository) RegisterRadarWorker(ctx context.Context, inp
 	if replay, found, err := loadRadarWorkerEventReplay(ctx, tx, idempotencyKey, uuid.Nil, "registered", "name", input.Name); err != nil {
 		return nil, err
 	} else if found {
+		if err := ensureScopedRadarWorkerTenant(ctx, tx, replay.ID); err != nil {
+			return nil, err
+		}
 		if replay.TokenFingerprint != workerFingerprint(input.Token) {
 			return nil, infraerrors.Conflict("WORKER_IDEMPOTENCY_CONFLICT", "idempotency key was reused with different credentials")
 		}
@@ -1668,6 +2088,9 @@ func (r *radarGovernanceRepository) RegisterRadarWorker(ctx context.Context, inp
 	var existingHash string
 	err = tx.QueryRowContext(ctx, `SELECT id, name, worker_kind, region, image_digest, capabilities, token_hash, status, claim_mode, token_epoch, token_fingerprint, max_concurrency, created_at, updated_at FROM evaluation_workers WHERE name = $1 FOR UPDATE`, input.Name).Scan(&existing.ID, &existing.Name, &existing.WorkerKind, &existing.Region, &existing.ImageDigest, &existingCaps, &existingHash, &existing.Status, &existing.ClaimMode, &existing.TokenEpoch, &existing.TokenFingerprint, &existing.MaxConcurrency, &existing.CreatedAt, &existing.UpdatedAt)
 	if err == nil {
+		if err := ensureScopedRadarWorkerTenant(ctx, tx, existing.ID); err != nil {
+			return nil, err
+		}
 		existing.Capabilities = []string(existingCaps)
 		if existingHash != hashString(input.Token) || existing.WorkerKind != input.WorkerKind || existing.Region != input.Region || existing.ImageDigest != input.ImageDigest || strings.Join(existing.Capabilities, "\x00") != strings.Join(caps, "\x00") {
 			return nil, infraerrors.Conflict("WORKER_IDENTITY_CONFLICT", "worker identity already exists with different credentials or metadata")
@@ -1686,8 +2109,12 @@ func (r *radarGovernanceRepository) RegisterRadarWorker(ctx context.Context, inp
 	} else if !errors.Is(tokenErr, sql.ErrNoRows) {
 		return nil, fmt.Errorf("check radar worker token: %w", tokenErr)
 	}
+	tenantID := actorID
+	if scopedTenant, scoped := radarTenant(ctx); scoped {
+		tenantID = scopedTenant
+	}
 	worker := &service.RadarWorkerRecord{}
-	err = tx.QueryRowContext(ctx, `INSERT INTO evaluation_workers (id, name, worker_kind, region, image_digest, capabilities, max_concurrency, token_hash, token_fingerprint, token_epoch, status, claim_mode) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,0,'active','open') RETURNING id, name, worker_kind, status, claim_mode, token_epoch, token_fingerprint, region, image_digest, capabilities, max_concurrency, created_at, updated_at`, uuid.New(), input.Name, input.WorkerKind, input.Region, input.ImageDigest, pq.Array(caps), input.MaxConcurrency, hashString(input.Token), workerFingerprint(input.Token)).Scan(&worker.ID, &worker.Name, &worker.WorkerKind, &worker.Status, &worker.ClaimMode, &worker.TokenEpoch, &worker.TokenFingerprint, &worker.Region, &worker.ImageDigest, &existingCaps, &worker.MaxConcurrency, &worker.CreatedAt, &worker.UpdatedAt)
+	err = tx.QueryRowContext(ctx, `INSERT INTO evaluation_workers (id, name, worker_kind, region, image_digest, capabilities, max_concurrency, token_hash, token_fingerprint, token_epoch, status, claim_mode, tenant_id) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,0,'active','open',$10) RETURNING id, name, worker_kind, status, claim_mode, token_epoch, token_fingerprint, region, image_digest, capabilities, max_concurrency, created_at, updated_at`, uuid.New(), input.Name, input.WorkerKind, input.Region, input.ImageDigest, pq.Array(caps), input.MaxConcurrency, hashString(input.Token), workerFingerprint(input.Token), tenantID).Scan(&worker.ID, &worker.Name, &worker.WorkerKind, &worker.Status, &worker.ClaimMode, &worker.TokenEpoch, &worker.TokenFingerprint, &worker.Region, &worker.ImageDigest, &existingCaps, &worker.MaxConcurrency, &worker.CreatedAt, &worker.UpdatedAt)
 	if err != nil {
 		return nil, fmt.Errorf("register radar worker: %w", err)
 	}
@@ -1715,6 +2142,9 @@ func (r *radarGovernanceRepository) RotateRadarWorkerToken(ctx context.Context, 
 		return nil, err
 	}
 	defer func() { _ = tx.Rollback() }()
+	if err := ensureScopedRadarWorkerTenant(ctx, tx, workerID); err != nil {
+		return nil, err
+	}
 	if replay, found, err := loadRadarWorkerEventReplay(ctx, tx, idempotencyKey, workerID, "token_rotated", "token_fingerprint", workerFingerprint(token)); err != nil {
 		return nil, err
 	} else if found {
@@ -1759,6 +2189,9 @@ func (r *radarGovernanceRepository) SetRadarWorkerClaimMode(ctx context.Context,
 		return nil, err
 	}
 	defer func() { _ = tx.Rollback() }()
+	if err := ensureScopedRadarWorkerTenant(ctx, tx, workerID); err != nil {
+		return nil, err
+	}
 	if replay, found, err := loadRadarWorkerEventReplay(ctx, tx, idempotencyKey, workerID, eventType, "claim_mode", string(mode)); err != nil {
 		return nil, err
 	} else if found {
@@ -1799,6 +2232,9 @@ func (r *radarGovernanceRepository) DisableRadarWorker(ctx context.Context, work
 		return nil, err
 	}
 	defer func() { _ = tx.Rollback() }()
+	if err := ensureScopedRadarWorkerTenant(ctx, tx, workerID); err != nil {
+		return nil, err
+	}
 	idempotencyKey = strings.TrimSpace(idempotencyKey)
 	if replay, found, err := loadRadarWorkerEventReplay(ctx, tx, idempotencyKey, workerID, "disabled", "", ""); err != nil {
 		return nil, err
@@ -1825,12 +2261,20 @@ func (r *radarGovernanceRepository) ListDatasets(ctx context.Context) ([]service
 	if err := r.valid(); err != nil {
 		return nil, err
 	}
-	rows, err := r.db.QueryContext(ctx, `
+	query := `
 		SELECT d.id, d.dataset_key, d.version, d.status, COUNT(c.id), d.created_at
 		FROM evaluation_dataset_versions d
 		LEFT JOIN evaluation_cases c ON c.dataset_version_id = d.id
+		`
+	args := []any{}
+	if tenantID, scoped := radarTenant(ctx); scoped {
+		query += ` WHERE d.tenant_id=$1`
+		args = append(args, tenantID)
+	}
+	query += `
 		GROUP BY d.id, d.dataset_key, d.version, d.status, d.created_at
-		ORDER BY d.created_at DESC LIMIT 200`)
+		ORDER BY d.created_at DESC LIMIT 200`
+	rows, err := r.db.QueryContext(ctx, query, args...)
 	if err != nil {
 		return nil, fmt.Errorf("list radar datasets: %w", err)
 	}

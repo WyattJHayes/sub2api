@@ -51,6 +51,7 @@ func persistEvaluationExperimentContracts(
 	tx *sql.Tx,
 	runID uuid.UUID,
 	runCreatedAt time.Time,
+	runControlEpoch int64,
 	cases []evaluationCaseForRun,
 	matrix []evaluationMatrixEntry,
 ) (evaluationExperimentPersistResult, error) {
@@ -188,7 +189,7 @@ func persistEvaluationExperimentContracts(
 					side: "candidate", sideSpecID: candidate.id,
 				}
 				for _, sample := range []evaluationExperimentSample{baselineSample, candidateSample} {
-					if err := insertEvaluationSampleAndAssignment(ctx, tx, sample.id, runID, evaluationCase, sample.modelRoute, sample.modelConfig, sample.modelConfigSHA, sampleIndex); err != nil {
+					if err := insertEvaluationSampleAndAssignment(ctx, tx, sample.id, runID, evaluationCase, sample.modelRoute, sample.modelConfig, sample.modelConfigSHA, sampleIndex, runControlEpoch); err != nil {
 						return result, err
 					}
 				}

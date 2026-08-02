@@ -1,10 +1,14 @@
 name: sub2api-radar-staging
 
+# Add docker-compose.reliability.yml explicitly for reliability or chaos drills.
+
 services:
   radar-runner:
     build:
       context: ..
       dockerfile: Dockerfile
+      args:
+        RADAR_WORKER_BASE_IMAGE: ${RADAR_WORKER_BASE_IMAGE:-sub2api/radar-worker:staging}
     image: sub2api/radar-worker:staging
     restart: unless-stopped
     entrypoint: ["/usr/local/bin/radar-runner"]
@@ -22,6 +26,9 @@ services:
       RADAR_INTERNAL_DOMAINS: ${RADAR_INTERNAL_DOMAINS:-sub2api-staging}
       RADAR_CAPABILITIES: ${RADAR_CAPABILITIES:-coding,reasoning,instruction,long_context,tool_call,protocol,safety,performance,cost}
       RADAR_STATE_DIR: /var/lib/sub2api-radar
+      RADAR_METRICS_ENABLED: ${RADAR_METRICS_ENABLED:-false}
+      RADAR_METRICS_HOST: ${RADAR_METRICS_HOST:-0.0.0.0}
+      RADAR_METRICS_PORT: ${RADAR_RUNNER_METRICS_PORT:-9108}
     volumes:
       - radar_runner_state:/var/lib/sub2api-radar
     networks:
@@ -45,6 +52,8 @@ services:
     build:
       context: ..
       dockerfile: Dockerfile
+      args:
+        RADAR_WORKER_BASE_IMAGE: ${RADAR_WORKER_BASE_IMAGE:-sub2api/radar-worker:staging}
     restart: unless-stopped
     entrypoint: ["/usr/local/bin/radar-grader"]
     environment:
@@ -58,6 +67,9 @@ services:
       RADAR_LIFECYCLE_PROTOCOL_VERSION: ${RADAR_LIFECYCLE_PROTOCOL_VERSION:-2}
       RADAR_GRADER_IDS: ${RADAR_GRADER_IDS:-exact,exact_json,protocol,safety,tool_call}
       RADAR_STATE_DIR: /var/lib/sub2api-radar
+      RADAR_METRICS_ENABLED: ${RADAR_METRICS_ENABLED:-false}
+      RADAR_METRICS_HOST: ${RADAR_METRICS_HOST:-0.0.0.0}
+      RADAR_METRICS_PORT: ${RADAR_GRADER_METRICS_PORT:-9108}
     volumes:
       - radar_grader_state:/var/lib/sub2api-radar
     networks:
@@ -81,6 +93,8 @@ services:
     build:
       context: ..
       dockerfile: Dockerfile
+      args:
+        RADAR_WORKER_BASE_IMAGE: ${RADAR_WORKER_BASE_IMAGE:-sub2api/radar-worker:staging}
     restart: unless-stopped
     entrypoint: ["/usr/local/bin/radar-statistics"]
     environment:
@@ -95,6 +109,9 @@ services:
       RADAR_ANALYSIS_CAPABILITIES: ${RADAR_ANALYSIS_CAPABILITIES:-coding,reasoning,safety,tool_use,protocol}
       RADAR_ANALYSIS_VERSION: ${RADAR_ANALYSIS_VERSION:-v1}
       RADAR_STATE_DIR: /var/lib/sub2api-radar
+      RADAR_METRICS_ENABLED: ${RADAR_METRICS_ENABLED:-false}
+      RADAR_METRICS_HOST: ${RADAR_METRICS_HOST:-0.0.0.0}
+      RADAR_METRICS_PORT: ${RADAR_STATISTICS_METRICS_PORT:-9108}
     volumes:
       - radar_statistics_state:/var/lib/sub2api-radar
     networks:

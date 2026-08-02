@@ -8,8 +8,10 @@ migrations_dir="${RADAR_MIGRATIONS_DIR:-$(cd "$(dirname "${BASH_SOURCE[0]}")/../
 target_protocol_version=2
 migration_names=(
   "199_add_radar_evidence_revision_pipeline.sql"
+  "200_add_radar_reliability_and_dr.sql"
   "200_add_score_idempotency_score_ref.sql"
   "201_add_revision_batch_events.sql"
+  "202_add_gate_policy_approvals.sql"
 )
 if [[ -z "${database_url}" ]]; then
   echo "RADAR_DATABASE_URL or DATABASE_URL is required" >&2
@@ -58,9 +60,14 @@ validate_migration_checksums() {
   done
 }
 
+storage_mode() {
+  psql_radar -c "SELECT mode FROM evaluation_gate_storage_modes WHERE id=1"
+}
+
 case "${phase}" in
   audit)
     [[ "${state}" == "open:audit" ]] || fail_state "audit requires open/audit"
+    [[ "$(storage_mode)" == "compatibility" ]] || fail_state "199 audit requires compatibility storage mode"
     rejected="$(psql_radar -c "SELECT COUNT(*) FROM evaluation_writer_protocol_audits WHERE accepted=FALSE AND created_at >= NOW() - INTERVAL '15 minutes'")"
     [[ "${rejected}" == "0" ]] || fail_state "recent rejected writer audit count is ${rejected}"
     echo "migration 199 audit clean window confirmed"
@@ -95,11 +102,12 @@ case "${phase}" in
     ;;
   migrate)
     [[ "${state}" == "closed:audit" ]] || fail_state "migrate requires closed/audit"
-    applied_count="$(psql_radar -c "SELECT COUNT(*) FROM schema_migrations WHERE filename IN ('199_add_radar_evidence_revision_pipeline.sql','200_add_score_idempotency_score_ref.sql','201_add_revision_batch_events.sql')")"
+    [[ "$(storage_mode)" == "compatibility" ]] || fail_state "199 migrate requires compatibility storage mode"
+    trusted_evidence_table="$(psql_radar -c "SELECT to_regclass('public.evaluation_gate_evidence_manifests') IS NOT NULL")"
+    [[ "${trusted_evidence_table}" == "t" ]] || fail_state "trusted gate evidence schema is missing"
+    applied_count="$(psql_radar -c "SELECT COUNT(*) FROM schema_migrations WHERE filename IN ('199_add_radar_evidence_revision_pipeline.sql','200_add_radar_reliability_and_dr.sql','200_add_score_idempotency_score_ref.sql','201_add_revision_batch_events.sql','202_add_gate_policy_approvals.sql')")"
+    expected_count="${#migration_names[@]}"
     if [[ "${applied_count}" == "0" ]]; then
-      migration_199_checksum="$(migration_checksum "${migrations_dir}/${migration_names[0]}")"
-      migration_200_checksum="$(migration_checksum "${migrations_dir}/${migration_names[1]}")"
-      migration_201_checksum="$(migration_checksum "${migrations_dir}/${migration_names[2]}")"
       {
         echo "BEGIN;"
         echo "SELECT set_config('app.evaluation_writer_kind','migration',false);"
@@ -107,27 +115,43 @@ case "${phase}" in
         echo "SELECT set_config('app.evaluation_writer_instance_id','00000000-0000-0000-0000-000000000199',false);"
         for name in "${migration_names[@]}"; do
           printf "\\i '%s'\n" "${migrations_dir}/${name}"
+          checksum="$(migration_checksum "${migrations_dir}/${name}")"
+          printf "INSERT INTO schema_migrations (filename,checksum) VALUES ('%s','%s');\n" "${name}" "${checksum}"
         done
-        printf "INSERT INTO schema_migrations (filename,checksum) VALUES ('%s','%s'),('%s','%s'),('%s','%s');\n" \
-          "${migration_names[0]}" "${migration_199_checksum}" \
-          "${migration_names[1]}" "${migration_200_checksum}" \
-          "${migration_names[2]}" "${migration_201_checksum}"
         echo "UPDATE evaluation_schema_cutovers SET minimum_protocol_version=${target_protocol_version}, updated_at=NOW() WHERE id=1;"
         echo "COMMIT;"
       } | psql_radar
-    elif [[ "${applied_count}" == "3" ]]; then
+    elif [[ "${applied_count}" == "${expected_count}" ]]; then
       validate_migration_checksums
       psql_radar -c "BEGIN; SELECT set_config('app.evaluation_writer_kind','migration',true); UPDATE evaluation_schema_cutovers SET minimum_protocol_version=${target_protocol_version}, updated_at=NOW() WHERE id=1; COMMIT;"
+    elif [[ "${applied_count}" -lt "${expected_count}" ]]; then
+      for name in "${migration_names[@]}"; do
+        already_applied="$(psql_radar -c "SELECT COUNT(*) FROM schema_migrations WHERE filename='${name}'")"
+        [[ "${already_applied}" == "1" ]] && continue
+        checksum="$(migration_checksum "${migrations_dir}/${name}")"
+        {
+          echo "BEGIN;"
+          echo "SELECT set_config('app.evaluation_writer_kind','migration',false);"
+          echo "SELECT set_config('app.evaluation_writer_protocol','${target_protocol_version}',false);"
+          echo "SELECT set_config('app.evaluation_writer_instance_id','00000000-0000-0000-0000-000000000199',false);"
+          printf "\\i '%s'\n" "${migrations_dir}/${name}"
+          printf "INSERT INTO schema_migrations (filename,checksum) VALUES ('%s','%s');\n" "${name}" "${checksum}"
+          echo "COMMIT;"
+        } | psql_radar
+      done
+      validate_migration_checksums
     else
-      fail_state "migrations 199, 200 and 201 must be all absent or all applied"
+      fail_state "expected migration set has an invalid applied count"
     fi
-    echo "migrations 199, 200 and 201 verified at writer protocol ${target_protocol_version}"
+    psql_radar -c "UPDATE evaluation_gate_storage_modes SET mode='trusted', updated_at=NOW() WHERE id=1"
+    echo "migrations 199, 200 reliability, 200 score, 201 revision events and 202 policy approvals verified at writer protocol ${target_protocol_version}"
     ;;
   enforce)
     [[ "${state}" == "closed:audit" || "${state}" == "closed:enforce" ]] || fail_state "enforce requires closed"
     protocol="$(psql_radar -c "SELECT minimum_protocol_version FROM evaluation_schema_cutovers WHERE id=1")"
     [[ "${protocol}" == "${target_protocol_version}" ]] || fail_state "minimum writer protocol is ${protocol}, expected ${target_protocol_version}"
     validate_migration_checksums
+    [[ "$(storage_mode)" == "trusted" ]] || fail_state "199 enforce requires trusted storage mode"
     psql_radar -c "UPDATE evaluation_schema_cutovers SET guard_mode='enforce', updated_at=NOW() WHERE id=1"
     echo "migration 199 writer guard is enforce"
     ;;
@@ -152,6 +176,7 @@ case "${phase}" in
     [[ "${old_sessions}" == "0" ]] || fail_state "old writer session count is ${old_sessions}"
     current_sessions="$(psql_radar -c "SELECT COUNT(*) FROM evaluation_writer_sessions WHERE heartbeat_expires_at>NOW() AND protocol_version>=${target_protocol_version}")"
     [[ "${current_sessions}" != "0" ]] || fail_state "protocol ${target_protocol_version} writer session is required"
+    [[ "$(storage_mode)" == "trusted" ]] || fail_state "199 reopen requires trusted storage mode"
     psql_radar -c "UPDATE evaluation_schema_cutovers SET write_mode='open', updated_at=NOW() WHERE id=1"
     echo "migration 199 cutover reopened in enforce mode"
     ;;

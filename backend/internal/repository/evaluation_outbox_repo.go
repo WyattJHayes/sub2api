@@ -31,6 +31,11 @@ func (r *evaluationOutboxRepository) Enqueue(ctx context.Context, input service.
 		return nil, fmt.Errorf("begin evaluation outbox enqueue: %w", err)
 	}
 	defer func() { _ = tx.Rollback() }()
+	if _, scoped := radarTenant(ctx); scoped {
+		if err := ensureRadarRunTenant(ctx, tx, input.RunID); err != nil {
+			return nil, err
+		}
+	}
 	event, err := enqueueEvaluationOutbox(ctx, tx, input)
 	if err != nil {
 		return nil, err
@@ -246,13 +251,55 @@ func (r *evaluationOutboxRepository) Claim(ctx context.Context, workerID uuid.UU
 		return nil, fmt.Errorf("begin evaluation outbox claim: %w", err)
 	}
 	defer func() { _ = tx.Rollback() }()
-	rows, err := tx.QueryContext(ctx, `
+	boundWorker, workerBound := service.RadarWorkerID(ctx)
+	_, tenantScoped := radarTenant(ctx)
+	var workerTenantID int64
+	if workerBound {
+		if boundWorker != workerID {
+			return nil, service.ErrRadarForbidden
+		}
+	}
+	if workerBound || tenantScoped {
+		if err := tx.QueryRowContext(ctx, `SELECT tenant_id FROM evaluation_workers WHERE id=$1`, workerID).Scan(&workerTenantID); err != nil {
+			return nil, err
+		}
+		if workerTenantID <= 0 {
+			return nil, service.ErrRadarForbidden
+		}
+		if tenantID, scoped := radarTenant(ctx); scoped && workerTenantID != tenantID {
+			return nil, service.ErrRadarForbidden
+		}
+	}
+	claimQuery := `
 		SELECT event.id, event.run_id, event.revision_batch_id
 		FROM evaluation_outbox_events event
 		WHERE event.event_type=ANY($1::text[]) AND event.available_at <= transaction_timestamp()
 		  AND (event.status='pending' OR (event.status='leased' AND event.lease_expires_at <= transaction_timestamp()))
+		  AND NOT EXISTS (
+			SELECT 1 FROM evaluation_outbox_event_causes cause
+			JOIN evaluation_outbox_events parent ON parent.id=cause.cause_event_id
+			WHERE cause.event_id=event.id AND parent.status <> 'completed'
+		  )
 		ORDER BY event.available_at, event.sequence
-		LIMIT $2`, pq.Array(eventTypes), limit)
+		LIMIT $2`
+	claimArgs := []any{pq.Array(eventTypes), limit}
+	if workerBound || tenantScoped {
+		claimQuery = `
+		SELECT event.id, event.run_id, event.revision_batch_id
+		FROM evaluation_outbox_events event
+		JOIN evaluation_runs run ON run.id=event.run_id AND run.tenant_id=$3
+		WHERE event.event_type=ANY($1::text[]) AND event.available_at <= transaction_timestamp()
+		  AND (event.status='pending' OR (event.status='leased' AND event.lease_expires_at <= transaction_timestamp()))
+		  AND NOT EXISTS (
+			SELECT 1 FROM evaluation_outbox_event_causes cause
+			JOIN evaluation_outbox_events parent ON parent.id=cause.cause_event_id
+			WHERE cause.event_id=event.id AND parent.status <> 'completed'
+		  )
+		ORDER BY event.available_at, event.sequence
+		LIMIT $2`
+		claimArgs = append(claimArgs, workerTenantID)
+	}
+	rows, err := tx.QueryContext(ctx, claimQuery, claimArgs...)
 	if err != nil {
 		return nil, fmt.Errorf("select evaluation outbox claims: %w", err)
 	}
@@ -313,10 +360,15 @@ func (r *evaluationOutboxRepository) Claim(ctx context.Context, workerID uuid.UU
 		}
 		var lockedID uuid.UUID
 		lockQuery := `
-			SELECT id FROM evaluation_outbox_events
-			WHERE id=$1 AND run_id=$2 AND event_type=ANY($3::text[])
-			  AND available_at <= transaction_timestamp()
-			  AND (status='pending' OR (status='leased' AND lease_expires_at <= transaction_timestamp()))`
+			SELECT event.id FROM evaluation_outbox_events event
+			WHERE event.id=$1 AND event.run_id=$2 AND event.event_type=ANY($3::text[])
+			  AND event.available_at <= transaction_timestamp()
+			  AND (event.status='pending' OR (event.status='leased' AND event.lease_expires_at <= transaction_timestamp()))
+			  AND NOT EXISTS (
+				SELECT 1 FROM evaluation_outbox_event_causes cause
+				JOIN evaluation_outbox_events parent ON parent.id=cause.cause_event_id
+				WHERE cause.event_id=event.id AND parent.status <> 'completed'
+			  )`
 		args := []any{candidate.id, candidate.runID, pq.Array(eventTypes)}
 		if candidate.batchID.Valid {
 			lockQuery += ` AND revision_batch_id=$4`
@@ -382,12 +434,28 @@ func (r *evaluationOutboxRepository) Complete(ctx context.Context, eventID uuid.
 	})
 }
 
+func (r *evaluationOutboxRepository) Retry(ctx context.Context, eventID uuid.UUID, leaseToken string, leaseEpoch int64, errorCode string, delay time.Duration) error {
+	errorCode = strings.TrimSpace(errorCode)
+	if errorCode == "" || len(errorCode) > 100 || delay < 0 {
+		return service.ErrEvaluationOutboxInvalid
+	}
+	return r.updateLeased(ctx, eventID, leaseToken, leaseEpoch, func(ctx context.Context, tx *sql.Tx) error {
+		_, err := tx.ExecContext(ctx, `
+			UPDATE evaluation_outbox_events
+			SET status='pending', available_at=transaction_timestamp()+($2 * INTERVAL '1 millisecond'),
+				lease_token_hash=NULL, lease_owner=NULL, lease_expires_at=NULL,
+				last_error_code=$3, updated_at=transaction_timestamp()
+			WHERE id=$1`, eventID, delay.Milliseconds(), errorCode)
+		return err
+	})
+}
+
 func (r *evaluationOutboxRepository) DeadLetter(ctx context.Context, eventID uuid.UUID, leaseToken string, leaseEpoch int64, errorCode string) error {
 	errorCode = strings.TrimSpace(errorCode)
 	if errorCode == "" || len(errorCode) > 100 {
 		return service.ErrEvaluationOutboxInvalid
 	}
-	return r.updateLeased(ctx, eventID, leaseToken, leaseEpoch, func(ctx context.Context, tx *sql.Tx) error {
+	if err := r.updateLeased(ctx, eventID, leaseToken, leaseEpoch, func(ctx context.Context, tx *sql.Tx) error {
 		if _, err := tx.ExecContext(ctx, `
 			UPDATE evaluation_outbox_events
 			SET status='dead_letter', lease_token_hash=NULL, lease_owner=NULL,
@@ -396,7 +464,22 @@ func (r *evaluationOutboxRepository) DeadLetter(ctx context.Context, eventID uui
 			return err
 		}
 		return failRevisionRequirementForEvent(ctx, tx, eventID, errorCode)
-	})
+	}); err != nil {
+		return err
+	}
+	var runID uuid.UUID
+	var workOrigin string
+	if err := r.db.QueryRowContext(ctx, `
+		SELECT run_id, COALESCE(work_origin,'initial')
+		FROM evaluation_outbox_events WHERE id=$1`, eventID).Scan(&runID, &workOrigin); err != nil {
+		return fmt.Errorf("load dead letter Run identity: %w", err)
+	}
+	if workOrigin == "initial" {
+		if _, err := (&evaluationRepository{db: r.db}).ReconcileEvaluationRun(ctx, runID); err != nil {
+			return fmt.Errorf("reconcile initial outbox dead letter: %w", err)
+		}
+	}
+	return nil
 }
 
 func (r *evaluationOutboxRepository) updateLeased(ctx context.Context, eventID uuid.UUID, leaseToken string, leaseEpoch int64, update func(context.Context, *sql.Tx) error) error {
@@ -411,14 +494,28 @@ func (r *evaluationOutboxRepository) updateLeased(ctx context.Context, eventID u
 	var storedHash string
 	var storedEpoch int64
 	var batchID uuid.NullUUID
+	var runID uuid.UUID
+	var leaseOwner uuid.NullUUID
 	var leaseCurrent bool
 	err = tx.QueryRowContext(ctx, `
-		SELECT lease_token_hash, COALESCE(lease_epoch,0), revision_batch_id,
+		SELECT lease_token_hash, COALESCE(lease_epoch,0), revision_batch_id, run_id, lease_owner,
 		       status='leased' AND lease_expires_at > transaction_timestamp()
 		FROM evaluation_outbox_events WHERE id=$1 FOR UPDATE`, eventID).Scan(
-		&storedHash, &storedEpoch, &batchID, &leaseCurrent)
+		&storedHash, &storedEpoch, &batchID, &runID, &leaseOwner, &leaseCurrent)
 	if err != nil || !leaseCurrent || storedHash != hashToken(leaseToken) || storedEpoch != leaseEpoch {
 		return service.ErrEvaluationOutboxFenced
+	}
+	if workerID, bound := service.RadarWorkerID(ctx); bound {
+		if !leaseOwner.Valid || leaseOwner.UUID != workerID {
+			return service.ErrRadarForbidden
+		}
+		if err := ensureRadarWorkerRunTenant(ctx, tx, workerID, runID); err != nil {
+			return err
+		}
+	} else if _, scoped := radarTenant(ctx); scoped {
+		if err := ensureRadarRunTenant(ctx, tx, runID); err != nil {
+			return err
+		}
 	}
 	if batchID.Valid {
 		var batchStatus service.RevisionBatchStatus
@@ -450,13 +547,23 @@ func (r *evaluationOutboxRepository) ReplayDeadLetter(ctx context.Context, event
 	defer func() { _ = tx.Rollback() }()
 	var status service.EvaluationOutboxStatus
 	var batchID uuid.NullUUID
+	var runID uuid.UUID
 	if err := tx.QueryRowContext(ctx, `
-		SELECT status, revision_batch_id
-		FROM evaluation_outbox_events WHERE id=$1 FOR UPDATE`, eventID).Scan(&status, &batchID); err != nil {
+		SELECT status, revision_batch_id, run_id
+		FROM evaluation_outbox_events WHERE id=$1 FOR UPDATE`, eventID).Scan(&status, &batchID, &runID); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return nil, service.ErrEvaluationOutboxNotFound
 		}
 		return nil, fmt.Errorf("lock evaluation outbox replay: %w", err)
+	}
+	if workerID, bound := service.RadarWorkerID(ctx); bound {
+		if err := ensureRadarWorkerRunTenant(ctx, tx, workerID, runID); err != nil {
+			return nil, err
+		}
+	} else if _, scoped := radarTenant(ctx); scoped {
+		if err := ensureRadarRunTenant(ctx, tx, runID); err != nil {
+			return nil, err
+		}
 	}
 	if status != service.EvaluationOutboxDeadLetter {
 		return nil, service.ErrEvaluationOutboxInvalid
@@ -481,6 +588,68 @@ func (r *evaluationOutboxRepository) ReplayDeadLetter(ctx context.Context, event
 	return event, nil
 }
 
+func (r *evaluationOutboxRepository) EnsureConsumerWorker(ctx context.Context, name string) (uuid.UUID, error) {
+	name = strings.TrimSpace(name)
+	if r == nil || r.db == nil || name == "" || len(name) > 120 {
+		return uuid.Nil, service.ErrEvaluationOutboxInvalid
+	}
+	tx, err := beginRadarWriterTx(ctx, r.db, "api")
+	if err != nil {
+		return uuid.Nil, fmt.Errorf("begin evaluation outbox consumer worker: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+	if _, err := tx.ExecContext(ctx, `SELECT pg_advisory_xact_lock(hashtextextended($1,0))`, "evaluation-outbox-consumer:"+name); err != nil {
+		return uuid.Nil, fmt.Errorf("lock evaluation outbox consumer worker: %w", err)
+	}
+	tokenHash := hashString("evaluation-outbox-consumer-token\x00" + name)
+	workerID := uuid.New()
+	if err := tx.QueryRowContext(ctx, `
+		INSERT INTO evaluation_workers (
+			id, name, worker_kind, token_hash, status, capabilities,
+			max_concurrency, claim_mode, token_epoch, token_fingerprint, tenant_id
+		) VALUES ($1,$2,'statistics',$3,'active',ARRAY['outbox_consumer']::text[],4,'open',0,$4,0)
+		ON CONFLICT (tenant_id, name) DO UPDATE SET
+			worker_kind='statistics', status='active', capabilities=ARRAY['outbox_consumer']::text[],
+			max_concurrency=4, claim_mode='open', disabled_at=NULL, updated_at=transaction_timestamp()
+		RETURNING id`, workerID, name, tokenHash, tokenHash[:12]).Scan(&workerID); err != nil {
+		return uuid.Nil, fmt.Errorf("ensure evaluation outbox consumer worker: %w", err)
+	}
+	if err := tx.Commit(); err != nil {
+		return uuid.Nil, fmt.Errorf("commit evaluation outbox consumer worker: %w", err)
+	}
+	return workerID, nil
+}
+
+func (r *evaluationOutboxRepository) TouchConsumerWorkerHeartbeat(ctx context.Context, workerID uuid.UUID) error {
+	if r == nil || r.db == nil || workerID == uuid.Nil {
+		return service.ErrEvaluationOutboxInvalid
+	}
+	tx, err := beginRadarWriterTx(ctx, r.db, "worker")
+	if err != nil {
+		return fmt.Errorf("begin evaluation outbox consumer heartbeat: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+	result, err := tx.ExecContext(ctx, `
+		UPDATE evaluation_workers
+		SET last_heartbeat_at = NOW(), updated_at = NOW()
+		WHERE id = $1 AND worker_kind = 'statistics' AND status = 'active'
+			AND capabilities @> ARRAY['outbox_consumer']::text[]`, workerID)
+	if err != nil {
+		return fmt.Errorf("heartbeat evaluation outbox consumer: %w", err)
+	}
+	affected, err := result.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("inspect evaluation outbox consumer heartbeat: %w", err)
+	}
+	if affected == 0 {
+		return service.ErrEvaluationOutboxFenced
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit evaluation outbox consumer heartbeat: %w", err)
+	}
+	return nil
+}
+
 func loadEvaluationOutboxEventByDedup(ctx context.Context, tx *sql.Tx, dedupKey string) (*service.EvaluationOutboxEvent, error) {
 	var id uuid.UUID
 	if err := tx.QueryRowContext(ctx, `SELECT id FROM evaluation_outbox_events WHERE dedup_key=$1`, dedupKey).Scan(&id); err != nil {
@@ -498,13 +667,57 @@ func loadEvaluationOutboxEvent(ctx context.Context, q interface {
 	var leaseExpires sql.NullTime
 	var leaseEpoch sql.NullInt64
 	if err := q.QueryRowContext(ctx, `
-		SELECT id, sequence, event_type, dedup_key, causation_id, cause_set_hash,
-		       work_origin, revision_batch_id, run_id, source_type, source_id, source_hash,
-		       payload_hash, payload, status, attempt, available_at, lease_owner,
-		       lease_expires_at, lease_epoch, last_error_code, created_at, updated_at
-		FROM evaluation_outbox_events WHERE id=$1`, eventID).Scan(
+		SELECT event.id, event.sequence, event.event_type, event.dedup_key,
+		       event.causation_id, event.cause_set_hash, event.work_origin,
+		       event.revision_batch_id, event.run_id,
+		       CASE event.source_type
+		           WHEN 'assignment_replacement' THEN COALESCE((
+		               SELECT case_spec.capability_domain || '/' ||
+		                      regexp_replace(sample.model_route, '^(baseline|candidate):', '')
+		               FROM evaluation_score_head_events head_event
+		               JOIN evaluation_samples sample ON sample.id=head_event.sample_id
+		               JOIN evaluation_cases case_spec ON case_spec.id=sample.case_id
+		               WHERE head_event.id::text=event.payload->>'source_head_event_id'
+		                 AND head_event.run_id=event.run_id
+		           ), '')
+		           WHEN 'score_head_event' THEN COALESCE(event.payload->>'capability_domain','') || '/' ||
+		               regexp_replace(COALESCE(event.payload->>'model_route',''), '^(baseline|candidate):', '')
+		           WHEN 'aggregate_head' THEN COALESCE(event.payload->>'capability_domain','') || '/' ||
+		               regexp_replace(COALESCE(event.payload->>'model_route',''), '^(baseline|candidate):', '')
+		           WHEN 'reliability_head_event' THEN COALESCE(event.payload->>'reliability_profile_id','') || '/' ||
+		               COALESCE(event.payload->>'slice_key','')
+		           WHEN 'route_evidence' THEN COALESCE((
+		               SELECT evidence.assignment_id::text || '/' || evidence.request_ordinal::text
+		               FROM evaluation_route_evidence evidence
+		               WHERE evidence.route_trace_id=event.source_id
+		                 AND evidence.evaluation_run_id=event.run_id
+		           ), '')
+		           WHEN 'evidence_signing_key_state' THEN 'signing-key/' || COALESCE(event.payload->>'signing_key_id','')
+		           ELSE ''
+		       END AS scope_key,
+		       CASE event.source_type
+		           WHEN 'assignment_replacement' THEN 'v1'
+		           WHEN 'score_head_event' THEN COALESCE(NULLIF(event.payload->>'analysis_version',''),'v1')
+		           WHEN 'aggregate_head' THEN COALESCE(NULLIF(event.payload->>'analysis_version',''),'v1')
+		           WHEN 'route_evidence' THEN COALESCE(event.payload->>'schema_version','')
+		           WHEN 'reliability_head_event' THEN COALESCE((
+		               SELECT snapshot.query_version
+		               FROM evaluation_reliability_head_events head_event
+		               JOIN evaluation_reliability_snapshots snapshot
+		                 ON snapshot.id=head_event.snapshot_id AND snapshot.run_id=head_event.run_id
+		               WHERE head_event.id::text=event.source_id AND head_event.run_id=event.run_id
+		           ), '')
+		           WHEN 'evidence_signing_key_state' THEN 'evidence-signing-key-v1'
+		           ELSE ''
+		       END AS analysis_version,
+		       event.source_type, event.source_id, event.source_hash, event.payload_hash,
+		       event.payload, event.status, event.attempt, event.available_at,
+		       event.lease_owner, event.lease_expires_at, event.lease_epoch,
+		       event.last_error_code, event.created_at, event.updated_at
+		FROM evaluation_outbox_events event WHERE event.id=$1`, eventID).Scan(
 		&event.ID, &event.Sequence, &event.EventType, &event.DedupKey, &event.CausationID,
-		&event.CauseSetHash, &workOrigin, &batchID, &event.RunID, &event.SourceType,
+		&event.CauseSetHash, &workOrigin, &batchID, &event.RunID, &event.ScopeKey,
+		&event.AnalysisVersion, &event.SourceType,
 		&event.SourceID, &event.SourceHash, &event.PayloadHash, &event.Payload, &event.Status,
 		&event.Attempt, &event.AvailableAt, &leaseOwner, &leaseExpires, &leaseEpoch,
 		&lastError, &event.CreatedAt, &event.UpdatedAt); err != nil {

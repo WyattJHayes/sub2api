@@ -42,12 +42,24 @@ func (r *evaluationRepository) CreateRunWithMatrix(ctx context.Context, input se
 	if !validTriggerSource(input.TriggerSource) {
 		return nil, fmt.Errorf("invalid evaluation trigger source %q", input.TriggerSource)
 	}
+	if tenantID, scoped := radarTenant(ctx); scoped && (input.CreatedBy <= 0 || input.CreatedBy != tenantID) {
+		return nil, service.ErrRadarForbidden
+	}
 
 	tx, err := beginRadarWriterTx(ctx, r.db, "api")
 	if err != nil {
 		return nil, fmt.Errorf("begin evaluation run transaction: %w", err)
 	}
 	defer func() { _ = tx.Rollback() }()
+	if tenantID, scoped := radarTenant(ctx); scoped {
+		var ownerID int64
+		if err := tx.QueryRowContext(ctx, `SELECT tenant_id FROM evaluation_plans WHERE id=$1`, input.PlanID).Scan(&ownerID); err != nil {
+			return nil, err
+		}
+		if ownerID != tenantID {
+			return nil, service.ErrRadarForbidden
+		}
+	}
 
 	var (
 		datasetStatus string
@@ -137,22 +149,23 @@ func (r *evaluationRepository) CreateRunWithMatrix(ctx context.Context, input se
 		ReservedCost:   totalReservation,
 		ContractStatus: "pending",
 	}
+	var runControlEpoch int64
 	if totalReservation.Equal(budgetLimit) {
 		run.Status = service.RunStatusBudgetPaused
 	}
 	err = tx.QueryRowContext(ctx, `
 		INSERT INTO evaluation_runs (
 			id, plan_id, trigger_source, baseline_ref, candidate_ref, status,
-			budget_limit, reserved_cost, created_by, route_profile_version
-		) VALUES ($1, $2, $3, $4::jsonb, $5::jsonb, $6, $7, $8, NULLIF($9, 0), $10)
-		RETURNING created_at`,
+			budget_limit, reserved_cost, created_by, tenant_id, route_profile_version
+		) VALUES ($1, $2, $3, $4::jsonb, $5::jsonb, $6, $7, $8, NULLIF($9, 0), $9, $10)
+		RETURNING created_at, control_epoch`,
 		run.ID, run.PlanID, input.TriggerSource, baselineRef, candidateRef,
-		run.Status, run.BudgetLimit, run.ReservedCost, input.CreatedBy, radarRouteProfileVersion).Scan(&run.CreatedAt)
+		run.Status, run.BudgetLimit, run.ReservedCost, input.CreatedBy, radarRouteProfileVersion).Scan(&run.CreatedAt, &runControlEpoch)
 	if err != nil {
 		return nil, fmt.Errorf("insert evaluation run: %w", err)
 	}
 
-	contracts, err := persistEvaluationExperimentContracts(ctx, tx, run.ID, run.CreatedAt, cases, matrix)
+	contracts, err := persistEvaluationExperimentContracts(ctx, tx, run.ID, run.CreatedAt, runControlEpoch, cases, matrix)
 	if err != nil {
 		return nil, err
 	}
@@ -167,7 +180,7 @@ func (r *evaluationRepository) CreateRunWithMatrix(ctx context.Context, input se
 	}
 	warningThreshold := budgetLimit.Mul(decimal.NewFromInt(8)).Div(decimal.NewFromInt(10))
 	if !totalReservation.LessThan(warningThreshold) {
-		if err := insertEvaluationBudgetWarning(ctx, tx, run.ID, totalReservation, budgetLimit); err != nil {
+		if err := insertEvaluationBudgetWarning(ctx, tx, run.ID, runControlEpoch, totalReservation, budgetLimit); err != nil {
 			return nil, err
 		}
 	}
@@ -195,10 +208,11 @@ func (r *evaluationRepository) ClaimAssignment(ctx context.Context, workerID uui
 
 	var registeredCapabilities pq.StringArray
 	var workerImageDigest sql.NullString
+	var workerTenantID int64
 	err = tx.QueryRowContext(ctx, `
-	SELECT capabilities, image_digest FROM evaluation_workers
+	SELECT capabilities, image_digest, tenant_id FROM evaluation_workers
 		WHERE id = $1 AND status = 'active' AND claim_mode = 'open'
-		FOR UPDATE`, workerID).Scan(&registeredCapabilities, &workerImageDigest)
+		FOR UPDATE`, workerID).Scan(&registeredCapabilities, &workerImageDigest, &workerTenantID)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, errors.New("evaluation worker is unavailable")
 	}
@@ -213,7 +227,7 @@ func (r *evaluationRepository) ClaimAssignment(ctx context.Context, workerID uui
 		return nil, nil
 	}
 
-	reclaimed, err := reclaimExpiredAssignment(ctx, tx, authorizedCapabilities)
+	reclaimed, err := reclaimExpiredAssignment(ctx, tx, authorizedCapabilities, workerTenantID)
 	if err != nil {
 		return nil, err
 	}
@@ -221,7 +235,7 @@ func (r *evaluationRepository) ClaimAssignment(ctx context.Context, workerID uui
 	if reclaimed != nil {
 		candidate = *reclaimed
 	} else {
-		candidate, err = selectPendingAssignment(ctx, tx, authorizedCapabilities)
+		candidate, err = selectPendingAssignment(ctx, tx, authorizedCapabilities, workerTenantID)
 		if errors.Is(err, sql.ErrNoRows) {
 			if err := tx.Commit(); err != nil {
 				return nil, fmt.Errorf("commit empty evaluation assignment claim: %w", err)
@@ -246,6 +260,11 @@ func (r *evaluationRepository) ClaimAssignment(ctx context.Context, workerID uui
 	var runStatus service.RunStatus
 	if err := tx.QueryRowContext(ctx, `SELECT control_epoch, state_version, status FROM evaluation_runs WHERE id = $1 FOR UPDATE`, candidate.runID).Scan(&runEpoch, &runStateVersion, &runStatus); err != nil {
 		return nil, fmt.Errorf("load evaluation run lease epoch: %w", err)
+	}
+	if workerIDFromContext, bound := service.RadarWorkerID(ctx); bound {
+		if workerIDFromContext != workerID || workerTenantID <= 0 {
+			return nil, service.ErrRadarForbidden
+		}
 	}
 	if runStatus == service.RunStatusPaused || runStatus == service.RunStatusCancelled || runStatus == service.RunStatusCompleted || runStatus == service.RunStatusFailed {
 		if err := tx.Commit(); err != nil {
@@ -399,12 +418,21 @@ func (r *evaluationRepository) RenewLease(ctx context.Context, assignmentID uuid
 			SET lease_expires_at = NOW() + $3::interval, heartbeat_at = NOW(), updated_at = NOW()
 			FROM evaluation_samples s
 			JOIN evaluation_runs r ON r.id = s.run_id
-			JOIN evaluation_workers w ON w.id = a.leased_by AND w.status = 'active'
 			WHERE a.id = $1 AND a.sample_id = s.id AND a.lease_token_hash = $2 AND a.lease_expires_at > NOW()
-				AND a.status IN ('leased', 'running') AND a.lease_epoch = r.control_epoch`
+				AND a.status IN ('leased', 'running') AND a.lease_epoch = r.control_epoch
+				AND EXISTS (
+					SELECT 1 FROM evaluation_workers w
+					WHERE w.id = a.leased_by AND w.status = 'active' AND w.tenant_id = r.tenant_id
+					)`
 		args := []any{assignmentID, hashToken(leaseToken), postgresInterval(extendBy)}
+		nextArg := 4
+		if workerID, bound := service.RadarWorkerID(ctx); bound {
+			query += fmt.Sprintf(` AND a.leased_by = $%d`, nextArg)
+			args = append(args, workerID)
+			nextArg++
+		}
 		if len(leaseEpoch) > 0 && leaseEpoch[0] > 0 {
-			query += ` AND a.lease_epoch = $4`
+			query += fmt.Sprintf(` AND a.lease_epoch = $%d`, nextArg)
 			args = append(args, leaseEpoch[0])
 		}
 		query += ` RETURNING lease_expires_at`
@@ -445,15 +473,22 @@ func (r *evaluationRepository) TransitionAssignment(ctx context.Context, input s
 	var releasedWorkerID uuid.UUID
 	if !assignmentLeaseActive(input.To) {
 		var leasedBy sql.NullString
-		if err := tx.QueryRowContext(ctx, `
+		assignmentQuery := `
 			SELECT a.leased_by
 			FROM evaluation_assignments a
 			JOIN evaluation_samples s ON s.id = a.sample_id
 			JOIN evaluation_runs r ON r.id = s.run_id
-			JOIN evaluation_workers w ON w.id = a.leased_by AND w.status = 'active'
+			JOIN evaluation_workers w ON w.id = a.leased_by AND w.status = 'active' AND w.tenant_id = r.tenant_id
 			WHERE a.id = $1 AND a.lease_token_hash = $2 AND a.lease_expires_at > NOW()
 			  AND a.status IN ('leased', 'running') AND a.lease_epoch = r.control_epoch
-			  AND ($3::bigint IS NULL OR a.lease_epoch = $3) FOR UPDATE`, input.AssignmentID, hashToken(input.LeaseToken), expectedEpoch).Scan(&leasedBy); err != nil {
+			  AND ($3::bigint IS NULL OR a.lease_epoch = $3)`
+		assignmentArgs := []any{input.AssignmentID, hashToken(input.LeaseToken), expectedEpoch}
+		if workerID, bound := service.RadarWorkerID(ctx); bound {
+			assignmentQuery += ` AND a.leased_by = $4`
+			assignmentArgs = append(assignmentArgs, workerID)
+		}
+		assignmentQuery += ` FOR UPDATE`
+		if err := tx.QueryRowContext(ctx, assignmentQuery, assignmentArgs...).Scan(&leasedBy); err != nil {
 			if errors.Is(err, sql.ErrNoRows) {
 				return service.ErrLeaseFenced
 			}
@@ -467,28 +502,40 @@ func (r *evaluationRepository) TransitionAssignment(ctx context.Context, input s
 		}
 	}
 	if assignmentLeaseActive(input.To) {
-		err = tx.QueryRowContext(ctx, `
+		assignmentQuery := `
 			UPDATE evaluation_assignments a
 			SET status = $3, heartbeat_at = NOW(), started_at = COALESCE(started_at, NOW()), updated_at = NOW()
 			FROM evaluation_samples s
 			JOIN evaluation_runs r ON r.id = s.run_id
-			JOIN evaluation_workers w ON w.id = a.leased_by AND w.status = 'active'
+			JOIN evaluation_workers w ON w.id = a.leased_by AND w.status = 'active' AND w.tenant_id = r.tenant_id
 			WHERE a.id = $1 AND a.sample_id = s.id AND a.lease_token_hash = $2 AND a.lease_expires_at > NOW()
 				AND a.status IN ('leased', 'running') AND a.lease_epoch = r.control_epoch
-				AND ($4::bigint IS NULL OR a.lease_epoch = $4)
-			RETURNING a.sample_id`, input.AssignmentID, hashToken(input.LeaseToken), input.To, expectedEpoch).Scan(&sampleID)
+				AND ($4::bigint IS NULL OR a.lease_epoch = $4)`
+		assignmentArgs := []any{input.AssignmentID, hashToken(input.LeaseToken), input.To, expectedEpoch}
+		if workerID, bound := service.RadarWorkerID(ctx); bound {
+			assignmentQuery += ` AND a.leased_by = $5`
+			assignmentArgs = append(assignmentArgs, workerID)
+		}
+		assignmentQuery += ` RETURNING a.sample_id`
+		err = tx.QueryRowContext(ctx, assignmentQuery, assignmentArgs...).Scan(&sampleID)
 	} else {
-		err = tx.QueryRowContext(ctx, `
+		assignmentQuery := `
 			UPDATE evaluation_assignments a
 			SET status = $3, lease_token_hash = NULL, leased_by = NULL, lease_expires_at = NULL,
 				heartbeat_at = NOW(), finished_at = NOW(), updated_at = NOW()
 			FROM evaluation_samples s
 			JOIN evaluation_runs r ON r.id = s.run_id
-			JOIN evaluation_workers w ON w.id = a.leased_by AND w.status = 'active'
+			JOIN evaluation_workers w ON w.id = a.leased_by AND w.status = 'active' AND w.tenant_id = r.tenant_id
 			WHERE a.id = $1 AND a.sample_id = s.id AND a.lease_token_hash = $2 AND a.lease_expires_at > NOW()
 				AND a.status IN ('leased', 'running') AND a.lease_epoch = r.control_epoch
-				AND ($4::bigint IS NULL OR a.lease_epoch = $4)
-			RETURNING a.sample_id`, input.AssignmentID, hashToken(input.LeaseToken), input.To, expectedEpoch).Scan(&sampleID)
+				AND ($4::bigint IS NULL OR a.lease_epoch = $4)`
+		assignmentArgs := []any{input.AssignmentID, hashToken(input.LeaseToken), input.To, expectedEpoch}
+		if workerID, bound := service.RadarWorkerID(ctx); bound {
+			assignmentQuery += ` AND a.leased_by = $5`
+			assignmentArgs = append(assignmentArgs, workerID)
+		}
+		assignmentQuery += ` RETURNING a.sample_id`
+		err = tx.QueryRowContext(ctx, assignmentQuery, assignmentArgs...).Scan(&sampleID)
 	}
 	if errors.Is(err, sql.ErrNoRows) {
 		return service.ErrLeaseFenced
@@ -566,6 +613,7 @@ func insertEvaluationSampleAndAssignment(
 	modelConfig []byte,
 	modelConfigSHA256 string,
 	sampleIndex int,
+	leaseEpoch int64,
 ) error {
 	if _, err := tx.ExecContext(ctx, `
 		INSERT INTO evaluation_samples (
@@ -579,8 +627,9 @@ func insertEvaluationSampleAndAssignment(
 	assignmentID := uuid.New()
 	idempotencyKey := assignmentIdempotencyKey(runID, evaluationCase.id, modelRoute, sampleIndex, 1)
 	if _, err := tx.ExecContext(ctx, `
-		INSERT INTO evaluation_assignments (id, sample_id, attempt, idempotency_key, status)
-		VALUES ($1, $2, 1, $3, 'pending')`, assignmentID, sampleID, idempotencyKey); err != nil {
+		INSERT INTO evaluation_assignments (
+			id, sample_id, attempt, idempotency_key, status, lease_epoch, work_origin
+		) VALUES ($1, $2, 1, $3, 'pending', $4, 'initial')`, assignmentID, sampleID, idempotencyKey, leaseEpoch); err != nil {
 		return fmt.Errorf("insert evaluation assignment: %w", err)
 	}
 	if _, err := tx.ExecContext(ctx, `
@@ -607,7 +656,7 @@ type assignmentCandidate struct {
 	workOrigin        string
 }
 
-func reclaimExpiredAssignment(ctx context.Context, tx *sql.Tx, capabilities []string) (*assignmentCandidate, error) {
+func reclaimExpiredAssignment(ctx context.Context, tx *sql.Tx, capabilities []string, workerTenantID int64) (*assignmentCandidate, error) {
 	var expired assignmentCandidate
 	err := tx.QueryRowContext(ctx, `
 		SELECT a.id, a.sample_id, s.run_id, s.case_id, s.model_route,
@@ -624,6 +673,7 @@ func reclaimExpiredAssignment(ctx context.Context, tx *sql.Tx, capabilities []st
 		WHERE a.status IN ('leased', 'running') AND a.lease_expires_at <= NOW()
 			AND a.lease_epoch = r.control_epoch
 			AND c.capability_domain = ANY($1::text[])
+			AND ($2::bigint = 0 OR r.tenant_id = $2)
 			AND p.enabled = TRUE
 			AND k.is_evaluation = TRUE AND k.status = 'active' AND k.deleted_at IS NULL
 			AND (k.expires_at IS NULL OR k.expires_at > NOW())
@@ -642,7 +692,7 @@ func reclaimExpiredAssignment(ctx context.Context, tx *sql.Tx, capabilities []st
 			)
 		ORDER BY a.lease_expires_at, a.id
 		FOR UPDATE OF a SKIP LOCKED
-		LIMIT 1`, pq.Array(capabilities)).Scan(
+		LIMIT 1`, pq.Array(capabilities), workerTenantID).Scan(
 		&expired.id, &expired.sampleID, &expired.runID, &expired.caseID,
 		&expired.modelRoute, &expired.modelConfig, &expired.modelConfigSHA256,
 		&expired.priority, &expired.sampleIndex, &expired.attempt, &expired.leaseEpoch, &expired.workOrigin)
@@ -686,7 +736,7 @@ func reclaimExpiredAssignment(ctx context.Context, tx *sql.Tx, capabilities []st
 	return &replacement, nil
 }
 
-func selectPendingAssignment(ctx context.Context, tx *sql.Tx, capabilities []string) (assignmentCandidate, error) {
+func selectPendingAssignment(ctx context.Context, tx *sql.Tx, capabilities []string, workerTenantID int64) (assignmentCandidate, error) {
 	var candidate assignmentCandidate
 	err := tx.QueryRowContext(ctx, `
 		SELECT a.id, a.sample_id, s.run_id, s.case_id, s.model_route,
@@ -702,6 +752,7 @@ func selectPendingAssignment(ctx context.Context, tx *sql.Tx, capabilities []str
 		LEFT JOIN groups g ON g.id = k.group_id
 		WHERE a.status = 'pending' AND a.lease_epoch = r.control_epoch
 			AND c.capability_domain = ANY($1::text[])
+			AND ($2::bigint = 0 OR r.tenant_id = $2)
 			AND p.enabled = TRUE
 			AND k.is_evaluation = TRUE AND k.status = 'active' AND k.deleted_at IS NULL
 			AND (k.expires_at IS NULL OR k.expires_at > NOW())
@@ -720,7 +771,7 @@ func selectPendingAssignment(ctx context.Context, tx *sql.Tx, capabilities []str
 			)
 		ORDER BY s.priority, a.created_at, a.id
 		FOR UPDATE OF a SKIP LOCKED
-		LIMIT 1`, pq.Array(capabilities)).Scan(
+		LIMIT 1`, pq.Array(capabilities), workerTenantID).Scan(
 		&candidate.id, &candidate.sampleID, &candidate.runID, &candidate.caseID,
 		&candidate.modelRoute, &candidate.modelConfig, &candidate.modelConfigSHA256,
 		&candidate.priority, &candidate.sampleIndex, &candidate.attempt, &candidate.leaseEpoch, &candidate.workOrigin)
@@ -936,6 +987,7 @@ func insertEvaluationBudgetWarning(
 	ctx context.Context,
 	tx *sql.Tx,
 	runID uuid.UUID,
+	controlEpoch int64,
 	reservedCost decimal.Decimal,
 	budgetLimit decimal.Decimal,
 ) error {
@@ -947,10 +999,13 @@ func insertEvaluationBudgetWarning(
 		return fmt.Errorf("insert evaluation budget warning ledger entry: %w", err)
 	}
 	if _, err := tx.ExecContext(ctx, `
-		INSERT INTO evaluation_run_events (id, run_id, event_type, payload, actor_type)
+		INSERT INTO evaluation_run_events (
+			id, run_id, event_type, payload, actor_type, control_epoch, idempotency_key
+		)
 		VALUES ($1, $2, 'budget_warning', jsonb_build_object(
 			'reserved_cost', $3::text, 'budget_limit', $4::text, 'threshold_percent', 80
-		), 'system')`, uuid.New(), runID, reservedCost, budgetLimit); err != nil {
+		), 'system', $5, $6)`, uuid.New(), runID, reservedCost, budgetLimit, controlEpoch,
+		hashReconcileKey("budget-warning:"+runID.String())); err != nil {
 		return fmt.Errorf("insert evaluation budget warning event: %w", err)
 	}
 	return nil

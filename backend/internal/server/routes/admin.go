@@ -120,7 +120,18 @@ func RegisterAdminRoutes(
 		// Quality Radar governance and read projections. The nil guard keeps
 		// lightweight route tests that construct partial handler sets valid.
 		registerRadarGovernanceRoutes(admin, h)
+		registerRadarReliabilityRoutes(admin, h)
 	}
+}
+
+func registerRadarReliabilityRoutes(admin *gin.RouterGroup, h *handler.Handlers) {
+	if h == nil || h.Admin == nil || h.Admin.RadarReliability == nil {
+		return
+	}
+	reliability := admin.Group("/radar/reliability")
+	reliability.POST("/load-plans", h.Admin.RadarReliability.CreateLoadPlan)
+	reliability.POST("/load-plans/:id/publish", h.Admin.RadarReliability.PublishLoadPlan)
+	reliability.GET("/load-plans/:id", h.Admin.RadarReliability.GetLoadPlan)
 }
 
 func registerRadarGovernanceRoutes(admin *gin.RouterGroup, h *handler.Handlers) {
@@ -151,6 +162,7 @@ func registerRadarGovernanceRoutes(admin *gin.RouterGroup, h *handler.Handlers) 
 		radar.POST("/runs/:id/resume", h.Admin.RadarGovernance.ResumeRun)
 		radar.POST("/runs/:id/cancel", h.Admin.RadarGovernance.CancelRun)
 		radar.POST("/runs/:id/fence", h.Admin.RadarGovernance.FenceRun)
+		radar.GET("/runs/:id/reliability-facts", h.Admin.RadarGovernance.GetReliabilityFacts)
 		radar.POST("/revision-batches", h.Admin.RadarGovernance.CreateRevisionBatch)
 		radar.POST("/revision-batches/:id/fence", h.Admin.RadarGovernance.FenceRevisionBatch)
 		radar.POST("/revision-batches/:id/resume", h.Admin.RadarGovernance.ResumeRevisionBatch)
@@ -171,8 +183,10 @@ func registerRadarGovernanceRoutes(admin *gin.RouterGroup, h *handler.Handlers) 
 
 		policies := radar.Group("/policies")
 		policies.POST("", h.Admin.RadarGovernance.CreateGatePolicy)
+		policies.POST("/:id/approve", h.Admin.RadarGovernance.ApproveGatePolicy)
 		policies.POST("/:id/activate", h.Admin.RadarGovernance.ActivateGatePolicy)
 		radar.POST("/release-subjects", h.Admin.RadarGovernance.CreateReleaseSubject)
+		radar.GET("/release-subjects/:id", h.Admin.RadarGovernance.GetReleaseSubject)
 		radar.POST("/release-subjects/:id/activate", h.Admin.RadarGovernance.ActivateReleaseSubject)
 		radar.POST("/release-subjects/:id/revoke", h.Admin.RadarGovernance.RevokeReleaseSubject)
 

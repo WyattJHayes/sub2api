@@ -12,6 +12,7 @@ from urllib.parse import urlsplit, urlunsplit
 import httpx
 
 from ..models import AssignmentLease, ExecutionEvidence
+from ..observability import traceparent_for
 from ..runner import environment_fingerprint
 
 
@@ -88,8 +89,10 @@ class BaseExecutor:
     ) -> ProtocolResponse:
         started = time.monotonic()
         raw_request = json.dumps(body, ensure_ascii=False, separators=(",", ":")).encode()
+        request_headers = dict(headers)
+        request_headers.setdefault("traceparent", traceparent_for(lease.route_trace_id))
         response = await self.client.post(
-            self.gateway_path(url), content=raw_request, headers=dict(headers)
+            self.gateway_path(url), content=raw_request, headers=request_headers
         )
         body_bytes = response.content
         if len(body_bytes) > self.max_response_bytes:

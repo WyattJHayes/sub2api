@@ -51,6 +51,17 @@ type RadarGovernanceRepository interface {
 	GetAlert(ctx context.Context, id uuid.UUID) (*RadarAlertRecord, error)
 }
 
+// RadarGatePolicyApprovalRepository is kept separate from the broad governance
+// repository so read-only and test doubles do not gain an approval mutation by
+// accident. Production governance repositories must implement it.
+type RadarGatePolicyApprovalRepository interface {
+	ApproveGatePolicy(ctx context.Context, input RadarGatePolicyApprovalInput) (*RadarGatePolicyApprovalRecord, error)
+}
+
+type RadarReleaseSubjectRepository interface {
+	GetReleaseSubject(ctx context.Context, id uuid.UUID) (*ReleaseSubjectRecord, error)
+}
+
 type WorkerClaimMode string
 
 const (
@@ -259,6 +270,28 @@ type RadarGatePolicyRecord struct {
 	RetiredAt           *time.Time
 }
 
+type RadarGatePolicyApprovalInput struct {
+	PolicyID     uuid.UUID
+	ApproverID   int64
+	Role         RadarRole
+	PolicyHash   string
+	EvidenceHash string
+	EffectiveAt  time.Time
+	ExpiresAt    time.Time
+}
+
+type RadarGatePolicyApprovalRecord struct {
+	ID           uuid.UUID `json:"id"`
+	PolicyID     uuid.UUID `json:"policy_id"`
+	ApproverID   int64     `json:"approver_id"`
+	Role         RadarRole `json:"role"`
+	PolicyHash   string    `json:"policy_hash"`
+	EvidenceHash string    `json:"evidence_hash"`
+	EffectiveAt  time.Time `json:"effective_at"`
+	ExpiresAt    time.Time `json:"expires_at"`
+	CreatedAt    time.Time `json:"created_at"`
+}
+
 type ReleaseSubjectInput struct {
 	RunID        uuid.UUID
 	Subject      ReleaseSubject
@@ -271,6 +304,9 @@ type ReleaseSubjectRecord struct {
 	SubjectHash string         `json:"subject_hash"`
 	Subject     ReleaseSubject `json:"subject"`
 	CreatedAt   time.Time      `json:"created_at"`
+	Active      bool           `json:"active"`
+	EffectiveAt *time.Time     `json:"effective_at,omitempty"`
+	ExpiresAt   *time.Time     `json:"expires_at,omitempty"`
 }
 
 type ReleaseSubjectActivationInput struct {
@@ -306,6 +342,7 @@ type RadarGatePolicyActivationInput struct {
 type RadarGatePolicyHead struct {
 	Scope     RadarGovernanceScope `json:"scope"`
 	PolicyID  uuid.UUID            `json:"policy_id"`
+	PolicyHash string              `json:"policy_hash"`
 	EventID   uuid.UUID            `json:"event_id"`
 	UpdatedAt time.Time            `json:"updated_at"`
 }

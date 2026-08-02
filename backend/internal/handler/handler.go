@@ -61,6 +61,7 @@ type AdminHandlers struct {
 	Compliance             *admin.ComplianceHandler
 	AuditLog               *admin.AuditLogHandler
 	RadarGovernance        *admin.RadarGovernanceHandler
+	RadarReliability       *admin.RadarReliabilityHandler
 }
 
 // Handlers contains all HTTP handlers

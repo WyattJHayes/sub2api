@@ -118,6 +118,9 @@ func (r *radarGovernanceRepository) CreateDataset(ctx context.Context, input ser
 	if err != nil {
 		return nil, err
 	}
+	if tenantID, scoped := radarTenant(ctx); scoped && input.CreatedBy != tenantID {
+		return nil, service.ErrRadarForbidden
+	}
 	tx, err := beginRadarWriterTx(ctx, r.db, "api")
 	if err != nil {
 		return nil, fmt.Errorf("begin evaluation dataset creation: %w", err)
@@ -126,8 +129,8 @@ func (r *radarGovernanceRepository) CreateDataset(ctx context.Context, input ser
 	record := &service.RadarDatasetRecord{ID: uuid.New()}
 	err = tx.QueryRowContext(ctx, `
 		INSERT INTO evaluation_dataset_versions
-			(id, dataset_key, version, manifest_sha256, source_type, status, created_by)
-		VALUES ($1, $2, $3, $4, $5, 'draft', $6)
+			(id, dataset_key, version, manifest_sha256, source_type, status, created_by, tenant_id)
+		VALUES ($1, $2, $3, $4, $5, 'draft', $6, $6)
 		RETURNING dataset_key, version, manifest_sha256, source_type, status, created_by, created_at`,
 		record.ID, strings.TrimSpace(input.DatasetKey), strings.TrimSpace(input.Version), manifest,
 		input.SourceType, input.CreatedBy).Scan(&record.DatasetKey, &record.Version,
@@ -166,13 +169,21 @@ func (r *radarGovernanceRepository) PublishDataset(ctx context.Context, datasetI
 		return nil, errors.New("evaluation dataset and actor are required")
 	}
 	record := &service.RadarDatasetRecord{ID: datasetID}
-	err := r.db.QueryRowContext(ctx, `
+	query := `
 		UPDATE evaluation_dataset_versions d
 		SET status = 'published', published_at = NOW(), updated_at = NOW()
 		WHERE d.id = $1 AND d.status = 'draft'
+		`
+	args := []any{datasetID}
+	if tenantID, scoped := radarTenant(ctx); scoped {
+		query += ` AND d.tenant_id = $2`
+		args = append(args, tenantID)
+	}
+	query += `
 		RETURNING d.dataset_key, d.version, d.manifest_sha256, d.source_type, d.status,
 		          (SELECT COUNT(*) FROM evaluation_cases c WHERE c.dataset_version_id = d.id),
-		          d.created_by, d.published_at, d.created_at`, datasetID).Scan(
+		          d.created_by, d.published_at, d.created_at`
+	err := r.db.QueryRowContext(ctx, query, args...).Scan(
 		&record.DatasetKey, &record.Version, &record.ManifestSHA256, &record.SourceType,
 		&record.Status, &record.CaseCount, &record.CreatedBy, &record.PublishedAt, &record.CreatedAt)
 	if errors.Is(err, sql.ErrNoRows) {
@@ -197,13 +208,16 @@ func (r *radarGovernanceRepository) CreatePlan(ctx context.Context, input servic
 	if _, err := evaluationMatrixEntries(input.ModelMatrix); err != nil {
 		return nil, err
 	}
+	if tenantID, scoped := radarTenant(ctx); scoped && input.CreatedBy != tenantID {
+		return nil, service.ErrRadarForbidden
+	}
 	record := &service.RadarPlanRecord{ID: uuid.New()}
 	err := r.db.QueryRowContext(ctx, `
 		INSERT INTO evaluation_plans (
 			id, name, dataset_version_id, gateway_api_key_id, trigger_type, model_matrix,
-			max_run_cost, daily_cost_limit, max_concurrency, created_by
+			max_run_cost, daily_cost_limit, max_concurrency, created_by, tenant_id
 		)
-		SELECT $1, $2, d.id, k.id, $5, $6::jsonb, $7, $8, $9, $10
+		SELECT $1, $2, d.id, k.id, $5, $6::jsonb, $7, $8, $9, $10, d.tenant_id
 		FROM evaluation_dataset_versions d
 		JOIN api_keys k ON k.id = $4
 		JOIN users u ON u.id = k.user_id
@@ -214,6 +228,8 @@ func (r *radarGovernanceRepository) CreatePlan(ctx context.Context, input servic
 		  AND (k.quota = 0 OR k.quota_used < k.quota)
 		  AND u.status = 'active' AND u.deleted_at IS NULL
 		  AND (g.id IS NULL OR (g.status = 'active' AND g.deleted_at IS NULL))
+		  AND d.tenant_id = $10
+		  AND k.user_id = $10
 		RETURNING id, name, dataset_version_id, gateway_api_key_id, trigger_type,
 		          model_matrix, max_run_cost, daily_cost_limit, max_concurrency,
 		          enabled, created_by, created_at`, record.ID, strings.TrimSpace(input.Name),

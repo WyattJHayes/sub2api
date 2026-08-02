@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -19,16 +20,26 @@ import (
 
 type radarGovernanceHandlerRepoStub struct {
 	*service.StaticRadarAuthorizer
-	proposed             *service.RadarBaselineInput
-	gateDecision         *service.RadarGateDecisionInput
-	releaseSubject       *service.ReleaseSubjectInput
-	policyActivation     *service.RadarGatePolicyActivationInput
-	baselineActivation   *service.RadarBaselineActivationInput
-	dataset              *service.CreateRadarDatasetInput
-	plan                 *service.CreateRadarPlanInput
-	run                  *service.CreateRunInput
-	evaluationKeyID      int64
-	evaluationKeyActorID int64
+	proposed                  *service.RadarBaselineInput
+	gateDecision              *service.RadarGateDecisionInput
+	gatePolicy                *service.RadarGatePolicyInput
+	gatePolicyApproval        *service.RadarGatePolicyApprovalInput
+	gatePolicyApprovalErr     error
+	releaseSubject            *service.ReleaseSubjectInput
+	policyActivation          *service.RadarGatePolicyActivationInput
+	baselineActivation        *service.RadarBaselineActivationInput
+	dataset                   *service.CreateRadarDatasetInput
+	plan                      *service.CreateRadarPlanInput
+	run                       *service.CreateRunInput
+	evaluationKeyID           int64
+	evaluationKeyActorID      int64
+	gateReliability           *service.RadarGateReliabilityContext
+	gateReliabilityRunID      uuid.UUID
+	gateReliabilityPolicyID   uuid.UUID
+	gateReliabilityObservedAt time.Time
+	reliabilityFacts          *service.RadarReliabilityFacts
+	createdRoleBindingTenant  int64
+	createdRoleBindingActor   int64
 }
 
 type radarRunControlHandlerRepoStub struct{ radarGovernanceHandlerRepoStub }
@@ -119,7 +130,9 @@ func (s *radarGovernanceHandlerRepoStub) CreateRunWithMatrix(_ context.Context, 
 	return &service.EvaluationRun{ID: uuid.New(), PlanID: input.PlanID}, nil
 }
 
-func (s *radarGovernanceHandlerRepoStub) CreateRoleBinding(context.Context, service.RadarRoleBindingInput) (*service.RadarRoleBinding, error) {
+func (s *radarGovernanceHandlerRepoStub) CreateRoleBinding(ctx context.Context, input service.RadarRoleBindingInput) (*service.RadarRoleBinding, error) {
+	s.createdRoleBindingTenant, _ = middleware.RadarTenantID(ctx)
+	s.createdRoleBindingActor = input.ActorID
 	return &service.RadarRoleBinding{ID: uuid.New(), Enabled: true}, nil
 }
 func (s *radarGovernanceHandlerRepoStub) DisableRoleBinding(context.Context, uuid.UUID, int64) error {
@@ -141,8 +154,20 @@ func (s *radarGovernanceHandlerRepoStub) ActivateBaseline(context.Context, uuid.
 func (s *radarGovernanceHandlerRepoStub) GetBaseline(context.Context, uuid.UUID) (*service.RadarBaseline, error) {
 	return &service.RadarBaseline{}, nil
 }
-func (s *radarGovernanceHandlerRepoStub) CreateGatePolicy(context.Context, service.RadarGatePolicyInput) (*service.RadarGatePolicyRecord, error) {
-	return &service.RadarGatePolicyRecord{}, nil
+func (s *radarGovernanceHandlerRepoStub) CreateGatePolicy(_ context.Context, input service.RadarGatePolicyInput) (*service.RadarGatePolicyRecord, error) {
+	s.gatePolicy = &input
+	return &service.RadarGatePolicyRecord{PolicyHash: input.PolicyHash}, nil
+}
+func (s *radarGovernanceHandlerRepoStub) ApproveGatePolicy(_ context.Context, input service.RadarGatePolicyApprovalInput) (*service.RadarGatePolicyApprovalRecord, error) {
+	s.gatePolicyApproval = &input
+	if s.gatePolicyApprovalErr != nil {
+		return nil, s.gatePolicyApprovalErr
+	}
+	return &service.RadarGatePolicyApprovalRecord{
+		PolicyID: input.PolicyID, ApproverID: input.ApproverID, Role: input.Role,
+		PolicyHash: input.PolicyHash, EvidenceHash: input.EvidenceHash,
+		EffectiveAt: input.EffectiveAt, ExpiresAt: input.ExpiresAt,
+	}, nil
 }
 func (s *radarGovernanceHandlerRepoStub) CreateReleaseSubject(_ context.Context, input service.ReleaseSubjectInput) (*service.ReleaseSubjectRecord, error) {
 	s.releaseSubject = &input
@@ -165,6 +190,17 @@ func (s *radarGovernanceHandlerRepoStub) ActivateBaselineHead(_ context.Context,
 func (s *radarGovernanceHandlerRepoStub) RecordGateDecision(_ context.Context, input service.RadarGateDecisionInput) (*service.RadarGateDecisionRecord, error) {
 	s.gateDecision = &input
 	return &service.RadarGateDecisionRecord{Status: input.Status, RuleIDs: input.RuleIDs}, nil
+}
+func (s *radarGovernanceHandlerRepoStub) LoadRadarGateReliability(_ context.Context, runID, policyID uuid.UUID) (*service.RadarGateReliabilityContext, error) {
+	s.gateReliabilityRunID = runID
+	s.gateReliabilityPolicyID = policyID
+	if s.gateReliability != nil {
+		s.gateReliabilityObservedAt = s.gateReliability.ObservedAt
+	}
+	return s.gateReliability, nil
+}
+func (s *radarGovernanceHandlerRepoStub) GetReliabilityFacts(_ context.Context, _ uuid.UUID, _ uuid.UUID, _ string) (*service.RadarReliabilityFacts, error) {
+	return s.reliabilityFacts, nil
 }
 func (s *radarGovernanceHandlerRepoStub) WaiveGateDecision(context.Context, service.RadarGateWaiverInput) (*service.RadarGateWaiverRecord, error) {
 	return &service.RadarGateWaiverRecord{}, nil
@@ -214,6 +250,29 @@ func TestRadarGovernanceHandlerUsesAuthenticatedActorForBaselineProposal(t *test
 	require.Equal(t, int64(77), repo.proposed.ProposedBy)
 }
 
+func TestRadarGovernanceHandlerPropagatesAuthenticatedTenant(t *testing.T) {
+	auth := service.NewStaticRadarAuthorizer(map[int64][]service.RadarRole{77: {service.RolePlatformAdmin}})
+	repo := &radarGovernanceHandlerRepoStub{StaticRadarAuthorizer: auth}
+	h := NewRadarGovernanceHandler(repo)
+	c := radarGovernanceTestContext(77)
+	c.Request = httptest.NewRequest(http.MethodPost, "/", bytes.NewBufferString(`{"actor_id":999,"role":"viewer"}`))
+	h.CreateRoleBinding(c)
+	require.Equal(t, http.StatusCreated, c.Writer.Status())
+	require.Equal(t, int64(77), repo.createdRoleBindingTenant)
+	require.Equal(t, int64(999), repo.createdRoleBindingActor)
+}
+
+func TestRadarGovernanceHandlerDefaultsRoleBindingActorToAuthenticatedUser(t *testing.T) {
+	auth := service.NewStaticRadarAuthorizer(map[int64][]service.RadarRole{77: {service.RolePlatformAdmin}})
+	repo := &radarGovernanceHandlerRepoStub{StaticRadarAuthorizer: auth}
+	h := NewRadarGovernanceHandler(repo)
+	c := radarGovernanceTestContext(77)
+	c.Request = httptest.NewRequest(http.MethodPost, "/", bytes.NewBufferString(`{"role":"viewer"}`))
+	h.CreateRoleBinding(c)
+	require.Equal(t, http.StatusCreated, c.Writer.Status())
+	require.Equal(t, int64(77), repo.createdRoleBindingActor)
+}
+
 func TestRadarGovernanceHandlerRejectsMissingRadarPermission(t *testing.T) {
 	auth := service.NewStaticRadarAuthorizer(map[int64][]service.RadarRole{77: {service.RoleViewer}})
 	repo := &radarGovernanceHandlerRepoStub{StaticRadarAuthorizer: auth}
@@ -224,16 +283,176 @@ func TestRadarGovernanceHandlerRejectsMissingRadarPermission(t *testing.T) {
 	require.Equal(t, http.StatusForbidden, c.Writer.Status())
 }
 
+func TestRadarGovernanceHandlerComputesGatePolicyHashServerSide(t *testing.T) {
+	auth := service.NewStaticRadarAuthorizer(map[int64][]service.RadarRole{77: {service.RoleQualityAdmin}})
+	repo := &radarGovernanceHandlerRepoStub{StaticRadarAuthorizer: auth}
+	h := NewRadarGovernanceHandler(repo)
+	c := radarGovernanceTestContext(77)
+	policy := json.RawMessage(`{"aggregate_delta_pp":-2,"observation_days":14}`)
+	wantHash, err := service.DigestCanonicalJSON(policy)
+	require.NoError(t, err)
+	c.Request = httptest.NewRequest(http.MethodPost, "/", bytes.NewBufferString(`{
+		"version":9,
+		"policy":`+string(policy)+`,
+		"policy_hash":"`+strings.Repeat("f", 64)+`",
+		"enforcement_starts_at":"2026-08-01T00:00:00Z",
+		"approval_expires_at":"2026-08-02T00:00:00Z"
+	}`))
+
+	h.CreateGatePolicy(c)
+
+	require.Equal(t, http.StatusCreated, c.Writer.Status())
+	require.NotNil(t, repo.gatePolicy)
+	require.Equal(t, wantHash, repo.gatePolicy.PolicyHash)
+	require.NotEqual(t, strings.Repeat("f", 64), repo.gatePolicy.PolicyHash)
+}
+
+func TestRadarGovernanceHandlerAcceptsGatePolicyWithoutClientHash(t *testing.T) {
+	auth := service.NewStaticRadarAuthorizer(map[int64][]service.RadarRole{77: {service.RoleQualityAdmin}})
+	repo := &radarGovernanceHandlerRepoStub{StaticRadarAuthorizer: auth}
+	h := NewRadarGovernanceHandler(repo)
+	c := radarGovernanceTestContext(77)
+	policy := json.RawMessage(`{"observation_days":14}`)
+	wantHash, err := service.DigestCanonicalJSON(policy)
+	require.NoError(t, err)
+	c.Request = httptest.NewRequest(http.MethodPost, "/", bytes.NewBufferString(`{
+		"version":10,
+		"policy":`+string(policy)+`,
+		"enforcement_starts_at":"2026-08-01T00:00:00Z",
+		"approval_expires_at":"2026-08-02T00:00:00Z"
+	}`))
+
+	h.CreateGatePolicy(c)
+
+	require.Equal(t, http.StatusCreated, c.Writer.Status())
+	require.NotNil(t, repo.gatePolicy)
+	require.Equal(t, wantHash, repo.gatePolicy.PolicyHash)
+}
+
+func TestRadarGovernanceHandlerReadsTenantScopedReliabilityFacts(t *testing.T) {
+	auth := service.NewStaticRadarAuthorizer(map[int64][]service.RadarRole{77: {service.RoleViewer}})
+	runID, policyID := uuid.New(), uuid.New()
+	repo := &radarGovernanceHandlerRepoStub{
+		StaticRadarAuthorizer: auth,
+		reliabilityFacts:      &service.RadarReliabilityFacts{RunID: runID, PolicyID: policyID, ProfileID: "staging-v1"},
+	}
+	h := NewRadarGovernanceHandler(repo)
+	c := radarGovernanceTestContext(77)
+	c.Params = gin.Params{{Key: "id", Value: runID.String()}}
+	c.Request = httptest.NewRequest(http.MethodGet, "/?policy_id="+policyID.String()+"&profile_id=staging-v1", nil)
+	h.GetReliabilityFacts(c)
+	require.Equal(t, http.StatusOK, c.Writer.Status())
+}
+
+func TestRadarGovernanceHandlerApprovesGatePolicyWithAuthenticatedActor(t *testing.T) {
+	auth := service.NewStaticRadarAuthorizer(map[int64][]service.RadarRole{77: {service.RoleQualityAdmin}})
+	repo := &radarGovernanceHandlerRepoStub{StaticRadarAuthorizer: auth}
+	h := NewRadarGovernanceHandler(repo)
+	policyID := uuid.New()
+	c := radarGovernanceTestContext(77)
+	c.Params = gin.Params{{Key: "id", Value: policyID.String()}}
+	c.Request = httptest.NewRequest(http.MethodPost, "/", bytes.NewBufferString(`{
+		"role":"quality_admin",
+		"policy_hash":"`+strings.Repeat("a", 64)+`",
+		"evidence_hash":"`+strings.Repeat("b", 64)+`",
+		"effective_at":"2026-07-30T00:00:00Z",
+		"expires_at":"2026-08-02T00:00:00Z"
+	}`))
+
+	h.ApproveGatePolicy(c)
+
+	require.Equal(t, http.StatusOK, c.Writer.Status())
+	require.NotNil(t, repo.gatePolicyApproval)
+	require.Equal(t, policyID, repo.gatePolicyApproval.PolicyID)
+	require.Equal(t, int64(77), repo.gatePolicyApproval.ApproverID)
+	require.Equal(t, service.RoleQualityAdmin, repo.gatePolicyApproval.Role)
+}
+
+func TestRadarGovernanceHandlerRejectsGatePolicyApprovalRole(t *testing.T) {
+	auth := service.NewStaticRadarAuthorizer(map[int64][]service.RadarRole{77: {service.RoleQualityAdmin}})
+	repo := &radarGovernanceHandlerRepoStub{StaticRadarAuthorizer: auth}
+	h := NewRadarGovernanceHandler(repo)
+	c := radarGovernanceTestContext(77)
+	c.Params = gin.Params{{Key: "id", Value: uuid.NewString()}}
+	c.Request = httptest.NewRequest(http.MethodPost, "/", bytes.NewBufferString(`{
+		"role":"viewer",
+		"policy_hash":"`+strings.Repeat("a", 64)+`",
+		"evidence_hash":"`+strings.Repeat("b", 64)+`",
+		"effective_at":"2026-07-30T00:00:00Z",
+		"expires_at":"2026-08-02T00:00:00Z"
+	}`))
+
+	h.ApproveGatePolicy(c)
+
+	require.Equal(t, http.StatusBadRequest, c.Writer.Status())
+	require.Nil(t, repo.gatePolicyApproval)
+}
+
+func TestRadarGovernanceHandlerRejectsGatePolicyApprovalWithoutPermission(t *testing.T) {
+	auth := service.NewStaticRadarAuthorizer(map[int64][]service.RadarRole{77: {service.RoleViewer}})
+	repo := &radarGovernanceHandlerRepoStub{StaticRadarAuthorizer: auth}
+	h := NewRadarGovernanceHandler(repo)
+	c := radarGovernanceTestContext(77)
+	c.Params = gin.Params{{Key: "id", Value: uuid.NewString()}}
+	c.Request = httptest.NewRequest(http.MethodPost, "/", bytes.NewBufferString(`{
+		"role":"quality_admin",
+		"policy_hash":"`+strings.Repeat("a", 64)+`",
+		"evidence_hash":"`+strings.Repeat("b", 64)+`",
+		"effective_at":"2026-07-30T00:00:00Z",
+		"expires_at":"2026-08-02T00:00:00Z"
+	}`))
+
+	h.ApproveGatePolicy(c)
+
+	require.Equal(t, http.StatusForbidden, c.Writer.Status())
+	require.Nil(t, repo.gatePolicyApproval)
+}
+
+func TestRadarGovernanceHandlerPropagatesCreatorSelfApprovalRejection(t *testing.T) {
+	auth := service.NewStaticRadarAuthorizer(map[int64][]service.RadarRole{77: {service.RoleQualityAdmin}})
+	repo := &radarGovernanceHandlerRepoStub{
+		StaticRadarAuthorizer: auth,
+		gatePolicyApprovalErr: errors.New("gate policy creator cannot approve the same policy"),
+	}
+	h := NewRadarGovernanceHandler(repo)
+	c := radarGovernanceTestContext(77)
+	c.Params = gin.Params{{Key: "id", Value: uuid.NewString()}}
+	c.Request = httptest.NewRequest(http.MethodPost, "/", bytes.NewBufferString(`{
+		"role":"quality_admin",
+		"policy_hash":"`+strings.Repeat("a", 64)+`",
+		"evidence_hash":"`+strings.Repeat("b", 64)+`",
+		"effective_at":"2026-07-30T00:00:00Z",
+		"expires_at":"2026-08-02T00:00:00Z"
+	}`))
+
+	h.ApproveGatePolicy(c)
+
+	require.Equal(t, http.StatusInternalServerError, c.Writer.Status())
+	require.NotNil(t, repo.gatePolicyApproval)
+}
+
 func TestRadarGovernanceHandlerDerivesGateStatusServerSide(t *testing.T) {
 	auth := service.NewStaticRadarAuthorizer(map[int64][]service.RadarRole{77: {service.RoleReleaseManager}})
-	repo := &radarGovernanceHandlerRepoStub{StaticRadarAuthorizer: auth}
+	repo := &radarGovernanceHandlerRepoStub{
+		StaticRadarAuthorizer: auth,
+		gateReliability: &service.RadarGateReliabilityContext{
+			Policy: service.RadarGatePolicy{
+				Version: 1, ObservationDays: 14, EnforcementStartsAt: time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC),
+			},
+			InputLoaded: true,
+			Input: service.RadarGateInput{
+				EvidenceSufficient: false, RouteEvidencePresent: true, RouteMatch: true,
+				ObservationDays: 14,
+			},
+		},
+	}
 	h := NewRadarGovernanceHandler(repo)
 	c := radarGovernanceTestContext(77)
 	c.Request = httptest.NewRequest(http.MethodPost, "/", bytes.NewBufferString(`{
 		"run_id":"`+uuid.NewString()+`",
 		"policy_id":"`+uuid.NewString()+`",
 		"policy":{"version":1,"observation_days":14,"enforcement_starts_at":"2026-01-01T00:00:00Z","critical_domain_delta_pp":-3,"aggregate_delta_pp":-2,"confidence_level":0.95,"require_ci_exclude_zero":true},
-		"input":{"evidence_sufficient":false,"route_evidence_present":true,"route_match":true,"observed_at":"2026-07-27T00:00:00Z","observation_days":14},
+		"input":{"evidence_sufficient":true,"route_evidence_present":false,"route_match":false,"observed_at":"2026-07-27T00:00:00Z","observation_days":0,"new_p0_failure":true,"critical_delta_pp":-100,"aggregate_delta_pp":-100,"judge_disagreement":true},
 		"evidence_hash":"`+string(bytes.Repeat([]byte("c"), 64))+`"
 	}`))
 	h.EvaluateGate(c)
@@ -241,6 +460,89 @@ func TestRadarGovernanceHandlerDerivesGateStatusServerSide(t *testing.T) {
 	require.NotNil(t, repo.gateDecision)
 	require.Equal(t, service.RadarGateInsufficientEvidence, repo.gateDecision.Status)
 	require.Equal(t, []string{"evidence.sufficient"}, repo.gateDecision.RuleIDs)
+}
+
+func TestRadarGovernanceHandlerLoadsAuthoritativeReliabilityForGate(t *testing.T) {
+	auth := service.NewStaticRadarAuthorizer(map[int64][]service.RadarRole{77: {service.RoleReleaseManager}})
+	runID := uuid.New()
+	policyID := uuid.New()
+	supersedes := uuid.New()
+	observedAt := time.Date(2026, 7, 30, 0, 0, 0, 0, time.UTC)
+	sourceWatermark := json.RawMessage(`{"version":"radar-gate-reliability-watermark-v1","snapshot_refs":[{"snapshot_id":"` + uuid.NewString() + `"}]}`)
+	repo := &radarGovernanceHandlerRepoStub{
+		StaticRadarAuthorizer: auth,
+		gateReliability: &service.RadarGateReliabilityContext{
+			Policy: service.RadarGatePolicy{
+				Version: 7, ObservationDays: 14, EnforcementStartsAt: observedAt.Add(-time.Hour),
+				RequireReliability: true, MaxP99LatencyMS: 500,
+			},
+			ObservedAt:  observedAt,
+			InputLoaded: true,
+			Input: service.RadarGateInput{
+				EvidenceSufficient: true, RouteEvidencePresent: true, RouteMatch: true,
+				ObservationDays: 14,
+			},
+			Evidence: service.RadarGateReliabilityEvidence{
+				HeadPresent: true, Current: true, Fresh: true, DenominatorComplete: true,
+				HistogramIntegrityValid: true, SourceWatermarkValid: true, QueryVersionAllowed: true,
+				BillingReconciled: true, MaxP99LatencyMS: 501,
+			},
+			PolicyHash: strings.Repeat("d", 64), ReleaseSubjectHash: strings.Repeat("e", 64),
+			SourceWatermark: sourceWatermark, SupersedesDecisionID: &supersedes,
+		},
+	}
+	h := NewRadarGovernanceHandler(repo)
+	c := radarGovernanceTestContext(77)
+	c.Request = httptest.NewRequest(http.MethodPost, "/", bytes.NewBufferString(`{
+		"run_id":"`+runID.String()+`",
+		"policy_id":"`+policyID.String()+`",
+		"policy":{"version":1,"observation_days":1,"enforcement_starts_at":"2027-01-01T00:00:00Z"},
+		"input":{"evidence_sufficient":true,"route_evidence_present":true,"route_match":true,"observed_at":"2020-01-01T00:00:00Z","observation_days":14,"reliability_slo_breached":false},
+		"evidence":{"caller":"untrusted"},
+		"evidence_hash":"`+strings.Repeat("c", 64)+`"
+	}`))
+
+	h.EvaluateGate(c)
+
+	require.Equal(t, http.StatusOK, c.Writer.Status())
+	require.Equal(t, runID, repo.gateReliabilityRunID)
+	require.Equal(t, policyID, repo.gateReliabilityPolicyID)
+	require.Equal(t, observedAt, repo.gateReliabilityObservedAt)
+	require.NotNil(t, repo.gateDecision)
+	require.Equal(t, service.RadarGateBlocked, repo.gateDecision.Status)
+	require.Equal(t, []string{"slo.reliability.p99"}, repo.gateDecision.RuleIDs)
+	require.Equal(t, strings.Repeat("e", 64), repo.gateDecision.ReleaseSubjectHash)
+	require.JSONEq(t, string(sourceWatermark), string(repo.gateDecision.SourceWatermark))
+	require.Equal(t, &supersedes, repo.gateDecision.SupersedesDecisionID)
+	require.Len(t, repo.gateDecision.EvidenceHash, 64)
+	require.NotEqual(t, strings.Repeat("c", 64), repo.gateDecision.EvidenceHash)
+	var evidence map[string]any
+	require.NoError(t, json.Unmarshal(repo.gateDecision.Evidence, &evidence))
+	require.Equal(t, "radar-gate-evidence-v1", evidence["version"])
+	require.Equal(t, strings.Repeat("d", 64), evidence["policy_hash"])
+	require.Equal(t, observedAt.Format(time.RFC3339Nano), evidence["observed_at"])
+}
+
+func TestRadarGovernanceHandlerRejectsDirectGateDecision(t *testing.T) {
+	auth := service.NewStaticRadarAuthorizer(map[int64][]service.RadarRole{77: {service.RoleReleaseManager}})
+	repo := &radarGovernanceHandlerRepoStub{StaticRadarAuthorizer: auth}
+	h := NewRadarGovernanceHandler(repo)
+	runID := uuid.New()
+	policyID := uuid.New()
+	c := radarGovernanceTestContext(77)
+	c.Request = httptest.NewRequest(http.MethodPost, "/", bytes.NewBufferString(`{
+		"run_id":"`+runID.String()+`",
+		"policy_id":"`+policyID.String()+`",
+		"status":"passed",
+		"rule_ids":["pass"],
+		"evidence":{},
+		"evidence_hash":"`+strings.Repeat("a", 64)+`"
+	}`))
+
+	h.RecordGateDecision(c)
+
+	require.Equal(t, http.StatusConflict, c.Writer.Status())
+	require.Nil(t, repo.gateDecision)
 }
 
 func TestRadarGovernanceHandlerCreatesDatasetWithAuthenticatedActor(t *testing.T) {

@@ -18,7 +18,8 @@ import (
 )
 
 // RadarGovernanceHandler exposes the auditable Radar control-plane actions.
-// The authenticated subject is the only source of actor identity.
+// The authenticated subject supplies the audit actor. Role bindings may target
+// another subject after the repository verifies the tenant boundary.
 type RadarGovernanceHandler struct {
 	repo service.RadarGovernanceRepository
 }
@@ -32,6 +33,15 @@ func (h *RadarGovernanceHandler) actor(c *gin.Context) (int64, bool) {
 	if !ok || subject.UserID <= 0 {
 		response.Unauthorized(c, "User not authenticated")
 		return 0, false
+	}
+	tenantID := subject.TenantID
+	if tenantID <= 0 {
+		tenantID = subject.UserID
+	}
+	if c.Request != nil {
+		ctx := middleware.WithRadarTenant(c.Request.Context(), tenantID)
+		ctx = middleware.WithRadarActor(ctx, subject.UserID)
+		c.Request = c.Request.WithContext(ctx)
 	}
 	return subject.UserID, true
 }
@@ -216,7 +226,7 @@ func (h *RadarGovernanceHandler) StartRun(c *gin.Context) {
 }
 
 type radarRoleBindingRequest struct {
-	ActorID int64             `json:"actor_id" binding:"required,gt=0"`
+	ActorID int64             `json:"actor_id" binding:"omitempty,gt=0"`
 	Role    service.RadarRole `json:"role" binding:"required"`
 	Scope   json.RawMessage   `json:"scope"`
 }
@@ -250,8 +260,12 @@ func (h *RadarGovernanceHandler) CreateRoleBinding(c *gin.Context) {
 		response.BadRequest(c, "Invalid radar role")
 		return
 	}
+	targetActorID := req.ActorID
+	if targetActorID <= 0 {
+		targetActorID = createdBy
+	}
 	binding, err := h.repo.CreateRoleBinding(c.Request.Context(), service.RadarRoleBindingInput{
-		ActorID: req.ActorID, Role: req.Role, Scope: rawOrEmpty(req.Scope), CreatedBy: createdBy,
+		ActorID: targetActorID, Role: req.Role, Scope: rawOrEmpty(req.Scope), CreatedBy: createdBy,
 	})
 	if err != nil {
 		response.ErrorFrom(c, err)
@@ -449,6 +463,66 @@ func (h *RadarGovernanceHandler) CreateReleaseSubject(c *gin.Context) {
 	response.Created(c, record)
 }
 
+func (h *RadarGovernanceHandler) GetReleaseSubject(c *gin.Context) {
+	if _, ok := h.require(c, service.PermissionView); !ok {
+		return
+	}
+	id, ok := parseUUIDParam(c, "id")
+	if !ok {
+		return
+	}
+	reader, ok := h.repo.(service.RadarReleaseSubjectRepository)
+	if !ok {
+		response.Error(c, http.StatusServiceUnavailable, "Radar release subject reader is not available")
+		return
+	}
+	record, err := reader.GetReleaseSubject(c.Request.Context(), id)
+	if errors.Is(err, sql.ErrNoRows) {
+		response.NotFound(c, "Release subject not found")
+		return
+	}
+	if err != nil {
+		response.ErrorFrom(c, err)
+		return
+	}
+	response.Success(c, record)
+}
+
+func (h *RadarGovernanceHandler) GetReliabilityFacts(c *gin.Context) {
+	if _, ok := h.require(c, service.PermissionView); !ok {
+		return
+	}
+	runID, ok := parseUUIDParam(c, "id")
+	if !ok {
+		return
+	}
+	policyID, err := uuid.Parse(strings.TrimSpace(c.Query("policy_id")))
+	if err != nil || policyID == uuid.Nil {
+		response.BadRequest(c, "Invalid policy_id")
+		return
+	}
+	profileID := strings.TrimSpace(c.Query("profile_id"))
+	if profileID == "" {
+		response.BadRequest(c, "profile_id is required")
+		return
+	}
+	reader, ok := h.repo.(service.RadarReliabilityFactsRepository)
+	if !ok {
+		response.Error(c, http.StatusServiceUnavailable, "Radar reliability facts reader is not available")
+		return
+	}
+	facts, err := reader.GetReliabilityFacts(c.Request.Context(), runID, policyID, profileID)
+	if errors.Is(err, sql.ErrNoRows) {
+		response.NotFound(c, "Reliability facts not found")
+		return
+	}
+	if err != nil {
+		response.ErrorFrom(c, err)
+		return
+	}
+	response.Success(c, facts)
+}
+
 func (h *RadarGovernanceHandler) ActivateReleaseSubject(c *gin.Context) {
 	actorID, ok := h.require(c, service.PermissionGateDecide)
 	if !ok {
@@ -495,7 +569,6 @@ func (h *RadarGovernanceHandler) RevokeReleaseSubject(c *gin.Context) {
 type radarGatePolicyRequest struct {
 	Version             int             `json:"version" binding:"required,gt=0"`
 	Policy              json.RawMessage `json:"policy" binding:"required"`
-	PolicyHash          string          `json:"policy_hash" binding:"required,len=64"`
 	EnforcementStartsAt time.Time       `json:"enforcement_starts_at" binding:"required"`
 	ApprovalExpiresAt   time.Time       `json:"approval_expires_at" binding:"required"`
 }
@@ -509,8 +582,14 @@ func (h *RadarGovernanceHandler) CreateGatePolicy(c *gin.Context) {
 	if !decodeJSON(c, &req) {
 		return
 	}
+	policyDocument := rawOrEmpty(req.Policy)
+	policyHash, err := service.DigestCanonicalJSON(policyDocument)
+	if err != nil {
+		response.BadRequest(c, "gate policy must be valid canonical JSON")
+		return
+	}
 	policy, err := h.repo.CreateGatePolicy(c.Request.Context(), service.RadarGatePolicyInput{
-		Version: req.Version, Policy: rawOrEmpty(req.Policy), PolicyHash: req.PolicyHash,
+		Version: req.Version, Policy: policyDocument, PolicyHash: policyHash,
 		EnforcementStartsAt: req.EnforcementStartsAt, ApprovalExpiresAt: req.ApprovalExpiresAt, CreatedBy: actorID,
 	})
 	if err != nil {
@@ -518,6 +597,55 @@ func (h *RadarGovernanceHandler) CreateGatePolicy(c *gin.Context) {
 		return
 	}
 	response.Created(c, policy)
+}
+
+type radarGatePolicyApprovalRequest struct {
+	Role         service.RadarRole `json:"role" binding:"required"`
+	PolicyHash   string            `json:"policy_hash" binding:"required,len=64"`
+	EvidenceHash string            `json:"evidence_hash" binding:"required,len=64"`
+	EffectiveAt  time.Time         `json:"effective_at" binding:"required"`
+	ExpiresAt    time.Time         `json:"expires_at" binding:"required"`
+}
+
+func (h *RadarGovernanceHandler) ApproveGatePolicy(c *gin.Context) {
+	actorID, ok := h.actor(c)
+	if !ok || h == nil || h.repo == nil {
+		return
+	}
+	var req radarGatePolicyApprovalRequest
+	if !decodeJSON(c, &req) {
+		return
+	}
+	if req.Role != service.RoleQualityAdmin && req.Role != service.RoleReleaseManager {
+		response.BadRequest(c, "Approval role must be quality_admin or release_manager")
+		return
+	}
+	if err := h.repo.Require(c.Request.Context(), actorID, service.PermissionPolicyApprove); err != nil {
+		if errors.Is(err, service.ErrRadarForbidden) {
+			response.Forbidden(c, "Radar permission denied")
+		} else {
+			response.ErrorFrom(c, err)
+		}
+		return
+	}
+	policyID, ok := parseUUIDParam(c, "id")
+	if !ok {
+		return
+	}
+	approvalRepo, ok := h.repo.(service.RadarGatePolicyApprovalRepository)
+	if !ok {
+		response.Error(c, http.StatusServiceUnavailable, "Radar gate policy approval is not available")
+		return
+	}
+	approval, err := approvalRepo.ApproveGatePolicy(c.Request.Context(), service.RadarGatePolicyApprovalInput{
+		PolicyID: policyID, ApproverID: actorID, Role: req.Role, PolicyHash: req.PolicyHash,
+		EvidenceHash: req.EvidenceHash, EffectiveAt: req.EffectiveAt, ExpiresAt: req.ExpiresAt,
+	})
+	if err != nil {
+		response.ErrorFrom(c, err)
+		return
+	}
+	response.Success(c, approval)
 }
 
 func (h *RadarGovernanceHandler) ActivateGatePolicy(c *gin.Context) {
@@ -565,13 +693,9 @@ type radarGateDecisionRequest struct {
 }
 
 type radarGateEvaluationRequest struct {
-	RunID        uuid.UUID                 `json:"run_id" binding:"required"`
-	BaselineID   *uuid.UUID                `json:"baseline_id"`
-	PolicyID     uuid.UUID                 `json:"policy_id" binding:"required"`
-	Policy       radarGateEvaluationPolicy `json:"policy" binding:"required"`
-	Input        radarGateEvaluationInput  `json:"input" binding:"required"`
-	Evidence     json.RawMessage           `json:"evidence"`
-	EvidenceHash string                    `json:"evidence_hash" binding:"required,len=64"`
+	RunID      uuid.UUID  `json:"run_id" binding:"required"`
+	BaselineID *uuid.UUID `json:"baseline_id"`
+	PolicyID   uuid.UUID  `json:"policy_id" binding:"required"`
 }
 
 type radarGateEvaluationPolicy struct {
@@ -607,27 +731,41 @@ func (h *RadarGovernanceHandler) EvaluateGate(c *gin.Context) {
 	if !decodeJSON(c, &req) {
 		return
 	}
-	decision := service.EvaluateRadarGate(service.RadarGatePolicy{
-		Version: req.Policy.Version, ObservationDays: req.Policy.ObservationDays,
-		EnforcementStartsAt:   req.Policy.EnforcementStartsAt,
-		CriticalDomainDeltaPP: req.Policy.CriticalDomainDeltaPP,
-		AggregateDeltaPP:      req.Policy.AggregateDeltaPP,
-		ConfidenceLevel:       req.Policy.ConfidenceLevel,
-		RequireCIExcludeZero:  req.Policy.RequireCIExcludeZero,
-	}, service.RadarGateInput{
-		EvidenceSufficient:   req.Input.EvidenceSufficient,
-		RouteEvidencePresent: req.Input.RouteEvidencePresent, RouteMatch: req.Input.RouteMatch,
-		ObservedAt: req.Input.ObservedAt, ObservationDays: req.Input.ObservationDays,
-		NewP0Failure: req.Input.NewP0Failure, CriticalDeltaPP: req.Input.CriticalDeltaPP,
-		CriticalCIHighPP: req.Input.CriticalCIHighPP, AggregateDeltaPP: req.Input.AggregateDeltaPP,
-		AggregateCIHighPP:      req.Input.AggregateCIHighPP,
-		ReliabilitySLOBreached: req.Input.ReliabilitySLOBreached,
-		JudgeDisagreement:      req.Input.JudgeDisagreement,
-	})
+	loader, ok := h.repo.(service.RadarGateReliabilityLoader)
+	if !ok {
+		response.Error(c, http.StatusServiceUnavailable, "Radar reliability evidence loader is not available")
+		return
+	}
+	reliability, err := loader.LoadRadarGateReliability(c.Request.Context(), req.RunID, req.PolicyID)
+	if err != nil {
+		response.ErrorFrom(c, err)
+		return
+	}
+	if reliability == nil {
+		response.Error(c, http.StatusServiceUnavailable, "Radar reliability evidence is not available")
+		return
+	}
+	if !reliability.InputLoaded {
+		response.Error(c, http.StatusServiceUnavailable, "Radar gate input is not available from the trusted evidence loader")
+		return
+	}
+	input := reliability.Input
+	input.ObservedAt = reliability.ObservedAt
+	input.Reliability = &reliability.Evidence
+	decision := service.EvaluateRadarGate(reliability.Policy, input)
+	evidence, evidenceHash, err := service.BuildRadarGateEvidenceEnvelope(
+		req.RunID, req.PolicyID, reliability.PolicyHash, reliability.ObservedAt, input, reliability.Evidence,
+	)
+	if err != nil {
+		response.ErrorFrom(c, err)
+		return
+	}
 	record, err := h.repo.RecordGateDecision(c.Request.Context(), service.RadarGateDecisionInput{
 		RunID: req.RunID, BaselineID: req.BaselineID, PolicyID: req.PolicyID,
 		Status: decision.Status, RuleIDs: []string{decision.RuleID},
-		Evidence: rawOrEmpty(req.Evidence), EvidenceHash: req.EvidenceHash,
+		Evidence: evidence, EvidenceHash: evidenceHash,
+		ReleaseSubjectHash: reliability.ReleaseSubjectHash, SourceWatermark: reliability.SourceWatermark,
+		SupersedesDecisionID: reliability.SupersedesDecisionID,
 	})
 	if err != nil {
 		response.ErrorFrom(c, err)
@@ -637,22 +775,10 @@ func (h *RadarGovernanceHandler) EvaluateGate(c *gin.Context) {
 }
 
 func (h *RadarGovernanceHandler) RecordGateDecision(c *gin.Context) {
-	if _, ok := h.require(c, service.PermissionGateDecide); !ok {
-		return
-	}
-	var req radarGateDecisionRequest
-	if !decodeJSON(c, &req) {
-		return
-	}
-	decision, err := h.repo.RecordGateDecision(c.Request.Context(), service.RadarGateDecisionInput{
-		RunID: req.RunID, BaselineID: req.BaselineID, PolicyID: req.PolicyID, Status: req.Status,
-		RuleIDs: req.RuleIDs, Evidence: rawOrEmpty(req.Evidence), EvidenceHash: req.EvidenceHash,
-	})
-	if err != nil {
-		response.ErrorFrom(c, err)
-		return
-	}
-	response.Success(c, decision)
+	// Gate decisions must be produced by EvaluateGate after loading a repeatable
+	// read-only evidence snapshot. Keep this method as an explicit conflict for
+	// old callers so no request can write an arbitrary status or evidence.
+	response.Error(c, http.StatusConflict, "direct gate decision recording is disabled; use /gates/evaluate")
 }
 
 type radarGateWaiverRequest struct {

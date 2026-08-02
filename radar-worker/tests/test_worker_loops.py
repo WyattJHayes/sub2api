@@ -1,11 +1,15 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
+from types import SimpleNamespace
 from uuid import uuid4
 
+import httpx
 import pytest
+import rfc8785
 from pydantic import SecretStr
 
 from sub2api_radar.config import Settings
@@ -100,6 +104,7 @@ class StatisticsClientStub:
         self.lease = lease
         self.completed = []
         self.completed_epochs = []
+        self.failures = []
 
     async def claim_analysis(self, capabilities):
         return self.lease
@@ -109,14 +114,53 @@ class StatisticsClientStub:
         self.completed_epochs.append(lease_epoch)
         return {}
 
+    async def fail_analysis(self, lease_id, token, failure_code, lease_epoch=0):
+        self.failures.append((lease_id, token, failure_code, lease_epoch))
+
 
 class RunnerClientStub:
     def __init__(self) -> None:
         self.evidence_submissions = []
         self.complete_calls = []
         self.fail_calls = []
+        self.artifact_calls = []
+        self.artifact_requests = []
+        self.artifact_payloads = []
+
+    async def presign_artifact(self, assignment_id, token, request, lease_epoch=0):
+        self.artifact_calls.append("presign")
+        self.artifact_requests.append(request)
+        return SimpleNamespace(
+            artifact_id=uuid4(),
+            object_key=f"evaluation-artifacts/run/sample/{assignment_id}",
+            upload_url="https://objects.example.test/upload",
+            upload_headers={"Content-Type": "application/json"},
+            sha256=request.sha256,
+            bytes=request.bytes,
+            mime_type=request.mime_type,
+            expires_at=datetime.now(UTC) + timedelta(minutes=5),
+        )
+
+    async def upload_artifact(self, upload, payload):
+        self.artifact_calls.append("upload")
+        self.artifact_payloads.append(payload)
+
+    async def confirm_artifact(self, assignment_id, token, confirmation, lease_epoch=0):
+        self.artifact_calls.append("confirm")
+        return ArtifactReceipt(
+            id=confirmation.artifact_id,
+            object_key=confirmation.object_key,
+            sha256=confirmation.sha256,
+            bytes=confirmation.bytes,
+            mime_type="application/json",
+            scan_status="clean",
+            scanner="clamav",
+            scanned_at=datetime.now(UTC),
+            confirmed_at=datetime.now(UTC),
+        )
 
     async def submit_evidence(self, assignment_id, token, item, lease_epoch=0):
+        self.artifact_calls.append("submit")
         self.evidence_submissions.append((assignment_id, token, item, lease_epoch))
         return type("Receipt", (), {"model_dump": lambda self, mode="json": {"accepted": True}})()
 
@@ -177,6 +221,76 @@ async def test_grader_processes_one_lease_and_heartbeats() -> None:
 
 
 @pytest.mark.asyncio
+async def test_grader_loads_bound_evidence_from_controlled_artifact() -> None:
+    assignment_id = uuid4()
+    sample_id = uuid4()
+    item = evidence(sample_id, assignment_id)
+    payload = rfc8785.dumps(item.model_dump(mode="json"))
+    digest = hashlib.sha256(payload).hexdigest()
+    artifact_id = uuid4()
+    lease = GradingLease(
+        id=uuid4(),
+        assignment_id=assignment_id,
+        sample_id=sample_id,
+        run_id=uuid4(),
+        case=case(),
+        route_trace_id="trace",
+        evidence_manifest=item.model_dump(mode="json"),
+        evidence=(
+            ArtifactReceipt(
+                id=artifact_id,
+                object_key="evaluation-artifacts/run/sample/evidence.json",
+                sha256=digest,
+                bytes=len(payload),
+                mime_type="application/json",
+                scan_status="clean",
+                scanner="clamav",
+                scanned_at=datetime.now(UTC),
+                confirmed_at=datetime.now(UTC),
+            ),
+        ),
+        lease_token="lease-token-123456",
+        lease_expires_at=datetime.now(UTC) + timedelta(minutes=1),
+        lease_epoch=7,
+    )
+
+    class ControlledArtifactGraderClient(GraderClientStub):
+        def __init__(self, grading_lease):
+            super().__init__(grading_lease)
+            self.artifact_calls = []
+
+        async def presign_grading_artifact(
+            self, lease_id, token, requested_artifact_id, lease_epoch=0
+        ):
+            self.artifact_calls.append(("presign", requested_artifact_id, lease_epoch))
+            return SimpleNamespace(
+                artifact_id=requested_artifact_id,
+                object_key="evaluation-artifacts/run/sample/evidence.json",
+                download_url="https://objects.example.test/read",
+                sha256=digest,
+                bytes=len(payload),
+                mime_type="application/json",
+                expires_at=datetime.now(UTC) + timedelta(minutes=5),
+            )
+
+        async def download_artifact(self, download):
+            self.artifact_calls.append(("download", download.artifact_id, 7))
+            return payload
+
+    client = ControlledArtifactGraderClient(lease)
+    worker = GraderWorker(settings("grader"), client, capabilities=["exact"])
+
+    await worker.process_once()
+
+    assert client.artifact_calls == [
+        ("presign", artifact_id, 7),
+        ("download", artifact_id, 7),
+    ]
+    assert len(client.submissions) == 1
+    assert client.submissions[0].evidence_hashes == (digest,)
+
+
+@pytest.mark.asyncio
 async def test_statistics_processes_one_lease_with_plugin() -> None:
     lease = AnalysisLease(
         id=uuid4(),
@@ -203,6 +317,30 @@ async def test_statistics_processes_one_lease_with_plugin() -> None:
     assert len(client.completed) == 1
     assert client.completed[0].effective_pair_count == 0
     assert client.completed_epochs == [7]
+
+
+@pytest.mark.asyncio
+async def test_statistics_reports_analyzer_failure_to_control_plane() -> None:
+    lease = AnalysisLease(
+        id=uuid4(),
+        run_id=uuid4(),
+        capability_domain="reasoning",
+        model_route="route-a",
+        window="daily",
+        analysis_version="v1",
+        window_start=datetime.now(UTC),
+        lease_token="lease-token-123456",
+        lease_expires_at=datetime.now(UTC) + timedelta(minutes=1),
+        lease_epoch=7,
+    )
+    client = StatisticsClientStub(lease)
+
+    def analyzer(_lease):
+        raise ValueError("malformed analyzer output")
+
+    worker = StatisticsWorker(settings("statistics"), client, analyzer=analyzer)
+    assert await worker.process_once()
+    assert client.failures == [(lease.id, lease.lease_token, "statistics_worker_error", 7)]
 
 
 @pytest.mark.asyncio
@@ -235,6 +373,13 @@ async def test_runner_stops_after_evidence_upload_and_leaves_completion_to_grade
 
     assert len(client.evidence_submissions) == 1
     assert client.evidence_submissions[0][3] == 7
+    assert client.artifact_calls == ["presign", "upload", "confirm", "submit"]
+    assert len(client.artifact_payloads) == 1
+    assert (
+        hashlib.sha256(client.artifact_payloads[0]).hexdigest()
+        == client.artifact_requests[0].sha256
+    )
+    assert len(client.artifact_payloads[0]) == client.artifact_requests[0].bytes
     assert client.complete_calls == []
     assert client.fail_calls == []
 
@@ -358,3 +503,34 @@ def test_runner_main_reports_missing_executor(monkeypatch) -> None:
     monkeypatch.delenv("RADAR_EXECUTOR", raising=False)
     with pytest.raises(SystemExit, match="RADAR_EXECUTOR"):
         runner_main([])
+
+
+@pytest.mark.asyncio
+async def test_runner_retries_transient_control_plane_disconnect_without_exiting(tmp_path) -> None:
+    class DisconnectedClient:
+        def __init__(self) -> None:
+            self.claims = 0
+
+        async def claim_assignment(self, _capabilities):
+            self.claims += 1
+            raise httpx.ConnectError("control plane unavailable", request=httpx.Request("POST", "https://radar.example.test"))
+
+        async def wait_assignment(self):
+            raise AssertionError("claim failure should be handled before wait")
+
+    client = DisconnectedClient()
+    worker = Runner(
+        settings("runner").model_copy(update={"state_dir": str(tmp_path)}),
+        client,
+        RunnerExecutorStub(evidence(uuid4(), uuid4())),
+        capabilities=["reasoning"],
+    )
+    stop = asyncio.Event()
+
+    async def stop_after_retry(*_args) -> None:
+        stop.set()
+
+    worker._wait_for_control_plane_retry = stop_after_retry
+    await worker.run_forever(stop)
+
+    assert client.claims == 1

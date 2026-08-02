@@ -2,6 +2,7 @@
 package internal
 
 import (
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"net/http"
@@ -22,9 +23,11 @@ const (
 )
 
 type RadarGraderHandler struct {
-	repo   service.EvaluationGradingRepository
-	runner service.EvaluationRunnerRepository
-	config *config.Config
+	repo        service.EvaluationGradingRepository
+	runner      service.EvaluationRunnerRepository
+	reliability service.ReliabilitySnapshotPublisher
+	execution   service.RadarReliabilityExecutionRepository
+	config      *config.Config
 }
 
 func NewRadarGraderHandler(repo service.EvaluationGradingRepository, configs ...*config.Config) *RadarGraderHandler {
@@ -35,6 +38,12 @@ func NewRadarGraderHandler(repo service.EvaluationGradingRepository, configs ...
 	h := &RadarGraderHandler{repo: repo, config: cfg}
 	if runner, ok := repo.(service.EvaluationRunnerRepository); ok {
 		h.runner = runner
+	}
+	if publisher, ok := repo.(service.ReliabilitySnapshotPublisher); ok {
+		h.reliability = publisher
+	}
+	if execution, ok := repo.(service.RadarReliabilityExecutionRepository); ok {
+		h.execution = execution
 	}
 	return h
 }
@@ -57,6 +66,7 @@ func RegisterRadarGraderRoutes(r gin.IRouter, h *RadarGraderHandler) {
 	worker.POST("/leases/:id/evidence", h.SubmitEvidence)
 	worker.POST("/leases/:id/artifacts/presign", h.PresignArtifact)
 	worker.POST("/leases/:id/artifacts/confirm", h.ConfirmArtifact)
+	worker.POST("/grading-leases/:id/artifacts/:artifact_id/read", h.PresignGradingArtifactRead)
 	worker.POST("/leases/:id/complete", h.CompleteAssignment)
 	worker.POST("/leases/:id/fail", h.FailAssignment)
 	worker.POST("/grading-leases/:id/heartbeat", h.HeartbeatGradingLease)
@@ -64,6 +74,13 @@ func RegisterRadarGraderRoutes(r gin.IRouter, h *RadarGraderHandler) {
 	worker.POST("/grading-leases/:id/fail", h.FailGradingLease)
 	worker.POST("/analysis-jobs:claim", h.ClaimAnalysisJob)
 	worker.POST("/analysis-jobs/:id/complete", h.CompleteAnalysisJob)
+	worker.POST("/analysis-jobs/:id/fail", h.FailAnalysisJob)
+	worker.POST("/reliability-snapshots", h.PublishReliabilitySnapshot)
+	worker.GET("/fault-experiments/:id", h.GetFaultExperiment)
+	worker.POST("/fault-experiments/:id/actions", h.ApplyFaultAction)
+	worker.POST("/fault-experiments/:id/events", h.AppendFaultEvent)
+	worker.GET("/recovery-evidence/:id/observation", h.GetRecoveryObservation)
+	worker.POST("/recovery-evidence/:id", h.PublishRecoveryEvidence)
 }
 
 type claimWorkerRequest struct {
@@ -92,6 +109,10 @@ func (h *RadarGraderHandler) ClaimGradingLease(c *gin.Context) {
 	workerID, err := h.repo.AuthenticateWorker(c.Request.Context(), token, "grader")
 	if err != nil {
 		h.writeWorkerError(c, err)
+		return
+	}
+	bindRadarWorker(c, workerID)
+	if !h.touchWorkerHeartbeat(c, h.repo, workerID, "grader") {
 		return
 	}
 	lease, err := h.repo.ClaimGradingLease(c.Request.Context(), workerID, mergeCapabilities(request.GraderIDs, request.Capabilities), radarLeaseTTL(request.LeaseSeconds))
@@ -132,6 +153,10 @@ func (h *RadarGraderHandler) ClaimAssignment(c *gin.Context) {
 	workerID, err := h.runner.AuthenticateRunner(c.Request.Context(), token)
 	if err != nil {
 		h.writeWorkerError(c, err)
+		return
+	}
+	bindRadarWorker(c, workerID)
+	if !h.touchWorkerHeartbeat(c, h.runner, workerID, "runner") {
 		return
 	}
 	lease, err := h.runner.ClaimAssignment(c.Request.Context(), workerID, req.Capabilities, radarLeaseTTL(req.LeaseSeconds))
@@ -373,6 +398,58 @@ func (h *RadarGraderHandler) ConfirmArtifact(c *gin.Context) {
 	response.Success(c, receipt)
 }
 
+func (h *RadarGraderHandler) PresignGradingArtifactRead(c *gin.Context) {
+	leaseID, ok := parseRadarLeaseID(c)
+	if !ok {
+		return
+	}
+	artifactID, err := uuid.Parse(strings.TrimSpace(c.Param("artifact_id")))
+	if err != nil || artifactID == uuid.Nil {
+		response.BadRequest(c, "invalid artifact id")
+		return
+	}
+	reader, ok := h.repo.(service.EvaluationArtifactReadRepository)
+	if !ok {
+		response.InternalError(c, "artifact read repository unavailable")
+		return
+	}
+	workerToken, ok := radarWorkerToken(c)
+	if !ok {
+		response.Unauthorized(c, "worker authorization required")
+		return
+	}
+	workerID, err := h.repo.AuthenticateWorker(c.Request.Context(), workerToken, "grader")
+	if err != nil {
+		h.writeWorkerError(c, err)
+		return
+	}
+	bindRadarWorker(c, workerID)
+	var request struct {
+		LeaseToken string `json:"lease_token"`
+		LeaseEpoch int64  `json:"lease_epoch"`
+	}
+	if c.Request.ContentLength != 0 {
+		if err := c.ShouldBindJSON(&request); err != nil {
+			response.BadRequest(c, "invalid artifact read request")
+			return
+		}
+	}
+	leaseToken := radarLeaseToken(c)
+	if leaseToken == "" {
+		leaseToken = strings.TrimSpace(request.LeaseToken)
+	}
+	if leaseToken == "" {
+		response.BadRequest(c, "lease token is required")
+		return
+	}
+	download, err := reader.PresignGradingArtifactRead(c.Request.Context(), workerID, leaseID, leaseToken, artifactID, request.LeaseEpoch)
+	if err != nil {
+		h.writeWorkerError(c, err)
+		return
+	}
+	response.Success(c, download)
+}
+
 func (h *RadarGraderHandler) CompleteAssignment(c *gin.Context) {
 	id, ok := parseRadarLeaseID(c)
 	if !ok {
@@ -451,11 +528,28 @@ func (h *RadarGraderHandler) runnerAuth(c *gin.Context) (service.EvaluationRunne
 		response.Unauthorized(c, "worker authorization required")
 		return nil, false
 	}
-	if _, err := h.runner.AuthenticateRunner(c.Request.Context(), token); err != nil {
+	workerID, err := h.runner.AuthenticateRunner(c.Request.Context(), token)
+	if err != nil {
 		h.writeWorkerError(c, err)
 		return nil, false
 	}
+	bindRadarWorker(c, workerID)
+	if !h.touchWorkerHeartbeat(c, h.runner, workerID, "runner") {
+		return nil, false
+	}
 	return h.runner, true
+}
+
+func (h *RadarGraderHandler) touchWorkerHeartbeat(c *gin.Context, repo any, workerID uuid.UUID, workerKind string) bool {
+	heartbeatRepo, ok := repo.(service.EvaluationWorkerHeartbeatRepository)
+	if !ok {
+		return true
+	}
+	if err := heartbeatRepo.TouchWorkerHeartbeat(c.Request.Context(), workerID, workerKind); err != nil {
+		h.writeWorkerError(c, err)
+		return false
+	}
+	return true
 }
 
 func (h *RadarGraderHandler) HeartbeatGradingLease(c *gin.Context) {
@@ -468,10 +562,12 @@ func (h *RadarGraderHandler) HeartbeatGradingLease(c *gin.Context) {
 		response.Unauthorized(c, "worker authorization required")
 		return
 	}
-	if _, err := h.repo.AuthenticateWorker(c.Request.Context(), token, "grader"); err != nil {
+	workerID, err := h.repo.AuthenticateWorker(c.Request.Context(), token, "grader")
+	if err != nil {
 		h.writeWorkerError(c, err)
 		return
 	}
+	bindRadarWorker(c, workerID)
 	var request struct {
 		LeaseSeconds int    `json:"lease_seconds"`
 		LeaseToken   string `json:"lease_token"`
@@ -509,10 +605,12 @@ func (h *RadarGraderHandler) CompleteGradingLease(c *gin.Context) {
 		response.Unauthorized(c, "worker authorization required")
 		return
 	}
-	if _, err := h.repo.AuthenticateWorker(c.Request.Context(), token, "grader"); err != nil {
+	workerID, err := h.repo.AuthenticateWorker(c.Request.Context(), token, "grader")
+	if err != nil {
 		h.writeWorkerError(c, err)
 		return
 	}
+	bindRadarWorker(c, workerID)
 	var request struct {
 		LeaseToken     string               `json:"lease_token"`
 		Score          decimal.Decimal      `json:"score"`
@@ -566,10 +664,12 @@ func (h *RadarGraderHandler) FailGradingLease(c *gin.Context) {
 		response.Unauthorized(c, "worker authorization required")
 		return
 	}
-	if _, err := h.repo.AuthenticateWorker(c.Request.Context(), token, "grader"); err != nil {
+	workerID, err := h.repo.AuthenticateWorker(c.Request.Context(), token, "grader")
+	if err != nil {
 		h.writeWorkerError(c, err)
 		return
 	}
+	bindRadarWorker(c, workerID)
 	var request struct {
 		FailureClass string `json:"failure_class"`
 		FailureCode  string `json:"failure_code"`
@@ -617,6 +717,10 @@ func (h *RadarGraderHandler) ClaimAnalysisJob(c *gin.Context) {
 		h.writeWorkerError(c, err)
 		return
 	}
+	bindRadarWorker(c, workerID)
+	if !h.touchWorkerHeartbeat(c, h.repo, workerID, "statistics") {
+		return
+	}
 	lease, err := h.repo.ClaimAnalysisJob(c.Request.Context(), workerID, request.Capabilities, radarLeaseTTL(request.LeaseSeconds))
 	if err != nil {
 		h.writeWorkerError(c, err)
@@ -639,10 +743,12 @@ func (h *RadarGraderHandler) CompleteAnalysisJob(c *gin.Context) {
 		response.Unauthorized(c, "worker authorization required")
 		return
 	}
-	if _, err := h.repo.AuthenticateWorker(c.Request.Context(), token, "statistics"); err != nil {
+	workerID, err := h.repo.AuthenticateWorker(c.Request.Context(), token, "statistics")
+	if err != nil {
 		h.writeWorkerError(c, err)
 		return
 	}
+	bindRadarWorker(c, workerID)
 	var request struct {
 		LeaseToken string `json:"lease_token"`
 		service.AggregateSubmission
@@ -671,6 +777,248 @@ func (h *RadarGraderHandler) CompleteAnalysis(c *gin.Context) {
 	h.CompleteAnalysisJob(c)
 }
 
+func (h *RadarGraderHandler) FailAnalysisJob(c *gin.Context) {
+	jobID, ok := parseRadarLeaseID(c)
+	if !ok {
+		return
+	}
+	token, ok := radarWorkerToken(c)
+	if !ok {
+		response.Unauthorized(c, "worker authorization required")
+		return
+	}
+	if h == nil || h.repo == nil {
+		response.InternalError(c, "grading repository unavailable")
+		return
+	}
+	workerID, err := h.repo.AuthenticateWorker(c.Request.Context(), token, "statistics")
+	if err != nil {
+		h.writeWorkerError(c, err)
+		return
+	}
+	bindRadarWorker(c, workerID)
+	failureRepo, ok := h.repo.(service.AnalysisFailureRepository)
+	if !ok {
+		response.InternalError(c, "analysis failure repository unavailable")
+		return
+	}
+	var request struct {
+		LeaseToken  string `json:"lease_token"`
+		FailureCode string `json:"failure_code"`
+		LeaseEpoch  int64  `json:"lease_epoch"`
+	}
+	if err := c.ShouldBindJSON(&request); err != nil {
+		response.BadRequest(c, "invalid analysis failure request")
+		return
+	}
+	leaseToken := radarLeaseToken(c)
+	if leaseToken == "" {
+		leaseToken = strings.TrimSpace(request.LeaseToken)
+	}
+	if leaseToken == "" {
+		response.BadRequest(c, "lease token is required")
+		return
+	}
+	if err := failureRepo.FailAnalysisJob(c.Request.Context(), jobID, leaseToken, request.FailureCode, request.LeaseEpoch); err != nil {
+		h.writeWorkerError(c, err)
+		return
+	}
+	response.Success(c, gin.H{"analysis_job_id": jobID, "status": "failed"})
+}
+
+// PublishReliabilitySnapshot accepts only statistics-worker submissions. The
+// authenticated worker ID is injected after token validation, so callers
+// cannot impersonate another worker in the payload.
+func (h *RadarGraderHandler) PublishReliabilitySnapshot(c *gin.Context) {
+	if h == nil || h.repo == nil || h.reliability == nil {
+		response.InternalError(c, "reliability publisher unavailable")
+		return
+	}
+	token, ok := radarWorkerToken(c)
+	if !ok {
+		response.Unauthorized(c, "worker authorization required")
+		return
+	}
+	workerID, err := h.repo.AuthenticateWorker(c.Request.Context(), token, "statistics")
+	if err != nil {
+		h.writeWorkerError(c, err)
+		return
+	}
+	bindRadarWorker(c, workerID)
+	var submission service.ReliabilitySnapshotSubmission
+	if err := c.ShouldBindJSON(&submission); err != nil {
+		response.BadRequest(c, "invalid reliability snapshot submission")
+		return
+	}
+	submission.WorkerID = workerID
+	if strings.TrimSpace(submission.WorkerImageDigest) == "" {
+		response.BadRequest(c, "worker image digest is required")
+		return
+	}
+	receipt, err := h.reliability.PublishReliabilitySnapshot(c.Request.Context(), submission)
+	if err != nil {
+		h.writeWorkerError(c, err)
+		return
+	}
+	response.Success(c, receipt)
+}
+
+func (h *RadarGraderHandler) controlPlaneWorkerAuth(c *gin.Context) bool {
+	if h == nil || h.repo == nil || h.execution == nil {
+		response.InternalError(c, "reliability execution repository unavailable")
+		return false
+	}
+	token, ok := radarWorkerToken(c)
+	if !ok {
+		response.Unauthorized(c, "worker authorization required")
+		return false
+	}
+	workerID, err := h.repo.AuthenticateWorker(c.Request.Context(), token, "statistics")
+	if err != nil {
+		h.writeWorkerError(c, err)
+		return false
+	}
+	bindRadarWorker(c, workerID)
+	return true
+}
+
+func bindRadarWorker(c *gin.Context, workerID uuid.UUID) {
+	if c == nil || c.Request == nil || workerID == uuid.Nil {
+		return
+	}
+	c.Request = c.Request.WithContext(service.WithRadarWorkerID(c.Request.Context(), workerID))
+}
+
+func parseRadarControlPlaneID(c *gin.Context) (uuid.UUID, bool) {
+	id, err := uuid.Parse(strings.TrimSpace(c.Param("id")))
+	if err != nil || id == uuid.Nil {
+		response.BadRequest(c, "invalid Radar control-plane id")
+		return uuid.Nil, false
+	}
+	return id, true
+}
+
+func (h *RadarGraderHandler) GetFaultExperiment(c *gin.Context) {
+	if !h.controlPlaneWorkerAuth(c) {
+		return
+	}
+	id, ok := parseRadarControlPlaneID(c)
+	if !ok {
+		return
+	}
+	record, err := h.execution.GetApprovedFaultExperiment(c.Request.Context(), id)
+	if errors.Is(err, sql.ErrNoRows) {
+		response.NotFound(c, "approved fault experiment not found")
+		return
+	}
+	if err != nil {
+		h.writeWorkerError(c, err)
+		return
+	}
+	response.Success(c, record)
+}
+
+func (h *RadarGraderHandler) ApplyFaultAction(c *gin.Context) {
+	if !h.controlPlaneWorkerAuth(c) {
+		return
+	}
+	id, ok := parseRadarControlPlaneID(c)
+	if !ok {
+		return
+	}
+	var request service.RadarFaultActionRequest
+	if err := c.ShouldBindJSON(&request); err != nil {
+		response.BadRequest(c, "invalid fault action request")
+		return
+	}
+	receipt, err := h.execution.ApplyFaultAction(c.Request.Context(), id, request)
+	if errors.Is(err, sql.ErrNoRows) {
+		response.NotFound(c, "fault experiment not found")
+		return
+	}
+	if err != nil {
+		h.writeWorkerError(c, err)
+		return
+	}
+	response.Success(c, receipt)
+}
+
+func (h *RadarGraderHandler) AppendFaultEvent(c *gin.Context) {
+	if !h.controlPlaneWorkerAuth(c) {
+		return
+	}
+	id, ok := parseRadarControlPlaneID(c)
+	if !ok {
+		return
+	}
+	var event service.RadarFaultEventSubmission
+	if err := c.ShouldBindJSON(&event); err != nil {
+		response.BadRequest(c, "invalid fault event")
+		return
+	}
+	if event.ExperimentID != uuid.Nil && event.ExperimentID != id {
+		response.BadRequest(c, "fault event experiment does not match path")
+		return
+	}
+	event.ExperimentID = id
+	receipt, err := h.execution.AppendFaultEvent(c.Request.Context(), event)
+	if err != nil {
+		h.writeWorkerError(c, err)
+		return
+	}
+	response.Success(c, receipt)
+}
+
+func (h *RadarGraderHandler) GetRecoveryObservation(c *gin.Context) {
+	if !h.controlPlaneWorkerAuth(c) {
+		return
+	}
+	id, ok := parseRadarControlPlaneID(c)
+	if !ok {
+		return
+	}
+	record, err := h.execution.GetRecoveryObservation(c.Request.Context(), id)
+	if errors.Is(err, service.ErrRecoveryObservationNotFound) || errors.Is(err, sql.ErrNoRows) {
+		response.NotFound(c, "recovery observation not found")
+		return
+	}
+	if err != nil {
+		h.writeWorkerError(c, err)
+		return
+	}
+	var observation any
+	if err := json.Unmarshal(record.Observation, &observation); err != nil {
+		response.InternalError(c, "recovery observation is not valid JSON")
+		return
+	}
+	response.Success(c, gin.H{"observation": observation})
+}
+
+func (h *RadarGraderHandler) PublishRecoveryEvidence(c *gin.Context) {
+	if !h.controlPlaneWorkerAuth(c) {
+		return
+	}
+	id, ok := parseRadarControlPlaneID(c)
+	if !ok {
+		return
+	}
+	var submission service.RadarRecoveryEvidenceSubmission
+	if err := c.ShouldBindJSON(&submission); err != nil {
+		response.BadRequest(c, "invalid recovery evidence")
+		return
+	}
+	receipt, err := h.execution.PublishRecoveryEvidence(c.Request.Context(), id, submission)
+	if errors.Is(err, service.ErrRecoveryObservationNotFound) {
+		response.NotFound(c, "recovery observation not found")
+		return
+	}
+	if err != nil {
+		h.writeWorkerError(c, err)
+		return
+	}
+	response.Success(c, receipt)
+}
+
 func (h *RadarGraderHandler) writeWorkerError(c *gin.Context, err error) {
 	switch {
 	case errors.Is(err, service.ErrWorkerKindMismatch):
@@ -686,6 +1034,23 @@ func (h *RadarGraderHandler) writeWorkerError(c *gin.Context, err error) {
 		response.BadRequest(c, err.Error())
 	case errors.Is(err, service.ErrArtifactInvalid), errors.Is(err, service.ErrArtifactNotFound), errors.Is(err, service.ErrArtifactObjectMismatch):
 		response.BadRequest(c, err.Error())
+	case errors.Is(err, service.ErrArtifactScanRejected):
+		response.Error(c, http.StatusUnprocessableEntity, err.Error())
+	case errors.Is(err, service.ErrArtifactScanFailed), errors.Is(err, service.ErrArtifactScannerUnavailable),
+		errors.Is(err, service.ErrArtifactObjectStoreUnavailable), errors.Is(err, service.ErrArtifactObjectMetadataUnavailable):
+		c.Header("Retry-After", "1")
+		response.Error(c, http.StatusServiceUnavailable, err.Error())
+	case errors.Is(err, service.ErrReliabilitySnapshotInvalid):
+		response.BadRequest(c, err.Error())
+	case errors.Is(err, service.ErrFaultExperimentInvalid), errors.Is(err, service.ErrFaultActionInvalid),
+		errors.Is(err, service.ErrFaultEventInvalid), errors.Is(err, service.ErrRecoveryEvidenceInvalid):
+		response.BadRequest(c, err.Error())
+	case errors.Is(err, service.ErrRecoveryObservationNotFound):
+		response.NotFound(c, "recovery observation not found")
+	case errors.Is(err, service.ErrWorkerIdentityMismatch):
+		response.Forbidden(c, "worker identity is not authorized")
+	case errors.Is(err, service.ErrRadarForbidden):
+		response.Forbidden(c, "worker tenant is not authorized")
 	default:
 		response.InternalError(c, err.Error())
 	}

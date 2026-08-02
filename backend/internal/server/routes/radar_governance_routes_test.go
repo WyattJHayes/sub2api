@@ -15,7 +15,8 @@ func TestRadarGovernanceActionRoutesDoNotConflictWithAlertIDs(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	router := gin.New()
 	handlers := &handler.Handlers{Admin: &handler.AdminHandlers{
-		RadarGovernance: adminhandler.NewRadarGovernanceHandler(nil),
+		RadarGovernance:  adminhandler.NewRadarGovernanceHandler(nil),
+		RadarReliability: adminhandler.NewRadarReliabilityHandler(nil),
 	}}
 	adminAuth := servermiddleware.AdminAuthMiddleware(func(c *gin.Context) { c.Next() })
 	auditLog := servermiddleware.AuditLogMiddleware(func(c *gin.Context) { c.Next() })
@@ -38,6 +39,7 @@ func TestRadarGovernanceActionRoutesDoNotConflictWithAlertIDs(t *testing.T) {
 		http.MethodPost + " /api/v1/admin/radar/runs/:id/resume",
 		http.MethodPost + " /api/v1/admin/radar/runs/:id/cancel",
 		http.MethodPost + " /api/v1/admin/radar/runs/:id/fence",
+		http.MethodGet + " /api/v1/admin/radar/runs/:id/reliability-facts",
 		http.MethodPost + " /api/v1/admin/radar/revision-batches",
 		http.MethodPost + " /api/v1/admin/radar/revision-batches/:id/fence",
 		http.MethodPost + " /api/v1/admin/radar/revision-batches/:id/resume",
@@ -45,11 +47,17 @@ func TestRadarGovernanceActionRoutesDoNotConflictWithAlertIDs(t *testing.T) {
 		http.MethodPost + " /api/v1/admin/radar/revision-batches/:id/repair",
 		http.MethodPost + " /api/v1/admin/radar/revision-batches/:id/compensating-head/approve",
 		http.MethodPost + " /api/v1/admin/radar/gates/evaluate",
+		http.MethodPost + " /api/v1/admin/radar/policies",
+		http.MethodPost + " /api/v1/admin/radar/policies/:id/approve",
 		http.MethodPost + " /api/v1/admin/radar/policies/:id/activate",
 		http.MethodPost + " /api/v1/admin/radar/release-subjects",
+		http.MethodGet + " /api/v1/admin/radar/release-subjects/:id",
 		http.MethodPost + " /api/v1/admin/radar/release-subjects/:id/activate",
 		http.MethodPost + " /api/v1/admin/radar/release-subjects/:id/revoke",
 		http.MethodPost + " /api/v1/admin/radar/alerts/observe",
+		http.MethodPost + " /api/v1/admin/radar/reliability/load-plans",
+		http.MethodPost + " /api/v1/admin/radar/reliability/load-plans/:id/publish",
+		http.MethodGet + " /api/v1/admin/radar/reliability/load-plans/:id",
 		http.MethodPost + " /api/v1/admin/radar/alerts/:id/acknowledge",
 		http.MethodPost + " /api/v1/admin/radar/workers",
 		http.MethodPost + " /api/v1/admin/radar/workers/:id/rotate-token",

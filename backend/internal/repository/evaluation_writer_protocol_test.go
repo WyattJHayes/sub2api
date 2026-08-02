@@ -195,3 +195,21 @@ func TestEvaluationGradingHeartbeatUsesWriterProtocol(t *testing.T) {
 	require.Equal(t, expiresAt, got)
 	require.NoError(t, mock.ExpectationsWereMet())
 }
+
+func TestEvaluationWorkerHeartbeatUsesWriterProtocol(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	require.NoError(t, err)
+	defer db.Close()
+
+	identity := defaultEvaluationWriterIdentity("worker")
+	expectWriterSetup(mock, identity)
+	workerID := uuid.New()
+	mock.ExpectExec(regexp.QuoteMeta("UPDATE evaluation_workers SET last_heartbeat_at = NOW(), updated_at = NOW()")).
+		WithArgs(workerID, "runner").
+		WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectCommit()
+
+	err = (&evaluationGradingRepository{db: db}).TouchWorkerHeartbeat(context.Background(), workerID, "runner")
+	require.NoError(t, err)
+	require.NoError(t, mock.ExpectationsWereMet())
+}

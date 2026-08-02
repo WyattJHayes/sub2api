@@ -270,9 +270,11 @@ func initializeApplication(buildInfo handler.BuildInfo) (*Application, error) {
 	auditLogHandler := admin.NewAuditLogHandler(auditLogService, totpService)
 	radarGovernanceRepository := repository.NewRadarGovernanceRepository(db)
 	radarGovernanceHandler := admin.NewRadarGovernanceHandler(radarGovernanceRepository)
+	radarReliabilityRepository := repository.NewRadarReliabilityRepository(db)
+	radarReliabilityHandler := admin.NewRadarReliabilityHandler(radarReliabilityRepository)
 	upstreamBillingProbeService := service.ProvideUpstreamBillingProbeService(accountRepository, accountTestService, settingService, leaderLockCache, db)
 	ollamaCloudUsageService := service.ProvideOllamaCloudUsageService(accountRepository, httpUpstream, settingService, secretEncryptor, configConfig, leaderLockCache, db)
-	adminHandlers := handler.ProvideAdminHandlers(dashboardHandler, adminUserHandler, groupHandler, accountHandler, adminAnnouncementHandler, dataManagementHandler, backupHandler, oAuthHandler, openAIOAuthHandler, geminiOAuthHandler, antigravityOAuthHandler, grokOAuthHandler, proxyHandler, adminRedeemHandler, promoHandler, settingHandler, opsHandler, systemHandler, adminSubscriptionHandler, adminUsageHandler, userAttributeHandler, errorPassthroughHandler, tlsFingerprintProfileHandler, adminAPIKeyHandler, scheduledTestHandler, channelHandler, channelMonitorHandler, channelMonitorRequestTemplateHandler, contentModerationHandler, promptAdminHandler, paymentHandler, affiliateHandler, complianceHandler, auditLogHandler, radarGovernanceHandler, upstreamBillingProbeService, ollamaCloudUsageService)
+	adminHandlers := handler.ProvideAdminHandlers(dashboardHandler, adminUserHandler, groupHandler, accountHandler, adminAnnouncementHandler, dataManagementHandler, backupHandler, oAuthHandler, openAIOAuthHandler, geminiOAuthHandler, antigravityOAuthHandler, grokOAuthHandler, proxyHandler, adminRedeemHandler, promoHandler, settingHandler, opsHandler, systemHandler, adminSubscriptionHandler, adminUsageHandler, userAttributeHandler, errorPassthroughHandler, tlsFingerprintProfileHandler, adminAPIKeyHandler, scheduledTestHandler, channelHandler, channelMonitorHandler, channelMonitorRequestTemplateHandler, contentModerationHandler, promptAdminHandler, paymentHandler, affiliateHandler, complianceHandler, auditLogHandler, radarGovernanceHandler, radarReliabilityHandler, upstreamBillingProbeService, ollamaCloudUsageService)
 	usageRecordWorkerPool := service.NewUsageRecordWorkerPool(configConfig)
 	userMsgQueueCache := repository.NewUserMsgQueueCache(redisClient)
 	userMessageQueueService := service.ProvideUserMessageQueueService(userMsgQueueCache, rpmCache, configConfig)
@@ -296,7 +298,18 @@ func initializeApplication(buildInfo handler.BuildInfo) (*Application, error) {
 	batchImageDownloadService := service.NewBatchImageDownloadService(batchImageRepository, accountRepository, batchImageDownloadLimiter, configConfig)
 	batchImageCleanupService := service.ProvideBatchImageCleanupService(batchImageRepository, accountRepository, configConfig)
 	batchImageHandler := handler.ProvideBatchImageHandler(batchImagePublicService, batchImageDownloadService, batchImageCleanupService, openAIGatewayHandler)
-	evaluationGradingRepository := repository.NewEvaluationGradingRepository(db)
+	evaluationArtifactObjectStore, err := repository.ProvideEvaluationArtifactObjectStore(configConfig)
+	if err != nil {
+		return nil, err
+	}
+	artifactScanner, err := repository.ProvideEvaluationArtifactScanner(evaluationArtifactObjectStore, configConfig)
+	if err != nil {
+		return nil, err
+	}
+	evaluationGradingRepository, err := repository.ProvideEvaluationGradingRepository(db, configConfig, evaluationArtifactObjectStore, artifactScanner)
+	if err != nil {
+		return nil, err
+	}
 	radarWorkerHandler := handler.ProvideRadarWorkerHandler(evaluationGradingRepository, configConfig)
 	idempotencyCoordinator := service.ProvideIdempotencyCoordinator(idempotencyRepository, configConfig)
 	idempotencyCleanupService := service.ProvideIdempotencyCleanupService(idempotencyRepository, configConfig)
@@ -319,12 +332,21 @@ func initializeApplication(buildInfo handler.BuildInfo) (*Application, error) {
 	accountExpiryService := service.ProvideAccountExpiryService(accountRepository)
 	proxyExpiryService := service.ProvideProxyExpiryService(proxyRepository)
 	subscriptionExpiryService := service.ProvideSubscriptionExpiryService(userSubscriptionRepository, settingRepository, notificationEmailService, leaderLockCache, db)
+	routeEvidenceTerminalizationRuntime := service.ProvideRouteEvidenceTerminalizationRuntime(evaluationEvidenceRepository, timingWheelService, configConfig)
+	evaluationOutboxRepository := repository.NewEvaluationOutboxRepository(db)
+	evaluationOutboxDomainRepository := repository.NewEvaluationOutboxDomainRepository(db)
+	evaluationOutboxConsumerMode := service.ProvideEvaluationOutboxConsumerMode(configConfig)
+	evaluationOutboxDispatcher := service.NewEvaluationOutboxDispatcher(evaluationOutboxDomainRepository, evaluationOutboxConsumerMode)
+	evaluationOutboxConsumerRuntime := service.ProvideEvaluationOutboxConsumerRuntime(evaluationOutboxRepository, evaluationOutboxDispatcher, timingWheelService, configConfig)
+	evaluationArtifactCleanupRepository := repository.NewEvaluationArtifactCleanupRepository(db)
+	artifactObjectDeleter := service.ProvideArtifactObjectDeleter(evaluationArtifactObjectStore)
+	evaluationArtifactCleanupService := service.ProvideEvaluationArtifactCleanupService(evaluationArtifactCleanupRepository, artifactObjectDeleter, timingWheelService, configConfig)
 	batchImageWorkerRuntime := service.ProvideBatchImageWorkerRuntime(batchImageRepository, accountRepository, batchImageQueue, usageBillingRepository, usageLogRepository, batchImageModelPricingResolver, apiKeyAuthCacheInvalidator, configConfig)
 	scheduledTestRunnerService := service.ProvideScheduledTestRunnerService(scheduledTestPlanRepository, scheduledTestService, accountTestService, rateLimitService, configConfig)
 	paymentOrderExpiryService := service.ProvidePaymentOrderExpiryService(paymentService, leaderLockCache, db)
 	channelMonitorRunner := service.ProvideChannelMonitorRunner(channelMonitorService, settingService)
 	userPlatformQuotaUsageFlusher := service.ProvideUserPlatformQuotaUsageFlusher(configConfig, billingCache, serviceUserPlatformQuotaRepository, timingWheelService)
-	v := provideCleanup(client, redisClient, opsMetricsCollector, opsAggregationService, opsAlertEvaluatorService, opsCleanupService, opsScheduledReportService, opsSystemLogSink, opsService, opsIngressRejectAggregator, apiKeyService, authCacheInvalidationWorker, schedulerSnapshotService, tokenRefreshService, accountExpiryService, proxyExpiryService, subscriptionExpiryService, usageCleanupService, idempotencyCleanupService, batchImageCleanupService, batchImageWorkerRuntime, pricingService, emailQueueService, billingCacheService, usageRecordWorkerPool, subscriptionService, oAuthService, openAIOAuthService, geminiOAuthService, antigravityOAuthService, grokOAuthService, openAIGatewayService, scheduledTestRunnerService, backupService, paymentOrderExpiryService, channelMonitorRunner, userPlatformQuotaUsageFlusher, upstreamBillingProbeService, ollamaCloudUsageService, auditLogService, promptService)
+	v := provideCleanup(client, redisClient, opsMetricsCollector, opsAggregationService, opsAlertEvaluatorService, opsCleanupService, opsScheduledReportService, opsSystemLogSink, opsService, opsIngressRejectAggregator, apiKeyService, authCacheInvalidationWorker, schedulerSnapshotService, tokenRefreshService, accountExpiryService, proxyExpiryService, subscriptionExpiryService, usageCleanupService, routeEvidenceTerminalizationRuntime, evaluationOutboxConsumerRuntime, evaluationArtifactCleanupService, idempotencyCleanupService, batchImageCleanupService, batchImageWorkerRuntime, pricingService, emailQueueService, billingCacheService, usageRecordWorkerPool, subscriptionService, oAuthService, openAIOAuthService, geminiOAuthService, antigravityOAuthService, grokOAuthService, openAIGatewayService, scheduledTestRunnerService, backupService, paymentOrderExpiryService, channelMonitorRunner, userPlatformQuotaUsageFlusher, upstreamBillingProbeService, ollamaCloudUsageService, auditLogService, promptService)
 	application := &Application{
 		Server:      httpServer,
 		PromptAudit: promptService,
@@ -371,6 +393,9 @@ func provideCleanup(
 	proxyExpiry *service.ProxyExpiryService,
 	subscriptionExpiry *service.SubscriptionExpiryService,
 	usageCleanup *service.UsageCleanupService,
+	terminalizationRuntime *service.RouteEvidenceTerminalizationRuntime,
+	outboxConsumerRuntime *service.EvaluationOutboxConsumerRuntime,
+	artifactCleanup *service.EvaluationArtifactCleanupService,
 	idempotencyCleanup *service.IdempotencyCleanupService,
 	batchImageCleanup *service.BatchImageCleanupService,
 	batchImageWorker *service.BatchImageWorkerRuntime,
@@ -486,6 +511,24 @@ func provideCleanup(
 			{"UsageCleanupService", func() error {
 				if usageCleanup != nil {
 					usageCleanup.Stop()
+				}
+				return nil
+			}},
+			{"RouteEvidenceTerminalizationRuntime", func() error {
+				if terminalizationRuntime != nil {
+					terminalizationRuntime.Stop()
+				}
+				return nil
+			}},
+			{"EvaluationOutboxConsumerRuntime", func() error {
+				if outboxConsumerRuntime != nil {
+					outboxConsumerRuntime.Stop()
+				}
+				return nil
+			}},
+			{"EvaluationArtifactCleanupService", func() error {
+				if artifactCleanup != nil {
+					artifactCleanup.Stop()
 				}
 				return nil
 			}},

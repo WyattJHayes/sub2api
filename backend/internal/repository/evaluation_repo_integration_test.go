@@ -100,6 +100,26 @@ func TestEvaluationRepository_CreatesFrozenExperimentBindings(t *testing.T) {
 	require.Equal(t, 1, bindings)
 }
 
+func TestEvaluationRepository_NewAssignmentsStartAtRunControlEpoch(t *testing.T) {
+	ctx := context.Background()
+	fixture := createEvaluationRepositoryFixture(t, 1, []string{"route-a"}, 1)
+	repo := NewEvaluationRepository(integrationDB)
+
+	run, err := repo.CreateRunWithMatrix(ctx, service.CreateRunInput{
+		PlanID: fixture.planID, TriggerSource: "manual", CreatedBy: fixture.userID,
+	})
+	require.NoError(t, err)
+
+	var mismatched int
+	require.NoError(t, integrationDB.QueryRowContext(ctx, `
+		SELECT COUNT(*)
+		FROM evaluation_assignments a
+		JOIN evaluation_samples s ON s.id = a.sample_id
+		JOIN evaluation_runs r ON r.id = s.run_id
+		WHERE r.id = $1 AND a.lease_epoch IS DISTINCT FROM r.control_epoch`, run.ID).Scan(&mismatched))
+	require.Zero(t, mismatched)
+}
+
 func TestEvaluationRepository_ConcurrentLeaseAndLeaseFencing(t *testing.T) {
 	ctx := context.Background()
 	fixture := createEvaluationRepositoryFixture(t, 1, []string{"route-a", "route-b"}, 1)
@@ -340,8 +360,13 @@ func TestEvaluationRepository_FreezesModelConfigurationInLease(t *testing.T) {
 	lease, err := repo.ClaimAssignment(ctx, fixture.workerIDs[0], []string{"coding"}, time.Minute)
 	require.NoError(t, err)
 	require.NotNil(t, lease)
-	require.Equal(t, "baseline:route-a", lease.ModelRoute)
-	require.JSONEq(t, `{"max_tokens":64,"route":"route-a-baseline","temperature":0.2}`, string(lease.ModelConfig))
+	expectedConfigs := map[string]string{
+		"baseline:route-a":  `{"max_tokens":64,"route":"route-a-baseline","temperature":0.2}`,
+		"candidate:route-a": `{"max_tokens":64,"route":"route-a-candidate","temperature":0.2}`,
+	}
+	expectedConfig, ok := expectedConfigs[lease.ModelRoute]
+	require.True(t, ok, "unexpected paired model route %q", lease.ModelRoute)
+	require.JSONEq(t, expectedConfig, string(lease.ModelConfig))
 	returnedHash := sha256.Sum256(lease.ModelConfig)
 	require.Equal(t, fmt.Sprintf("%x", returnedHash), lease.ModelConfigSHA256)
 
@@ -458,7 +483,12 @@ func TestEvaluationRepository_FreezesLosslessNumericModelConfiguration(t *testin
 	lease, err := repo.ClaimAssignment(ctx, fixture.workerIDs[0], []string{"coding"}, time.Minute)
 	require.NoError(t, err)
 	require.NotNil(t, lease)
-	const expectedConfig = `{"route":"route-a","seed":9007199254740993,"temperature":0.12345678901234567890123456789}`
+	expectedConfigs := map[string]string{
+		"baseline:route-a":  `{"route":"route-a-baseline","seed":9007199254740993,"temperature":0.12345678901234567890123456789}`,
+		"candidate:route-a": `{"route":"route-a-candidate","seed":9007199254740993,"temperature":0.12345678901234567890123456789}`,
+	}
+	expectedConfig, ok := expectedConfigs[lease.ModelRoute]
+	require.True(t, ok, "unexpected paired model route %q", lease.ModelRoute)
 	require.Equal(t, expectedConfig, string(lease.ModelConfig))
 	expectedHash := sha256.Sum256([]byte(expectedConfig))
 	require.Equal(t, fmt.Sprintf("%x", expectedHash), lease.ModelConfigSHA256)
@@ -737,8 +767,8 @@ func createEvaluationRepositoryFixtureWithCases(
 
 	_, err := integrationDB.ExecContext(ctx, `
 		INSERT INTO evaluation_dataset_versions (
-			id, dataset_key, version, manifest_sha256, source_type, status, created_by
-		) VALUES ($1, $2, $3, $4, 'synthetic', 'draft', $5)`,
+			id, dataset_key, version, manifest_sha256, source_type, status, created_by, tenant_id
+		) VALUES ($1, $2, $3, $4, 'synthetic', 'draft', $5, $5)`,
 		datasetID, "evaluation-repository-"+uuid.NewString(), "v1", fmt.Sprintf("%064d", 1), user.ID)
 	require.NoError(t, err)
 	for i, evaluationCase := range cases {
@@ -783,8 +813,8 @@ func createEvaluationRepositoryFixtureWithCases(
 	_, err = integrationDB.ExecContext(ctx, `
 		INSERT INTO evaluation_plans (
 			id, name, dataset_version_id, gateway_api_key_id, trigger_type, model_matrix,
-			max_run_cost, daily_cost_limit, max_concurrency, created_by
-		) VALUES ($1, $2, $3, $4, 'manual', $5::jsonb, $6, $7, 10, $8)`,
+			max_run_cost, daily_cost_limit, max_concurrency, created_by, tenant_id
+		) VALUES ($1, $2, $3, $4, 'manual', $5::jsonb, $6, $7, 10, $8, $8)`,
 		planID, "evaluation-plan-"+uuid.NewString(), datasetID, apiKeyID, matrixJSON,
 		budgetLimit, budgetLimit, user.ID)
 	require.NoError(t, err)
@@ -794,9 +824,9 @@ func createEvaluationRepositoryFixtureWithCases(
 		workers[i] = uuid.New()
 		tokenHash := sha256.Sum256([]byte(uuid.NewString()))
 		_, err = integrationDB.ExecContext(ctx, `
-			INSERT INTO evaluation_workers (id, name, worker_kind, token_hash, capabilities)
-			VALUES ($1, $2, 'runner', $3, ARRAY['coding'])`,
-			workers[i], "worker-"+uuid.NewString(), fmt.Sprintf("%x", tokenHash))
+			INSERT INTO evaluation_workers (id, name, worker_kind, token_hash, capabilities, tenant_id)
+			VALUES ($1, $2, 'runner', $3, ARRAY['coding'], $4)`,
+			workers[i], "worker-"+uuid.NewString(), fmt.Sprintf("%x", tokenHash), user.ID)
 		require.NoError(t, err)
 	}
 	fixture := evaluationRepositoryFixture{

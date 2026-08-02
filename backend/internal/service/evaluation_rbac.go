@@ -28,6 +28,7 @@ const (
 	PermissionDatasetManage          RadarPermission = "dataset_manage"
 	PermissionDatasetPublish         RadarPermission = "dataset_publish"
 	PermissionPolicyManage           RadarPermission = "policy_manage"
+	PermissionPolicyApprove          RadarPermission = "policy_approve"
 	PermissionBaselineQualityApprove RadarPermission = "baseline_quality_approve"
 	PermissionGateDecide             RadarPermission = "gate_decide"
 	PermissionGateWaive              RadarPermission = "gate_waive"
@@ -35,6 +36,7 @@ const (
 	PermissionRoleManage             RadarPermission = "role_manage"
 	PermissionRouteAction            RadarPermission = "route_action"
 	PermissionEvaluationKeyManage    RadarPermission = "evaluation_key_manage"
+	PermissionLoadPlanManage         RadarPermission = "load_plan_manage"
 )
 
 var ErrRadarForbidden = errors.New("radar permission denied")
@@ -42,8 +44,8 @@ var ErrRadarForbidden = errors.New("radar permission denied")
 var radarRolePermissions = map[RadarRole][]RadarPermission{
 	RoleViewer:         {PermissionView},
 	RoleTestOperator:   {PermissionView, PermissionRunStart, PermissionRunRetry, PermissionRunControl, PermissionWorkerManage},
-	RoleQualityAdmin:   {PermissionView, PermissionDatasetManage, PermissionDatasetPublish, PermissionPolicyManage, PermissionBaselineQualityApprove},
-	RoleReleaseManager: {PermissionView, PermissionGateDecide, PermissionGateWaive, PermissionBaselineReleaseApprove},
+	RoleQualityAdmin:   {PermissionView, PermissionDatasetManage, PermissionDatasetPublish, PermissionPolicyManage, PermissionPolicyApprove, PermissionBaselineQualityApprove, PermissionLoadPlanManage},
+	RoleReleaseManager: {PermissionView, PermissionGateDecide, PermissionGateWaive, PermissionPolicyApprove, PermissionBaselineReleaseApprove},
 	RolePlatformAdmin:  {PermissionView, PermissionRoleManage, PermissionRouteAction, PermissionEvaluationKeyManage},
 }
 

@@ -99,11 +99,13 @@ type Config struct {
 	Idempotency             IdempotencyConfig             `mapstructure:"idempotency"`
 	BatchImage              BatchImageConfig              `mapstructure:"batch_image"`
 	ImageStorage            ImageStorageConfig            `mapstructure:"image_storage"`
+	RadarArtifactStorage    RadarArtifactStorageConfig    `mapstructure:"radar_artifact_storage"`
 	Radar                   RadarConfig                   `mapstructure:"radar"`
 }
 
 type RadarConfig struct {
 	Enabled                   bool   `mapstructure:"enabled"`
+	OutboxConsumerMode        string `mapstructure:"outbox_consumer_mode"`
 	SigningSecret             string `mapstructure:"signing_secret"`
 	HashingSecret             string `mapstructure:"hashing_secret"`
 	MaxContextTTLSeconds      int    `mapstructure:"max_context_ttl_seconds"`
@@ -113,6 +115,36 @@ type RadarConfig struct {
 	WriterKind                string `mapstructure:"writer_kind"`
 	WriterProtocolVersion     int64  `mapstructure:"writer_protocol_version"`
 	WriterHeartbeatTTLSeconds int    `mapstructure:"writer_heartbeat_ttl_seconds"`
+}
+
+// RadarArtifactStorageConfig configures the S3-compatible store that holds
+// evaluation evidence. It is intentionally separate from image storage so a
+// tenant's model-evaluation artifacts cannot share lifecycle or public URL
+// policy with user-generated images.
+type RadarArtifactStorageConfig struct {
+	Enabled          bool   `mapstructure:"enabled"`
+	Endpoint         string `mapstructure:"endpoint"`
+	Region           string `mapstructure:"region"`
+	Bucket           string `mapstructure:"bucket"`
+	AccessKeyID      string `mapstructure:"access_key_id"`
+	SecretAccessKey  string `mapstructure:"secret_access_key"`
+	ForcePathStyle   bool   `mapstructure:"force_path_style"`
+	Prefix           string `mapstructure:"prefix"`
+	PresignExpiry    int    `mapstructure:"presign_expiry_seconds"`
+	ScanMode         string `mapstructure:"scan_mode"`
+	ClamAVAddress    string `mapstructure:"clamav_address"`
+	ScanTimeout      int    `mapstructure:"scan_timeout_seconds"`
+	CleanupInterval  int    `mapstructure:"cleanup_interval_seconds"`
+	CleanupBatchSize int    `mapstructure:"cleanup_batch_size"`
+}
+
+func (c *RadarArtifactStorageConfig) IsConfigured() bool {
+	return c != nil && strings.TrimSpace(c.Bucket) != "" &&
+		strings.TrimSpace(c.AccessKeyID) != "" && strings.TrimSpace(c.SecretAccessKey) != ""
+}
+
+func (c *RadarArtifactStorageConfig) Active() bool {
+	return c != nil && c.Enabled && c.IsConfigured()
 }
 
 const currentRadarWriterProtocolVersion = int64(2)
@@ -1872,6 +1904,7 @@ func load(allowMissingJWTSecret bool) (*Config, error) {
 func setDefaults() {
 	viper.SetDefault("run_mode", RunModeStandard)
 	viper.SetDefault("radar.enabled", false)
+	viper.SetDefault("radar.outbox_consumer_mode", "core")
 	viper.SetDefault("radar.signing_secret", "")
 	viper.SetDefault("radar.hashing_secret", "")
 	viper.SetDefault("radar.max_context_ttl_seconds", 900)
@@ -1881,6 +1914,23 @@ func setDefaults() {
 	viper.SetDefault("radar.writer_kind", "api")
 	viper.SetDefault("radar.writer_protocol_version", currentRadarWriterProtocolVersion)
 	viper.SetDefault("radar.writer_heartbeat_ttl_seconds", 300)
+
+	// Radar evidence object storage. Keep this disabled by default so local
+	// development cannot accidentally publish evaluation artifacts.
+	viper.SetDefault("radar_artifact_storage.enabled", false)
+	viper.SetDefault("radar_artifact_storage.endpoint", "")
+	viper.SetDefault("radar_artifact_storage.region", "auto")
+	viper.SetDefault("radar_artifact_storage.bucket", "")
+	viper.SetDefault("radar_artifact_storage.access_key_id", "")
+	viper.SetDefault("radar_artifact_storage.secret_access_key", "")
+	viper.SetDefault("radar_artifact_storage.force_path_style", false)
+	viper.SetDefault("radar_artifact_storage.prefix", "evaluation-artifacts/")
+	viper.SetDefault("radar_artifact_storage.presign_expiry_seconds", 900)
+	viper.SetDefault("radar_artifact_storage.scan_mode", "clamav")
+	viper.SetDefault("radar_artifact_storage.clamav_address", "")
+	viper.SetDefault("radar_artifact_storage.scan_timeout_seconds", 60)
+	viper.SetDefault("radar_artifact_storage.cleanup_interval_seconds", 300)
+	viper.SetDefault("radar_artifact_storage.cleanup_batch_size", 100)
 
 	// Server
 	viper.SetDefault("server.host", "0.0.0.0")
@@ -2562,6 +2612,11 @@ func (c *Config) Validate() error {
 	if c.Radar.MaxContextTTLSeconds <= 0 || c.Radar.MaxContextTTLSeconds > 900 {
 		return fmt.Errorf("radar.max_context_ttl_seconds must be between 1 and 900")
 	}
+	switch c.Radar.OutboxConsumerMode {
+	case "disabled", "core", "full":
+	default:
+		return fmt.Errorf("radar.outbox_consumer_mode must be one of: disabled/core/full")
+	}
 	if c.Radar.WriterProtocolVersion != currentRadarWriterProtocolVersion {
 		return fmt.Errorf("radar.writer_protocol_version must be %d", currentRadarWriterProtocolVersion)
 	}
@@ -2575,6 +2630,32 @@ func (c *Config) Validate() error {
 	}
 	if strings.TrimSpace(c.Radar.WriterKind) == "" || len(strings.TrimSpace(c.Radar.WriterKind)) > 32 {
 		return fmt.Errorf("radar.writer_kind must be between 1 and 32 characters")
+	}
+	if c.RadarArtifactStorage.Enabled {
+		if !c.RadarArtifactStorage.IsConfigured() {
+			return fmt.Errorf("radar_artifact_storage requires bucket, access_key_id, and secret_access_key")
+		}
+		if c.RadarArtifactStorage.PresignExpiry < 60 || c.RadarArtifactStorage.PresignExpiry > 86400 {
+			return fmt.Errorf("radar_artifact_storage.presign_expiry_seconds must be between 60 and 86400")
+		}
+		if strings.TrimSpace(c.RadarArtifactStorage.Prefix) == "" {
+			return fmt.Errorf("radar_artifact_storage.prefix must be non-empty")
+		}
+		if strings.TrimSpace(c.RadarArtifactStorage.ScanMode) != "clamav" {
+			return fmt.Errorf("radar_artifact_storage.scan_mode must be clamav")
+		}
+		if strings.TrimSpace(c.RadarArtifactStorage.ClamAVAddress) == "" {
+			return fmt.Errorf("radar_artifact_storage.clamav_address is required")
+		}
+		if c.RadarArtifactStorage.ScanTimeout < 1 || c.RadarArtifactStorage.ScanTimeout > 600 {
+			return fmt.Errorf("radar_artifact_storage.scan_timeout_seconds must be between 1 and 600")
+		}
+		if c.RadarArtifactStorage.CleanupInterval < 10 || c.RadarArtifactStorage.CleanupInterval > 86400 {
+			return fmt.Errorf("radar_artifact_storage.cleanup_interval_seconds must be between 10 and 86400")
+		}
+		if c.RadarArtifactStorage.CleanupBatchSize < 1 || c.RadarArtifactStorage.CleanupBatchSize > 1000 {
+			return fmt.Errorf("radar_artifact_storage.cleanup_batch_size must be between 1 and 1000")
+		}
 	}
 	if c.Radar.Enabled {
 		if len([]byte(strings.TrimSpace(c.Radar.SigningSecret))) < 32 {

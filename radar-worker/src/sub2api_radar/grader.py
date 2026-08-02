@@ -6,10 +6,12 @@ import hashlib
 import inspect
 import json
 import logging
+import time
 from collections.abc import Callable, Sequence
 from pathlib import Path
 from typing import Any
 
+import rfc8785
 from pydantic import ValidationError
 
 from .config import Settings, get_settings
@@ -21,6 +23,7 @@ from .graders.protocol import protocol_grade
 from .graders.safety import safety_grade
 from .graders.tool_call import tool_call_grade
 from .models import ExecutionEvidence, GradingLease, ScoreSubmission
+from .observability import MetricsServer, RadarMetrics, trace_scope
 
 log = logging.getLogger(__name__)
 
@@ -159,25 +162,67 @@ class GraderWorker:
         *,
         capabilities: Sequence[str] = (),
         evidence_loader: EvidenceLoader | None = None,
+        metrics: RadarMetrics | None = None,
     ) -> None:
         self.settings = settings
         self.client = client
         self.capabilities = tuple(capabilities) or settings.grader_ids or settings.capabilities
-        self.evidence_loader: EvidenceLoader = evidence_loader or (
-            lambda lease: load_evidence(lease, artifact_root=settings.artifact_root)
-        )
+        self.evidence_loader: EvidenceLoader = evidence_loader or self._load_controlled_evidence
+        self.metrics = metrics or RadarMetrics()
         self._stop = asyncio.Event()
 
     def stop(self) -> None:
         self._stop.set()
 
+    async def _load_controlled_evidence(self, lease: GradingLease) -> ExecutionEvidence:
+        expected_sha256: str | None = None
+        if lease.evidence_manifest is not None:
+            inline = _parse_evidence_manifest(lease, lease.evidence_manifest)
+            expected_sha256 = hashlib.sha256(
+                rfc8785.dumps(inline.model_dump(mode="json"))
+            ).hexdigest()
+        candidates = [
+            artifact
+            for artifact in lease.evidence
+            if artifact.mime_type.split(";", 1)[0].strip().lower() == "application/json"
+            and artifact.scan_status == "clean"
+            and artifact.confirmed_at is not None
+            and artifact.deleted_at is None
+            and (expected_sha256 is None or artifact.sha256 == expected_sha256)
+        ]
+        if len(candidates) != 1:
+            raise RuntimeError("exactly one bound JSON evidence artifact is required")
+        artifact = candidates[0]
+        download = await self.client.presign_grading_artifact(
+            lease.id, lease.lease_token, artifact.id, lease.lease_epoch
+        )
+        content = await self.client.download_artifact(download)
+        try:
+            payload = json.loads(content)
+        except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+            raise RuntimeError("evidence artifact is not valid JSON") from exc
+        evidence = _parse_evidence_manifest(lease, payload)
+        trusted_artifacts = tuple(
+            artifact
+            for artifact in lease.evidence
+            if artifact.scan_status == "clean"
+            and artifact.confirmed_at is not None
+            and artifact.deleted_at is None
+        )
+        return evidence.model_copy(update={"artifacts": trusted_artifacts})
+
     async def process_once(self) -> bool:
         lease = await self.client.claim_grading(list(self.capabilities))
         if lease is None:
             return False
+        with trace_scope(lease.route_trace_id or str(lease.id)):
+            return await self._process_claimed(lease)
+
+    async def _process_claimed(self, lease: GradingLease) -> bool:
+        lease_started = time.monotonic()
         try:
             await self.client.heartbeat_grading(lease.id, lease.lease_token, lease.lease_epoch)
-            heartbeat = asyncio.create_task(self._heartbeat(lease))
+            heartbeat = asyncio.create_task(self._heartbeat(lease, lease_started))
             try:
                 evidence = self.evidence_loader(lease)
                 if inspect.isawaitable(evidence):
@@ -212,6 +257,8 @@ class GraderWorker:
             except Exception:
                 log.exception("failed to report grader error for %s", lease.id)
             return True
+        finally:
+            self.metrics.observe_lease_age(time.monotonic() - lease_started)
 
     async def run_forever(self, stop: asyncio.Event | None = None) -> None:
         stop_event = stop or self._stop
@@ -223,18 +270,34 @@ class GraderWorker:
                 except TimeoutError:
                     pass
 
-    async def _heartbeat(self, lease: GradingLease) -> None:
+    async def _heartbeat(self, lease: GradingLease, lease_started: float) -> None:
         interval = self.settings.heartbeat_interval_seconds or min(
             max(1, self.settings.lease_ttl_seconds // 3), 30
         )
         while True:
             await asyncio.sleep(interval)
+            self.metrics.observe_worker_heartbeat(
+                "grader", time.monotonic() - lease_started
+            )
             await self.client.heartbeat_grading(lease.id, lease.lease_token, lease.lease_epoch)
+            self.metrics.observe_worker_heartbeat("grader", 0.0)
 
 
 async def run(settings: Settings) -> None:
-    async with ControlPlaneClient(settings) as client:
-        await GraderWorker(settings, client).run_forever()
+    metrics = RadarMetrics()
+    metrics_server = (
+        MetricsServer(metrics, host=settings.metrics_host, port=settings.metrics_port)
+        if settings.metrics_enabled
+        else None
+    )
+    if metrics_server is not None:
+        await metrics_server.start()
+    try:
+        async with ControlPlaneClient(settings, metrics=metrics) as client:
+            await GraderWorker(settings, client, metrics=metrics).run_forever()
+    finally:
+        if metrics_server is not None:
+            await metrics_server.close()
 
 
 def main(argv: list[str] | None = None) -> None:

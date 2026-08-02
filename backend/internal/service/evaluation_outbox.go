@@ -60,6 +60,8 @@ type EvaluationOutboxEvent struct {
 	WorkOrigin      string                 `json:"work_origin"`
 	RevisionBatchID uuid.UUID              `json:"revision_batch_id,omitempty"`
 	RunID           uuid.UUID              `json:"run_id"`
+	ScopeKey        string                 `json:"scope_key"`
+	AnalysisVersion string                 `json:"analysis_version"`
 	SourceType      string                 `json:"source_type"`
 	SourceID        string                 `json:"source_id"`
 	SourceHash      string                 `json:"source_hash"`
@@ -82,8 +84,11 @@ type EvaluationOutboxRepository interface {
 	Claim(context.Context, uuid.UUID, []string, int, time.Duration) ([]EvaluationOutboxEvent, error)
 	Heartbeat(context.Context, uuid.UUID, string, int64, time.Duration) error
 	Complete(context.Context, uuid.UUID, string, int64) error
+	Retry(context.Context, uuid.UUID, string, int64, string, time.Duration) error
 	DeadLetter(context.Context, uuid.UUID, string, int64, string) error
 	ReplayDeadLetter(context.Context, uuid.UUID) (*EvaluationOutboxEvent, error)
+	EnsureConsumerWorker(context.Context, string) (uuid.UUID, error)
+	TouchConsumerWorkerHeartbeat(context.Context, uuid.UUID) error
 }
 
 func OutboxDedupKey(eventType string, runID uuid.UUID, scopeKey, analysisVersion, sourceHash string) (string, error) {

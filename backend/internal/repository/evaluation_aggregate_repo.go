@@ -144,6 +144,15 @@ func (r *evaluationAggregateRepository) EnsureGlobalAnalysisJob(ctx context.Cont
 }
 
 func lockAggregateRun(ctx context.Context, tx *sql.Tx, runID uuid.UUID) (service.RunStatus, error) {
+	if _, scoped := radarTenant(ctx); scoped {
+		if err := ensureRadarExecutionScope(ctx, tx, runID); err != nil {
+			return "", err
+		}
+	} else if _, bound := service.RadarWorkerID(ctx); bound {
+		if err := ensureRadarExecutionScope(ctx, tx, runID); err != nil {
+			return "", err
+		}
+	}
 	var status service.RunStatus
 	if err := tx.QueryRowContext(ctx, `SELECT status FROM evaluation_runs WHERE id=$1 FOR UPDATE`, runID).Scan(&status); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {

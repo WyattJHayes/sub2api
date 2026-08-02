@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import logging
+import time
 from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -12,6 +13,7 @@ from typing import Any, Protocol
 from ..config import Settings
 from ..control_plane import ControlPlaneClient, LeaseFencedError
 from ..models import AggregateSubmission, AnalysisLease, FailureClass, PairedScore
+from ..observability import MetricsServer, RadarMetrics, trace_scope
 from .bootstrap import bootstrap_delta, weighted_delta
 from .classification import count_failures
 from .cusum import cusum
@@ -133,6 +135,7 @@ class StatisticsWorker:
         *,
         capabilities: Sequence[str] = (),
         analyzer: Analyzer | None = None,
+        metrics: RadarMetrics | None = None,
     ) -> None:
         self.settings = settings
         self.client = client
@@ -140,6 +143,7 @@ class StatisticsWorker:
             tuple(capabilities) or settings.analysis_capabilities or settings.capabilities
         )
         self.analyzer: Analyzer = analyzer or default_analyzer
+        self.metrics = metrics or RadarMetrics()
         self._stop = asyncio.Event()
 
     def stop(self) -> None:
@@ -149,7 +153,21 @@ class StatisticsWorker:
         lease = await self.client.claim_analysis(list(self.capabilities))
         if lease is None:
             return False
+        with trace_scope(str(lease.id)):
+            return await self._process_claimed(lease)
+
+    async def _process_claimed(self, lease: AnalysisLease) -> bool:
+        lease_started = time.monotonic()
         try:
+            if lease.window_start is not None and lease.window_start.tzinfo is not None:
+                self.metrics.observe_analysis_lag(
+                    max(
+                        0.0,
+                        (
+                            datetime.now(lease.window_start.tzinfo) - lease.window_start
+                        ).total_seconds(),
+                    )
+                )
             result = self.analyzer(lease)
             if asyncio.iscoroutine(result):
                 result = await result
@@ -160,6 +178,19 @@ class StatisticsWorker:
             log.warning("analysis lease %s fenced", lease.id)
         except Exception:
             log.exception("analysis lease %s failed", lease.id)
+            try:
+                await self.client.fail_analysis(
+                    lease.id,
+                    lease.lease_token,
+                    "statistics_worker_error",
+                    lease.lease_epoch,
+                )
+            except LeaseFencedError:
+                log.warning("analysis failure lease %s was fenced", lease.id)
+            except Exception:
+                log.exception("failed to persist analysis failure for lease %s", lease.id)
+        finally:
+            self.metrics.observe_lease_age(time.monotonic() - lease_started)
         return True
 
     async def run_forever(self, stop: asyncio.Event | None = None) -> None:
@@ -217,8 +248,20 @@ def analyze(
 
 
 async def run(settings: Settings) -> None:
-    async with ControlPlaneClient(settings) as client:
-        await StatisticsWorker(settings, client).run_forever()
+    metrics = RadarMetrics()
+    metrics_server = (
+        MetricsServer(metrics, host=settings.metrics_host, port=settings.metrics_port)
+        if settings.metrics_enabled
+        else None
+    )
+    if metrics_server is not None:
+        await metrics_server.start()
+    try:
+        async with ControlPlaneClient(settings, metrics=metrics) as client:
+            await StatisticsWorker(settings, client, metrics=metrics).run_forever()
+    finally:
+        if metrics_server is not None:
+            await metrics_server.close()
 
 
 def main(argv: list[str] | None = None) -> None:

@@ -1,0 +1,137 @@
+name: sub2api-radar-staging
+
+services:
+  radar-loadgen:
+    profiles: ["reliability"]
+    image: sub2api/radar-worker:staging
+    build:
+      context: ..
+      dockerfile: Dockerfile
+    restart: "no"
+    init: true
+    user: ${RADAR_RELIABILITY_UID:?RADAR_RELIABILITY_UID is required}:${RADAR_RELIABILITY_GID:?RADAR_RELIABILITY_GID is required}
+    entrypoint: ["python", "-m", "sub2api_radar.loadgen.runner"]
+    environment:
+      RADAR_CONTROL_PLANE_URL: ${RADAR_CONTROL_PLANE_URL:-http://sub2api-staging:8080}
+      RADAR_ALLOW_INSECURE_HTTP: ${RADAR_ALLOW_INSECURE_HTTP:-true}
+      RADAR_WORKER_TOKEN: ${RADAR_LOADGEN_WORKER_TOKEN:?RADAR_LOADGEN_WORKER_TOKEN must be a dedicated 32+ character staging token}
+      RADAR_WORKER_ID: ${RADAR_LOADGEN_WORKER_ID:-radar-loadgen-staging}
+      RADAR_MODE: statistics
+      RADAR_REGION: ${RADAR_REGION:-staging}
+      RADAR_ROUTE_PROFILE_VERSION: ${RADAR_ROUTE_PROFILE_VERSION:-staging-v1}
+      RADAR_LOADGEN_EVALUATION_API_KEY: ${RADAR_LOADGEN_EVALUATION_API_KEY:?RADAR_LOADGEN_EVALUATION_API_KEY must be a dedicated staging key}
+      RADAR_GATEWAY_URL: ${RADAR_GATEWAY_URL:-http://sub2api-staging:8080}
+      RADAR_LOAD_PLAN_ID: ${RADAR_LOAD_PLAN_ID:?RADAR_LOAD_PLAN_ID is required}
+      RADAR_LOAD_RUN_ID: ${RADAR_LOAD_RUN_ID:?RADAR_LOAD_RUN_ID is required}
+      RADAR_LOADGEN_IMAGE_DIGEST: ${RADAR_LOADGEN_IMAGE_DIGEST:?RADAR_LOADGEN_IMAGE_DIGEST must pin the load generator image}
+      RADAR_RELIABILITY_REPORT_DIR: /reports
+      RADAR_METRICS_ENABLED: ${RADAR_METRICS_ENABLED:-false}
+      RADAR_METRICS_HOST: ${RADAR_METRICS_HOST:-0.0.0.0}
+      RADAR_METRICS_PORT: ${RADAR_LOADGEN_METRICS_PORT:-9108}
+    volumes:
+      - type: bind
+        source: ${RADAR_RELIABILITY_REPORT_DIR:?RADAR_RELIABILITY_REPORT_DIR is required}
+        target: /reports
+        bind:
+          create_host_path: false
+    networks:
+      - radar_reliability_internal
+    read_only: true
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,nodev,size=64m
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    pids_limit: 256
+
+  radar-chaos-controller:
+    profiles: ["chaos"]
+    image: sub2api/radar-worker:staging
+    build:
+      context: ..
+      dockerfile: Dockerfile
+    restart: "no"
+    init: true
+    user: ${RADAR_RELIABILITY_UID:?RADAR_RELIABILITY_UID is required}:${RADAR_RELIABILITY_GID:?RADAR_RELIABILITY_GID is required}
+    entrypoint: ["python", "-m", "sub2api_radar.chaos.controller"]
+    environment:
+      RADAR_CONTROL_PLANE_URL: ${RADAR_CONTROL_PLANE_URL:-http://sub2api-staging:8080}
+      RADAR_ALLOW_INSECURE_HTTP: ${RADAR_ALLOW_INSECURE_HTTP:-true}
+      RADAR_CHAOS_CONTROLLER_TOKEN: ${RADAR_CHAOS_CONTROLLER_TOKEN:?RADAR_CHAOS_CONTROLLER_TOKEN must be a dedicated 32+ character staging token}
+      RADAR_WORKER_TOKEN: ${RADAR_CHAOS_CONTROLLER_TOKEN:?RADAR_CHAOS_CONTROLLER_TOKEN must be a dedicated 32+ character staging token}
+      RADAR_WORKER_ID: ${RADAR_CHAOS_WORKER_ID:-radar-chaos-controller-staging}
+      RADAR_REGION: ${RADAR_REGION:-staging}
+      RADAR_ROUTE_PROFILE_VERSION: ${RADAR_ROUTE_PROFILE_VERSION:-staging-v1}
+      RADAR_MODE: statistics
+      RADAR_FAULT_EXPERIMENT_ID: ${RADAR_FAULT_EXPERIMENT_ID:?RADAR_FAULT_EXPERIMENT_ID is required}
+      RADAR_CHAOS_TARGET_WORKER_ID: ${RADAR_CHAOS_TARGET_WORKER_ID:?RADAR_CHAOS_TARGET_WORKER_ID must identify one approved staging worker}
+      RADAR_CHAOS_ALLOWED_ACTIONS: worker_kill,worker_network_isolation
+      RADAR_CHAOS_ENVIRONMENT: staging
+      RADAR_CHAOS_AUTO_ROLLBACK_SECONDS: ${RADAR_CHAOS_AUTO_ROLLBACK_SECONDS:?RADAR_CHAOS_AUTO_ROLLBACK_SECONDS must be a bounded non-negative delay}
+      RADAR_METRICS_ENABLED: ${RADAR_METRICS_ENABLED:-false}
+      RADAR_METRICS_HOST: ${RADAR_METRICS_HOST:-0.0.0.0}
+      RADAR_METRICS_PORT: ${RADAR_CHAOS_METRICS_PORT:-9108}
+    networks:
+      - radar_reliability_internal
+    read_only: true
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,nodev,size=16m
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    pids_limit: 64
+
+  radar-recovery-verifier:
+    profiles: ["reliability", "chaos"]
+    image: sub2api/radar-worker:staging
+    build:
+      context: ..
+      dockerfile: Dockerfile
+    restart: "no"
+    init: true
+    user: ${RADAR_RELIABILITY_UID:?RADAR_RELIABILITY_UID is required}:${RADAR_RELIABILITY_GID:?RADAR_RELIABILITY_GID is required}
+    entrypoint: ["python", "-m", "sub2api_radar.recovery.verifier"]
+    environment:
+      RADAR_CONTROL_PLANE_URL: ${RADAR_CONTROL_PLANE_URL:-http://sub2api-staging:8080}
+      RADAR_ALLOW_INSECURE_HTTP: ${RADAR_ALLOW_INSECURE_HTTP:-true}
+      RADAR_RECOVERY_VERIFIER_TOKEN: ${RADAR_RECOVERY_VERIFIER_TOKEN:?RADAR_RECOVERY_VERIFIER_TOKEN must be a dedicated 32+ character staging token}
+      RADAR_WORKER_TOKEN: ${RADAR_RECOVERY_VERIFIER_TOKEN:?RADAR_RECOVERY_VERIFIER_TOKEN must be a dedicated 32+ character staging token}
+      RADAR_WORKER_ID: ${RADAR_RECOVERY_WORKER_ID:-radar-recovery-verifier-staging}
+      RADAR_REGION: ${RADAR_REGION:-staging}
+      RADAR_ROUTE_PROFILE_VERSION: ${RADAR_ROUTE_PROFILE_VERSION:-staging-v1}
+      RADAR_MODE: statistics
+      RADAR_RECOVERY_EVIDENCE_ID: ${RADAR_RECOVERY_EVIDENCE_ID:?RADAR_RECOVERY_EVIDENCE_ID is required}
+      RADAR_RECOVERY_EVIDENCE_DIR: /reports
+      RADAR_RELIABILITY_REPORT_DIR: /reports
+      RADAR_METRICS_ENABLED: ${RADAR_METRICS_ENABLED:-false}
+      RADAR_METRICS_HOST: ${RADAR_METRICS_HOST:-0.0.0.0}
+      RADAR_METRICS_PORT: ${RADAR_RECOVERY_METRICS_PORT:-9108}
+    volumes:
+      - type: bind
+        source: ${RADAR_RELIABILITY_EVIDENCE_DIR:?RADAR_RELIABILITY_EVIDENCE_DIR is required}
+        target: /evidence
+        read_only: true
+        bind:
+          create_host_path: false
+      - type: bind
+        source: ${RADAR_RELIABILITY_REPORT_DIR:?RADAR_RELIABILITY_REPORT_DIR is required}
+        target: /reports
+        bind:
+          create_host_path: false
+    networks:
+      - radar_reliability_internal
+    read_only: true
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,nodev,size=32m
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    pids_limit: 64
+
+networks:
+  radar_reliability_internal:
+    name: sub2api-radar-staging-reliability
+    internal: true

@@ -30,6 +30,8 @@ var (
 
 var evaluationEvidencePersistenceFailures atomic.Uint64
 
+const routeEvidencePatchMaxRevisionRetries = 3
+
 func RecordEvaluationEvidencePersistenceFailure() {
 	evaluationEvidencePersistenceFailures.Add(1)
 }
@@ -51,6 +53,12 @@ type TrustedEvaluationEvidenceRepository interface {
 type TrustedEvaluationEvidenceFinalizer interface {
 	FinalizeRouteEvidence(ctx context.Context, input FinalizeRouteEvidenceInput) (SealedRouteEvidence, error)
 	FinalizeRouteEvidenceFromTerminalization(ctx context.Context, input FinalizeRouteEvidenceFromTerminalizationInput) (int, error)
+}
+
+// RouteEvidenceTerminalizationRepository exposes pending terminal run events
+// to the system-owned evidence finalizer.
+type RouteEvidenceTerminalizationRepository interface {
+	ListPendingTerminalizations(ctx context.Context, limit int) ([]RouteEvidenceTerminalizationEvent, error)
 }
 
 type RouteTraceConfig struct {
@@ -160,6 +168,12 @@ type FinalizeRouteEvidenceFromTerminalizationInput struct {
 	ControlEpoch int64
 }
 
+type RouteEvidenceTerminalizationEvent struct {
+	ID           uuid.UUID
+	RunID        uuid.UUID
+	ControlEpoch int64
+}
+
 type TransportPatch struct {
 	ResolvedModel   *string
 	Provider        *string
@@ -219,17 +233,26 @@ func (t *RouteEvidenceRevisionTracker) Patch(ctx context.Context, patch RouteEvi
 	}
 	t.mu.Lock()
 	defer t.mu.Unlock()
-	patch.ExpectedRevision = t.state.Revision
-	updated, err := t.repo.PatchRouteEvidence(ctx, t.traceID, patch)
-	if err != nil {
-		var conflict *RouteEvidenceRevisionConflict
-		if errors.As(err, &conflict) {
-			t.state.Revision = conflict.CurrentRevision
+	for attempt := 0; attempt < routeEvidencePatchMaxRevisionRetries; attempt++ {
+		patch.ExpectedRevision = t.state.Revision
+		updated, err := t.repo.PatchRouteEvidence(ctx, t.traceID, patch)
+		if err == nil {
+			t.state = updated
+			return updated, nil
 		}
-		return t.state, err
+		var conflict *RouteEvidenceRevisionConflict
+		if !errors.As(err, &conflict) {
+			return t.state, err
+		}
+		if conflict.CurrentRevision < t.state.Revision {
+			return t.state, err
+		}
+		t.state.Revision = conflict.CurrentRevision
+		if ctx != nil && ctx.Err() != nil {
+			return t.state, ctx.Err()
+		}
 	}
-	t.state = updated
-	return updated, nil
+	return t.state, &RouteEvidenceRevisionConflict{CurrentRevision: t.state.Revision}
 }
 
 func (t *RouteEvidenceRevisionTracker) State() RouteEvidencePatchState {

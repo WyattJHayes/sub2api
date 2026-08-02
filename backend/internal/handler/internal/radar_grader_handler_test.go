@@ -36,6 +36,10 @@ type radarGraderHandlerRepoStub struct {
 	receipt                  *service.ArtifactReceipt
 	artifactErr              error
 	claimCalls               int
+	heartbeatCalls           int
+	heartbeatWorkerID        uuid.UUID
+	heartbeatWorkerKind      string
+	heartbeatErr             error
 	failedAssignmentID       uuid.UUID
 	failedAssignmentToken    string
 	failedAssignmentClass    string
@@ -85,6 +89,12 @@ func (s *radarGraderHandlerRepoStub) AuthenticateWorker(context.Context, string,
 	}
 	return s.workerID, nil
 }
+func (s *radarGraderHandlerRepoStub) TouchWorkerHeartbeat(_ context.Context, workerID uuid.UUID, workerKind string) error {
+	s.heartbeatCalls++
+	s.heartbeatWorkerID = workerID
+	s.heartbeatWorkerKind = workerKind
+	return s.heartbeatErr
+}
 func (s *radarGraderHandlerRepoStub) ClaimGradingLease(context.Context, uuid.UUID, []string, time.Duration) (*service.GradingLease, error) {
 	return s.gradingLease, s.claimErr
 }
@@ -102,6 +112,25 @@ func (s *radarGraderHandlerRepoStub) ClaimAnalysisJob(context.Context, uuid.UUID
 }
 func (s *radarGraderHandlerRepoStub) CompleteAnalysisJob(context.Context, uuid.UUID, string, service.AggregateSubmission, ...int64) (*service.AggregateSnapshot, error) {
 	return &service.AggregateSnapshot{ID: uuid.New()}, s.analysisErr
+}
+
+func TestRadarGraderHandlerTouchesRunnerHeartbeatWhileWaiting(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	workerID := uuid.New()
+	repo := &radarGraderHandlerRepoStub{workerID: workerID}
+	h := NewRadarGraderHandler(repo, &config.Config{})
+	r := gin.New()
+	r.POST("/internal/radar/v1/leases/wait", h.WaitAssignment)
+	req := httptest.NewRequest(http.MethodPost, "/internal/radar/v1/leases/wait", bytes.NewBufferString(`{"worker_id":"ignored-by-server"}`))
+	req.Header.Set("Authorization", "Bearer runner-token")
+	resp := httptest.NewRecorder()
+
+	r.ServeHTTP(resp, req)
+
+	require.Equal(t, http.StatusOK, resp.Code)
+	require.Equal(t, 1, repo.heartbeatCalls)
+	require.Equal(t, workerID, repo.heartbeatWorkerID)
+	require.Equal(t, "runner", repo.heartbeatWorkerKind)
 }
 
 func TestRadarGraderHandlerRejectsRunnerTokenForGradingClaim(t *testing.T) {

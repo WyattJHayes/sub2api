@@ -613,5 +613,9 @@ func (r *evaluationGradingRepository) createRunForGradingTest(ctx context.Contex
 	// The normal repository implementation owns run expansion; this helper keeps
 	// the focused integration fixtures independent of that concrete type.
 	eval := &evaluationRepository{db: r.db}
-	return eval.CreateRunWithMatrix(ctx, service.CreateRunInput{PlanID: planID, TriggerSource: "manual"})
+	var tenantID int64
+	if err := r.db.QueryRowContext(ctx, `SELECT tenant_id FROM evaluation_plans WHERE id=$1`, planID).Scan(&tenantID); err != nil {
+		return nil, err
+	}
+	return eval.CreateRunWithMatrix(ctx, service.CreateRunInput{PlanID: planID, TriggerSource: "manual", CreatedBy: tenantID})
 }

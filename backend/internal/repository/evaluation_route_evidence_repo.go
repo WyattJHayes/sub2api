@@ -364,6 +364,9 @@ func (r *evaluationRouteEvidenceRepository) PatchRouteEvidence(ctx context.Conte
 		if err != nil {
 			return err
 		}
+		if err := ensureRouteEvidenceExecutionScope(ctx, tx, current.Identity.RunID); err != nil {
+			return err
+		}
 		updated, err = service.MergeRouteEvidencePatch(current, patch)
 		if err != nil {
 			return err
@@ -374,6 +377,23 @@ func (r *evaluationRouteEvidenceRepository) PatchRouteEvidence(ctx context.Conte
 		return persistRouteEvidencePatchState(ctx, tx, traceID, current.Revision, updated)
 	})
 	return updated, err
+}
+
+func ensureRouteEvidenceExecutionScope(ctx context.Context, exec sqlExecutor, runIDText string) error {
+	if _, scoped := radarTenant(ctx); !scoped {
+		if _, bound := service.RadarWorkerID(ctx); !bound {
+			return nil
+		}
+	}
+	runID, err := uuid.Parse(strings.TrimSpace(runIDText))
+	if err != nil || runID == uuid.Nil {
+		return service.ErrRadarForbidden
+	}
+	tx, ok := exec.(*sql.Tx)
+	if !ok {
+		return errors.New("route evidence execution scope requires a database transaction")
+	}
+	return ensureRadarExecutionScope(ctx, tx, runID)
 }
 
 func loadRouteEvidencePatchState(ctx context.Context, tx *sql.Tx, traceID string) (service.RouteEvidencePatchState, error) {
@@ -513,6 +533,9 @@ func (r *evaluationRouteEvidenceRepository) UpsertTransport(ctx context.Context,
 	}
 
 	write := func(exec sqlExecutor) error {
+		if err := ensureRouteEvidenceExecutionScope(ctx, exec, evidence.EvaluationRunID); err != nil {
+			return err
+		}
 		result, err := exec.ExecContext(ctx, `
 		INSERT INTO evaluation_route_evidence (
 			route_trace_id, evaluation_run_id, sample_id, api_key_id, request_id,
@@ -578,6 +601,9 @@ func (r *evaluationRouteEvidenceRepository) AttachBilling(ctx context.Context, t
 	}
 
 	write := func(exec sqlExecutor) error {
+		if err := ensureRouteEvidenceExecutionScope(ctx, exec, evaluation.RunID); err != nil {
+			return err
+		}
 		result, err := exec.ExecContext(ctx, `
 		INSERT INTO evaluation_route_evidence (
 			route_trace_id, evaluation_run_id, sample_id, api_key_id,

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
 	"time"
 
 	"github.com/google/uuid"
@@ -14,18 +15,25 @@ var (
 	// ErrWorkerKindMismatch is returned when a worker credential is used by a
 	// queue owned by another worker kind. It deliberately does not reveal the
 	// existence of a valid worker token to callers.
-	ErrWorkerKindMismatch     = errors.New("evaluation worker kind is not authorized")
-	ErrGradingLeaseFenced     = ErrLeaseFenced
-	ErrAnalysisLeaseFenced    = ErrLeaseFenced
-	ErrScoreSubmissionInvalid = errors.New("invalid score submission")
-	ErrEvidenceMismatch       = errors.New("score evidence does not match stored evidence")
-	ErrRouteEvidenceNotSealed = errors.New("route evidence is not sealed")
-	ErrGraderIdentityMismatch = errors.New("score grader identity does not match evaluation case")
-	ErrAggregateRunMismatch   = errors.New("aggregate score belongs to another evaluation run")
-	ErrAnalysisJobFenced      = errors.New("evaluation analysis job lease fenced")
-	ErrArtifactInvalid        = errors.New("invalid evaluation artifact")
-	ErrArtifactNotFound       = errors.New("evaluation artifact not found")
-	ErrArtifactObjectMismatch = errors.New("evaluation artifact object metadata mismatch")
+	ErrWorkerKindMismatch                = errors.New("evaluation worker kind is not authorized")
+	ErrGradingLeaseFenced                = ErrLeaseFenced
+	ErrAnalysisLeaseFenced               = ErrLeaseFenced
+	ErrScoreSubmissionInvalid            = errors.New("invalid score submission")
+	ErrEvidenceMismatch                  = errors.New("score evidence does not match stored evidence")
+	ErrRouteEvidenceNotSealed            = errors.New("route evidence is not sealed")
+	ErrGraderIdentityMismatch            = errors.New("score grader identity does not match evaluation case")
+	ErrAggregateRunMismatch              = errors.New("aggregate score belongs to another evaluation run")
+	ErrAnalysisJobFenced                 = errors.New("evaluation analysis job lease fenced")
+	ErrAnalysisJobInvalid                = errors.New("invalid evaluation analysis job failure")
+	ErrArtifactInvalid                   = errors.New("invalid evaluation artifact")
+	ErrArtifactNotFound                  = errors.New("evaluation artifact not found")
+	ErrArtifactObjectMismatch            = errors.New("evaluation artifact object metadata mismatch")
+	ErrArtifactObjectStoreUnavailable    = errors.New("evaluation artifact object store unavailable")
+	ErrArtifactObjectMetadataUnavailable = errors.New("evaluation artifact object metadata unavailable")
+	ErrArtifactScannerUnavailable        = errors.New("evaluation artifact scanner unavailable")
+	ErrArtifactScanRejected              = errors.New("evaluation artifact scan rejected")
+	ErrArtifactScanFailed                = errors.New("evaluation artifact scan failed")
+	ErrWorkerIdentityMismatch            = errors.New("evaluation worker identity does not match")
 )
 
 // GradingLease is a short-lived, fenced lease owned by a grader worker.
@@ -199,6 +207,10 @@ type EvaluationGradingRepository interface {
 	CompleteAnalysisJob(ctx context.Context, jobID uuid.UUID, leaseToken string, submission AggregateSubmission, leaseEpoch ...int64) (*AggregateSnapshot, error)
 }
 
+type AnalysisFailureRepository interface {
+	FailAnalysisJob(ctx context.Context, jobID uuid.UUID, leaseToken, failureCode string, leaseEpoch ...int64) error
+}
+
 type EvaluationRunnerRepository interface {
 	AuthenticateRunner(ctx context.Context, token string) (uuid.UUID, error)
 	ClaimAssignment(ctx context.Context, workerID uuid.UUID, capabilities []string, leaseTTL time.Duration) (*AssignmentLease, error)
@@ -208,9 +220,85 @@ type EvaluationRunnerRepository interface {
 	FailAssignment(ctx context.Context, assignmentID uuid.UUID, leaseToken, failureClass, failureCode string, leaseEpoch ...int64) error
 }
 
+// EvaluationWorkerHeartbeatRepository refreshes the liveness marker for an
+// authenticated worker even when its queue is empty. It is kept separate from
+// the runner and grading contracts so non-HTTP callers can adopt it
+// independently.
+type EvaluationWorkerHeartbeatRepository interface {
+	TouchWorkerHeartbeat(ctx context.Context, workerID uuid.UUID, workerKind string) error
+}
+
 type EvaluationArtifactRepository interface {
 	PresignArtifact(ctx context.Context, assignmentID uuid.UUID, leaseToken string, input ArtifactPresignRequest) (*ArtifactUpload, error)
 	ConfirmArtifact(ctx context.Context, assignmentID uuid.UUID, leaseToken string, input ArtifactConfirmation) (*ArtifactReceipt, error)
+}
+
+type ArtifactDownload struct {
+	ArtifactID  uuid.UUID `json:"artifact_id"`
+	ObjectKey   string    `json:"object_key"`
+	DownloadURL string    `json:"download_url"`
+	SHA256      string    `json:"sha256"`
+	Bytes       int64     `json:"bytes"`
+	MIMEType    string    `json:"mime_type"`
+	ExpiresAt   time.Time `json:"expires_at"`
+}
+
+type EvaluationArtifactReadRepository interface {
+	PresignGradingArtifactRead(ctx context.Context, workerID, leaseID uuid.UUID, leaseToken string, artifactID uuid.UUID, leaseEpoch int64) (*ArtifactDownload, error)
+}
+
+// ArtifactObjectPutRequest is the immutable metadata that must be signed into
+// an artifact upload request. The object store is checked against the same
+// values before an artifact can enter the clean state.
+type ArtifactObjectPutRequest struct {
+	ObjectKey string
+	Bytes     int64
+	MIMEType  string
+	SHA256    string
+}
+
+type ArtifactObjectUpload struct {
+	URL       string
+	Headers   map[string]string
+	ExpiresAt time.Time
+}
+
+type ArtifactObjectMetadata struct {
+	ObjectKey string
+	Bytes     int64
+	MIMEType  string
+	SHA256    string
+	ETag      string
+}
+
+// EvaluationArtifactObjectStore is the byte store boundary for Radar
+// evidence. Implementations must fail when object metadata cannot prove the
+// requested checksum and length.
+type EvaluationArtifactObjectStore interface {
+	PresignPut(ctx context.Context, request ArtifactObjectPutRequest, expiry time.Duration) (*ArtifactObjectUpload, error)
+	Head(ctx context.Context, objectKey string) (*ArtifactObjectMetadata, error)
+	PresignGet(ctx context.Context, objectKey string, expiry time.Duration) (url string, expiresAt time.Time, err error)
+	Delete(ctx context.Context, objectKey string) error
+	Open(ctx context.Context, objectKey string) (io.ReadCloser, error)
+}
+
+type ArtifactScanStatus string
+
+const (
+	ArtifactScanClean    ArtifactScanStatus = "clean"
+	ArtifactScanRejected ArtifactScanStatus = "rejected"
+	ArtifactScanFailed   ArtifactScanStatus = "failed"
+)
+
+type ArtifactScanResult struct {
+	Status    ArtifactScanStatus
+	Scanner   string
+	Reason    string
+	ScannedAt time.Time
+}
+
+type ArtifactScanner interface {
+	Scan(ctx context.Context, objectKey string, metadata ArtifactObjectMetadata) (ArtifactScanResult, error)
 }
 
 // GradingRepository is retained as a short alias for callers that use the

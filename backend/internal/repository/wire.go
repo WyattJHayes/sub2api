@@ -4,6 +4,9 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"fmt"
+	"strings"
+	"time"
 
 	entsql "entgo.io/ent/dialect/sql"
 	"github.com/Wei-Shaw/sub2api/ent"
@@ -63,6 +66,42 @@ func ProvideSchedulerCache(rdb *redis.Client, cfg *config.Config) service.Schedu
 	return newSchedulerCacheWithChunkSizes(rdb, mgetChunkSize, writeChunkSize)
 }
 
+func ProvideEvaluationArtifactObjectStore(cfg *config.Config) (service.EvaluationArtifactObjectStore, error) {
+	if cfg == nil || !cfg.RadarArtifactStorage.Active() {
+		return nil, nil
+	}
+	return NewS3EvaluationArtifactObjectStore(context.Background(), &cfg.RadarArtifactStorage)
+}
+
+func ProvideEvaluationArtifactScanner(store service.EvaluationArtifactObjectStore, cfg *config.Config) (service.ArtifactScanner, error) {
+	if cfg == nil || !cfg.RadarArtifactStorage.Active() {
+		return nil, nil
+	}
+	if store == nil {
+		return nil, service.ErrArtifactObjectStoreUnavailable
+	}
+	if strings.TrimSpace(cfg.RadarArtifactStorage.ScanMode) != "clamav" {
+		return nil, fmt.Errorf("unsupported Radar artifact scan mode %q", cfg.RadarArtifactStorage.ScanMode)
+	}
+	return NewClamAVArtifactScanner(store, cfg.RadarArtifactStorage.ClamAVAddress, time.Duration(cfg.RadarArtifactStorage.ScanTimeout)*time.Second)
+}
+
+// ProvideEvaluationGradingRepository wires an artifact store whenever Radar
+// is enabled. A Radar-enabled server without durable artifact storage fails at
+// startup instead of accepting evidence that cannot be verified later.
+func ProvideEvaluationGradingRepository(db *sql.DB, cfg *config.Config, store service.EvaluationArtifactObjectStore, scanner service.ArtifactScanner) (service.EvaluationGradingRepository, error) {
+	if cfg == nil || (!cfg.Radar.Enabled && !cfg.RadarArtifactStorage.Active()) {
+		return NewEvaluationGradingRepository(db), nil
+	}
+	if !cfg.RadarArtifactStorage.Active() || store == nil {
+		return nil, service.ErrArtifactObjectStoreUnavailable
+	}
+	if scanner == nil {
+		return nil, service.ErrArtifactScannerUnavailable
+	}
+	return NewEvaluationGradingRepositoryWithArtifactDependencies(db, store, scanner), nil
+}
+
 // ProviderSet is the Wire provider set for all repositories
 var ProviderSet = wire.NewSet(
 	NewUserRepository,
@@ -82,8 +121,12 @@ var ProviderSet = wire.NewSet(
 	NewUsageLogRepository,
 	NewUsageBillingRepository,
 	ProvideEvaluationRouteEvidenceRepository,
-	NewEvaluationGradingRepository,
+	ProvideEvaluationArtifactObjectStore,
+	ProvideEvaluationArtifactScanner,
+	ProvideEvaluationGradingRepository,
+	NewEvaluationArtifactCleanupRepository,
 	NewRadarGovernanceRepository,
+	NewRadarReliabilityRepository,
 	NewBatchImageRepository,
 	NewIdempotencyRepository,
 	NewUsageCleanupRepository,

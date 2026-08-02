@@ -598,7 +598,7 @@ Agent 评测输出需要保存工具调用序列、参数 schema 摘要、观察
 | 管理员版 Radar staging MVP | 接口、数据、Worker、统计和页面已定义 | 控制面、三类 Worker、七个管理视图与 synthetic upstream 已实现 | 七服务健康、30 个有效 pair、可信 Gate 和浏览器验收 |
 | 可信发布门禁 | 状态优先级、观察期和双审批已定义 | Gate 仍接收调用方统计输入，policy 与 decision 仍可被覆盖 | 服务端加载不可变 policy、绑定聚合与路由证据、追加式 decision |
 | Worker 与 Run 生命周期 | 租约、fencing 和状态机已定义 | claim、heartbeat、complete、fail 已实现；注册 API 与 run 终态闭环缺失 | 幂等注册、token rotation、run 状态自动收敛和失败恢复测试 |
-| 企业 RBAC 与多租户 | 五角色目标和租户隔离原则已定义 | Radar 路由仍要求平台 admin，role scope 只接受全局空 scope，读模型为全局聚合 | tenant_id 数据模型、scope authorizer、行级过滤、跨租户拒绝和权限驱动导航 |
+| 企业 RBAC 与多租户 | 五角色目标和租户隔离原则已定义 | Radar 资源、策略头和读模型已带 tenant_id，仓储层执行行级过滤；role scope 仍只接受全局空 scope，认证主体尚未接入 workspace membership | workspace tenant 映射、细粒度 scope authorizer、跨用户审批绑定和权限驱动导航 |
 | 审批、告警与审计控制台 | 页面职责和危险动作要求已定义 | 后端有部分端点，前端缺少 Baseline、Policy、Approval、Waiver、Audit 和告警详情动作 | 双主体审批、豁免过期、告警时间线、审计检索和脱敏详情 E2E |
 | 公共 Benchmark 与安全红队 | Adapter、许可、评分和校准原则已定义 | 数据集 API 接收已组装 Case，尚无 MMLU、GSM8K、HumanEval 或红队导入器 | 版本锁定 Adapter、许可清单、校准集、沙箱和可复现导入报告 |
 | 精调训练平台 | 上传、切分、SFT、DPO、RLHF、产物和发布门禁已定义 | 当前仓库没有训练编排器、GPU 队列、checkpoint 或模型仓库模块 | 独立训练控制面规格、最小 SFT 链路、故障恢复和 Radar 自动验收 |

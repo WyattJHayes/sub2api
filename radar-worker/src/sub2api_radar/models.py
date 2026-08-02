@@ -37,6 +37,32 @@ class ArtifactReceipt(StrictModel):
     bytes: int = Field(ge=0)
     mime_type: str
     scan_status: str
+    scan_reason: str | None = None
+    scanner: str | None = None
+    scanned_at: datetime | None = None
+    confirmed_at: datetime | None = None
+    deleted_at: datetime | None = None
+
+
+class ArtifactUpload(StrictModel):
+    artifact_id: UUID
+    object_key: str = Field(min_length=1)
+    upload_url: str = Field(min_length=1)
+    upload_headers: dict[str, str] = Field(default_factory=dict)
+    sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    bytes: int = Field(gt=0)
+    mime_type: str = Field(min_length=1)
+    expires_at: datetime
+
+
+class ArtifactDownload(StrictModel):
+    artifact_id: UUID
+    object_key: str = Field(min_length=1)
+    download_url: str = Field(min_length=1)
+    sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    bytes: int = Field(gt=0)
+    mime_type: str = Field(min_length=1)
+    expires_at: datetime
 
 
 class CaseSpec(StrictModel):

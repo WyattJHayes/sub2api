@@ -105,6 +105,8 @@ Repeat the request for `quality_admin`, `test_operator`, and `release_manager`. 
 
 The four bindings on one actor do not satisfy baseline separation of duties. A complete baseline promotion test needs a second active administrator with the required Radar binding because the proposer cannot approve the same baseline. Quality approval and release approval must be recorded by eligible actors according to the deployment's separation policy; production uses different users for proposal, quality approval, and release approval.
 
+Radar currently carries the authenticated `TenantID` from the request subject. Until the workspace membership mapping is enabled, the fallback tenant is the authenticated user ID, so a scoped role-binding request for another user is rejected by the repository. Configure the real workspace tenant mapping before enabling independent approval subjects; keep pre-provisioned bindings in place for staging while this mapping is absent.
+
 5. Enable the dedicated key through the audited governance API or the `Enable for Radar` control in the Runs view:
 
 ```bash
