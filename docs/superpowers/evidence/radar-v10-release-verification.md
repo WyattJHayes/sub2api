@@ -1507,3 +1507,131 @@ Task 6 remains open. The remaining blocker is deployment-reference integrity:
 the accepted candidate must be made available through a production-resolvable
 immutable image reference before the promotion, Smoke, rollback drill, and
 accepted-candidate restoration can proceed.
+
+## Final Authorized Production Closure, 2026-08-03
+
+The earlier closure attempt above is historical evidence from before the
+production target was activated. The authorized production sequence completed
+on August 3, 2026 using a locally available immutable image ID. No mutable
+application tag was used for the final service reference.
+
+Release identity:
+
+```text
+worktree=/Users/weijiahao/Documents/Codex/2026-07-25/api-benchmark-web-deepseek-qwen-sft/.worktrees/radar-v10-release
+commit=07f769fe2
+candidate_image=sha256:314b340cd56cbe4d4ea51eecd28cef29a8578511da4eb6503f0f996f59d003b2
+candidate_image_tag=sub2api/radar-control-plane:radar-v10-migration-203-20260803
+source_archive_sha256=14ca089c79dc337bbd53dcb68d04c19cdd79c8381f1553ae9ba2f1433b9989f1
+```
+
+The candidate was rebuilt after the migration 203 checksum compatibility fix.
+The isolated rollback compatibility rehearsal passed with the fresh
+candidate:
+
+```text
+rehearsal=/tmp/radar-production-rollback-compat-rehearsal-20260803.sh
+backup_path=/opt/sub2api-backups/radar-production-20260803T133619Z/sub2api.dump
+initial_schema_migrations=251
+old_image_schema_migrations=251
+candidate_schema_migrations=255
+old_image_on_candidate_schema=255
+old_image_id=sha256:96494731ee78dc9b7db1146c47258fc81597e46d73360c118324c0c91974f2d4
+candidate_image_id=sha256:314b340cd56cbe4d4ea51eecd28cef29a8578511da4eb6503f0f996f59d003b2
+rollback_compat_ok=true
+rollback_compat_log_sha256=ed032921c51fbc046cdef2adbb33ca94ffffba39bbec4e15a9215bc53e7f8ea9
+```
+
+The production backup was created outside `/opt/sub2api`, retained with mode
+`0600`, and restored into an isolated PostgreSQL 18 environment before the
+promotion gate:
+
+```text
+backup_evidence=/private/tmp/radar-production-backup-evidence-20260803-133619Z.json
+backup_audit=/private/tmp/radar-production-backup-audit-20260803-133619Z.json
+backup_path=/opt/sub2api-backups/radar-production-20260803T133619Z/sub2api.dump
+backup_sha256=d9653c2ad05d55d851e9e9dc88c93fb033d757c43b389d4a250b9a265db2f74c
+backup_size_bytes=2630623
+restore_schema_migrations=255
+restore_verified=true
+backup_audit_ok=true
+```
+
+The final promotion manifest was regenerated after the production override
+captured the working proxy gateway:
+
+```text
+target=/opt/sub2api
+authorization_audit=/private/tmp/radar-production-authorization-audit-20260803-135037Z.json
+target_preflight=/private/tmp/radar-production-target-preflight-20260803-143723.json
+promotion_manifest=/private/tmp/radar-production-promotion-manifest-20260803-135037.json
+promotion_audit=/private/tmp/radar-production-promotion-audit-20260803-135037.json
+production_override_image=sha256:314b340cd56cbe4d4ea51eecd28cef29a8578511da4eb6503f0f996f59d003b2
+update_proxy_url=http://172.21.0.1:7890
+production_promotion_executed=true
+promotion_audit_ok=true
+```
+
+Production Smoke passed on the restored candidate instance:
+
+```text
+smoke_evidence=/private/tmp/radar-production-smoke-evidence-20260803-142550Z.json
+smoke_audit=/private/tmp/radar-production-smoke-audit-20260803-142550Z.json
+active_image_digest=sha256:314b340cd56cbe4d4ea51eecd28cef29a8578511da4eb6503f0f996f59d003b2
+health=healthy
+health_http_status=200
+api_success_count=25
+api_error_count=0
+p99_latency_ms=3
+p99_slo_ms=500
+terminalization_outbox_pending=0
+evaluation_outbox_pending=0
+pricing_source=local
+pricing_resource_sha256=f7244f5dc8d9423b93bae92ace97c63750d759b59d0dfe7b90e4a603153b07fa
+pricing_fallback_failure_count=0
+http_5xx_count=0
+panic_count=0
+control_plane_error_count=0
+smoke_audit_ok=true
+```
+
+The rollback drill switched the live Compose service to the previous
+immutable image, verified health on schema 255, then restored the accepted
+candidate:
+
+```text
+rollback_evidence=/private/tmp/radar-production-rollback-evidence-20260803-143557Z.json
+rollback_audit=/private/tmp/radar-production-rollback-audit-20260803-143557Z.json
+previous_image_digest=sha256:96494731ee78dc9b7db1146c47258fc81597e46d73360c118324c0c91974f2d4
+rollback_schema_migrations=255
+rollback_smoke_ok=true
+budget_ledger_total_before=0
+budget_ledger_total_after=0
+accepted_candidate_restored=true
+post_restore_smoke_ok=true
+final_active_digest=sha256:314b340cd56cbe4d4ea51eecd28cef29a8578511da4eb6503f0f996f59d003b2
+rollback_audit_ok=true
+```
+
+The final closure bundle and audit passed:
+
+```text
+closure_evidence=/private/tmp/radar-production-release-closure-evidence-20260803-143723.json
+closure_audit=/private/tmp/radar-production-release-closure-audit-20260803-143723.json
+closure_checked_at=2026-08-03T14:40:50Z
+closure_audit_ok=true
+blockers=none
+final_active_digest=sha256:314b340cd56cbe4d4ea51eecd28cef29a8578511da4eb6503f0f996f59d003b2
+final_schema_migrations=255
+final_app_health=healthy
+final_restart_count=0
+production_port_8080=active
+```
+
+One follow-up observation remains outside the release gate. Before the final
+Smoke window, the pricing scheduler recorded one transient remote hash timeout
+at `2026-08-03T22:10:15+08:00`; the service remained on the local pricing
+file. The production override now uses the reachable proxy gateway and the
+post-restart Smoke window recorded zero pricing remote errors and zero fallback
+failures. A future hardening task should add bounded retry and backoff to the
+pricing refresh path, with a persistent proxy health check.
