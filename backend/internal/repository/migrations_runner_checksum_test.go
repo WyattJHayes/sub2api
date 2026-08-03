@@ -153,6 +153,15 @@ func TestIsMigrationChecksumCompatible(t *testing.T) {
 		}
 	})
 
+	t.Run("203生产已应用checksum可兼容tenant scope版本", func(t *testing.T) {
+		ok := isMigrationChecksumCompatible(
+			"203_add_gate_policy_head_tenant_scope.sql",
+			"d2a55773210dc9a055a3cc658cdf966ef2be1c7e3df670d65f673e42f2b1b20e",
+			"734a495574c1fcd0e4933e63175b53f5b682c71f7173236be21167187c641dbe",
+		)
+		require.True(t, ok)
+	})
+
 	t.Run("119未知checksum不兼容", func(t *testing.T) {
 		ok := isMigrationChecksumCompatible(
 			"119_enforce_payment_orders_out_trade_no_unique.sql",
