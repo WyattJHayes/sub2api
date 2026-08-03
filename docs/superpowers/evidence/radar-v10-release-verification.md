@@ -1372,3 +1372,138 @@ This establishes Compose-level compatibility for the candidate reference.
 The production override hash, active container digest, migration state, API
 Smoke results, and rollback evidence still require the authorized promotion
 sequence.
+
+## Authorized Production Closure Attempt
+
+The operator authorized all six production actions for
+`root@101.43.35.235:/opt/sub2api`.
+
+Authorization evidence:
+
+```text
+authorization_evidence=/private/tmp/radar-production-authorization-evidence-20260802.json
+authorization_audit=/private/tmp/radar-production-authorization-audit-20260803.json
+authorized_at=2026-08-02T23:49:17Z
+checked_at=2026-08-03T00:10:45Z
+age_seconds=1288
+ok=true
+blockers=none
+```
+
+The production environment file was tightened as authorized:
+
+```text
+/opt/sub2api/.env mode=0600 owner=root:root size=21191
+```
+
+The production database and Redis services were started from the existing local
+data directories and reached healthy state. A fresh production logical backup
+was written outside the deployment directory:
+
+```text
+backup_path=/opt/sub2api-backups/radar-production-20260802T235655Z/sub2api.dump
+backup_sha256=2196ebe16c6fd5e37c69cadbb0d6873bfbd1a3077d3d3b127a3205aa6c4db7cd
+backup_size_bytes=2124009
+created_at=2026-08-02T23:56:58Z
+live_schema_migrations_before_candidate=212
+```
+
+Because production had only 212 applied migrations while the accepted candidate
+expects 255, candidate release was paused before touching the production
+application database. A disposable restore rehearsal used the backup on an
+internal-only Docker network with a read-only candidate container, no new
+privileges, dropped capabilities, and UID/GID `1000:1000`.
+
+The first rehearsal run proved the security boundary but failed before startup
+because `su-exec` could not set groups after all capabilities were dropped:
+
+```text
+candidate_start_error=su-exec: setgroups: Operation not permitted
+restore_schema_migrations_after=212
+```
+
+The second rehearsal started the candidate directly as the image user and
+passed:
+
+```text
+restore_schema_migrations_before=212
+restore_schema_migrations_after=255
+candidate_health=healthy
+rehearsal_log=/opt/sub2api-backups/radar-production-20260802T235655Z/candidate-migration-rehearsal.log
+rehearsal_log_sha256=48a8cfb4fc30561c6cb21ac229866c280ecd1a2d38a812b7f8dc84726ed64710
+rehearsal_ok=true
+```
+
+Backup audit passed using the disposable restore result:
+
+```text
+backup_evidence=/private/tmp/radar-production-backup-evidence-20260802.json
+backup_audit=/private/tmp/radar-production-backup-audit-20260802.json
+ok=true
+blockers=none
+restore_schema_migrations=255
+```
+
+The current production application was then started on the existing image to
+establish an active rollback baseline:
+
+```text
+service=sub2api
+state=running
+health=healthy
+active_image=sub2api-custom:0.1.151-disable-image-generation.1
+active_image_id=sha256:96494731ee78dc9b7db1146c47258fc81597e46d73360c118324c0c91974f2d4
+restart_count=0
+listener_8080=active
+```
+
+The active-target preflight passed:
+
+```text
+preflight=/private/tmp/radar-production-target-preflight-20260803-active.json
+ok=true
+promotion_ready=true
+production_exposure_event=false
+blockers=none
+```
+
+The promotion input audit then passed:
+
+```text
+promotion_manifest=/private/tmp/radar-production-promotion-manifest-20260803-active.json
+promotion_audit=/private/tmp/radar-production-promotion-audit-20260803-active.json
+ok=true
+promotion_ready=true
+accepted_staging_image_digest=sha256:5c0b50508ba200a20fc3637e7d052f17cac900703bffc7e5334302791ddebf37
+previous_image_digest=sha256:96494731ee78dc9b7db1146c47258fc81597e46d73360c118324c0c91974f2d4
+```
+
+The immutable digest promotion attempt changed only the production override
+image reference and then stopped during Docker resolution:
+
+```text
+attempted_image=sub2api/radar-control-plane@sha256:5c0b50508ba200a20fc3637e7d052f17cac900703bffc7e5334302791ddebf37
+result=docker_pull_failed
+error=pull access denied for sub2api/radar-control-plane
+production_container_changed=false
+```
+
+The host has the accepted candidate as a local image ID and local tags, but not
+as a registry-backed repo digest. Using a mutable local tag for production
+promotion was rejected by safety review because it weakens the immutable digest
+control. The production override was restored to the previous image reference:
+
+```text
+override_image=sub2api-custom:0.1.151-disable-image-generation.1
+running_image_id=sha256:96494731ee78dc9b7db1146c47258fc81597e46d73360c118324c0c91974f2d4
+state=running
+health=healthy
+restart_count=0
+restored_preflight=/private/tmp/radar-production-target-preflight-20260803-restored.json
+restored_preflight_ok=true
+```
+
+Task 6 remains open. The remaining blocker is deployment-reference integrity:
+the accepted candidate must be made available through a production-resolvable
+immutable image reference before the promotion, Smoke, rollback drill, and
+accepted-candidate restoration can proceed.
