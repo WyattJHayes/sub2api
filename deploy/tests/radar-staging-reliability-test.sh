@@ -63,6 +63,10 @@ SH
         "RADAR_LOADGEN_WORKER_TOKEN=live-loadgen-token-3d8f1a6c9e2b4f7d0a5c8e1b6d9f2a4"
         "RADAR_CHAOS_CONTROLLER_TOKEN=live-chaos-token-5f0c9e2a7d1b4f8c6e3a0d9b2f7c1e4"
         "RADAR_RECOVERY_VERIFIER_TOKEN=live-recovery-token-7a1d4f9c2e6b0d8f3c5a9e1b4d7f2c6"
+        "RADAR_CONTROL_PLANE_IMAGE=registry.example.invalid/sub2api/radar-control-plane@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        "RADAR_WORKER_IMAGE=registry.example.invalid/sub2api/radar-worker@sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+        "RADAR_LIVE_CONTROL_PLANE_IMAGE_DIGEST=sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        "RADAR_LIVE_WORKER_IMAGE_DIGEST=sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
         "RADAR_LIVE_DOCKER_LOG=$docker_log"
         "PATH=$fake_bin:$PATH"
         "TMPDIR=${TMPDIR:-/tmp}"
@@ -108,6 +112,27 @@ SH
     grep -Fq 'repeated-character credential' "$output" || \
         fail "live E2E did not reject a low-entropy credential"
     [[ ! -s "$docker_log" ]] || fail "live E2E invoked Docker after rejecting a low-entropy credential"
+
+    : >"$docker_log"
+    output="$contract_root/missing-control-digest.out"
+    if env -i "${base_env[@]}" RADAR_LIVE_CONTROL_PLANE_IMAGE_DIGEST= \
+        "$LIVE_E2E_SCRIPT" >"$output" 2>&1; then
+        fail "live E2E accepted a missing control-plane digest"
+    fi
+    grep -Fq 'RADAR_LIVE_CONTROL_PLANE_IMAGE_DIGEST must be a lowercase sha256 image digest' "$output" || \
+        fail "live E2E did not identify a missing control-plane digest"
+    [[ ! -s "$docker_log" ]] || fail "live E2E invoked Docker after rejecting a missing control-plane digest"
+
+    : >"$docker_log"
+    output="$contract_root/mismatched-worker-digest.out"
+    if env -i "${base_env[@]}" \
+        RADAR_LIVE_WORKER_IMAGE_DIGEST=sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc \
+        "$LIVE_E2E_SCRIPT" >"$output" 2>&1; then
+        fail "live E2E accepted a mismatched Worker image digest"
+    fi
+    grep -Fq 'RADAR_WORKER_IMAGE must end with RADAR_LIVE_WORKER_IMAGE_DIGEST' "$output" || \
+        fail "live E2E did not identify a mismatched Worker digest"
+    [[ ! -s "$docker_log" ]] || fail "live E2E invoked Docker after rejecting a mismatched Worker digest"
 
     : >"$docker_log"
     output="$contract_root/valid.out"

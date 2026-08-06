@@ -21,6 +21,8 @@ POLICY_HASH=""
 RELEASE_SUBJECT_HASH=""
 WORKER_IMAGE_DIGEST=${RADAR_LIVE_WORKER_IMAGE_DIGEST:-}
 CONTROL_PLANE_IMAGE_DIGEST=${RADAR_LIVE_CONTROL_PLANE_IMAGE_DIGEST:-}
+CONTROL_PLANE_IMAGE=${RADAR_CONTROL_PLANE_IMAGE:-}
+WORKER_IMAGE=${RADAR_WORKER_IMAGE:-}
 CHAOS_HOLD_SECONDS=${RADAR_LIVE_CHAOS_HOLD_SECONDS:-15}
 REGISTER_BODY_FILES=()
 
@@ -202,6 +204,11 @@ base_compose() {
         "RADAR_COMPOSE_PROJECT_NAME=$PROJECT_NAME"
         "RADAR_COMPOSE_RESOURCE_PREFIX=$PROJECT_NAME"
         "RADAR_GATEWAY_URL=http://sub2api-staging:8080"
+        "RADAR_CONTROL_PLANE_IMAGE=$CONTROL_PLANE_IMAGE"
+        "RADAR_WORKER_IMAGE=$WORKER_IMAGE"
+        "RADAR_CONTROL_PLANE_IMAGE_DIGEST=$CONTROL_PLANE_IMAGE_DIGEST"
+        "RADAR_WORKER_IMAGE_DIGEST=$WORKER_IMAGE_DIGEST"
+        "RADAR_IMAGE_PULL_POLICY=always"
     )
     if [[ -n "$ENV_FILE" ]]; then
         env "${assignments[@]}" docker compose --env-file "$ENV_FILE" -f "$BASE_COMPOSE_FILE" "$@"
@@ -228,6 +235,11 @@ reliability_compose() {
         "RADAR_LOADGEN_EVALUATION_API_KEY=$RADAR_LIVE_EVALUATION_API_KEY"
         "RADAR_LOADGEN_IMAGE_DIGEST=$WORKER_IMAGE_DIGEST"
         "RADAR_CHAOS_AUTO_ROLLBACK_SECONDS=$CHAOS_HOLD_SECONDS"
+        "RADAR_CONTROL_PLANE_IMAGE=$CONTROL_PLANE_IMAGE"
+        "RADAR_WORKER_IMAGE=$WORKER_IMAGE"
+        "RADAR_CONTROL_PLANE_IMAGE_DIGEST=$CONTROL_PLANE_IMAGE_DIGEST"
+        "RADAR_WORKER_IMAGE_DIGEST=$WORKER_IMAGE_DIGEST"
+        "RADAR_IMAGE_PULL_POLICY=always"
     )
     if [[ -n "$ENV_FILE" ]]; then
         env "${assignments[@]}" docker compose --env-file "$ENV_FILE" -f "$BASE_COMPOSE_FILE" -f "$RELIABILITY_COMPOSE_FILE" "$@"
@@ -261,6 +273,14 @@ require_command tr
 
 [[ -n "$ENV_FILE" ]] || fail "RADAR_LIVE_ENV_FILE is required for live staging execution"
 require_mode_600 "$ENV_FILE"
+require_digest RADAR_LIVE_CONTROL_PLANE_IMAGE_DIGEST "$CONTROL_PLANE_IMAGE_DIGEST"
+require_digest RADAR_LIVE_WORKER_IMAGE_DIGEST "$WORKER_IMAGE_DIGEST"
+[[ -n "$CONTROL_PLANE_IMAGE" ]] || fail "RADAR_CONTROL_PLANE_IMAGE is required for live staging execution"
+[[ -n "$WORKER_IMAGE" ]] || fail "RADAR_WORKER_IMAGE is required for live staging execution"
+[[ "$CONTROL_PLANE_IMAGE" == *"@$CONTROL_PLANE_IMAGE_DIGEST" ]] || \
+    fail "RADAR_CONTROL_PLANE_IMAGE must end with RADAR_LIVE_CONTROL_PLANE_IMAGE_DIGEST"
+[[ "$WORKER_IMAGE" == *"@$WORKER_IMAGE_DIGEST" ]] || \
+    fail "RADAR_WORKER_IMAGE must end with RADAR_LIVE_WORKER_IMAGE_DIGEST"
 
 if [[ -n ${RADAR_LIVE_ADMIN_API_KEY:-} && -n ${RADAR_LIVE_ADMIN_TOKEN:-} ]]; then
     fail "set only one of RADAR_LIVE_ADMIN_API_KEY and RADAR_LIVE_ADMIN_TOKEN"
@@ -306,24 +326,13 @@ require_uuid RADAR_LIVE_POLICY_ID "$POLICY_ID"
 require_uuid RADAR_LIVE_RELEASE_SUBJECT_ID "$RELEASE_SUBJECT_ID"
 require_uuid RADAR_LIVE_CHAOS_TARGET_WORKER_ID "$RADAR_LIVE_CHAOS_TARGET_WORKER_ID"
 
-EXPECTED_WORKER_IMAGE_DIGEST=$WORKER_IMAGE_DIGEST
-EXPECTED_CONTROL_PLANE_IMAGE_DIGEST=$CONTROL_PLANE_IMAGE_DIGEST
-
-base_compose up -d --build --wait --wait-timeout 300 \
+base_compose up -d --no-build --pull always --wait --wait-timeout 300 \
     postgres-staging redis-staging minio-staging minio-init clamav-staging \
     sub2api-staging radar-synthetic-upstream
-base_compose build radar-runner radar-grader radar-statistics
-
-WORKER_IMAGE_DIGEST=$(docker image inspect --format '{{.Id}}' sub2api/radar-worker:staging 2>/dev/null || true)
-CONTROL_PLANE_IMAGE_DIGEST=$(docker image inspect --format '{{.Id}}' sub2api/radar-control-plane:staging 2>/dev/null || true)
-require_digest RADAR_LIVE_WORKER_IMAGE_DIGEST "$WORKER_IMAGE_DIGEST"
-require_digest RADAR_LIVE_CONTROL_PLANE_IMAGE_DIGEST "$CONTROL_PLANE_IMAGE_DIGEST"
-if [[ -n "$EXPECTED_WORKER_IMAGE_DIGEST" && "$WORKER_IMAGE_DIGEST" != "$EXPECTED_WORKER_IMAGE_DIGEST" ]]; then
-    fail "built Worker image digest does not match RADAR_LIVE_WORKER_IMAGE_DIGEST"
-fi
-if [[ -n "$EXPECTED_CONTROL_PLANE_IMAGE_DIGEST" && "$CONTROL_PLANE_IMAGE_DIGEST" != "$EXPECTED_CONTROL_PLANE_IMAGE_DIGEST" ]]; then
-    fail "built control-plane image digest does not match RADAR_LIVE_CONTROL_PLANE_IMAGE_DIGEST"
-fi
+docker image inspect "$WORKER_IMAGE" >/dev/null 2>&1 || \
+    fail "pinned Worker image is unavailable locally: $WORKER_IMAGE"
+docker image inspect "$CONTROL_PLANE_IMAGE" >/dev/null 2>&1 || \
+    fail "pinned control-plane image is unavailable locally: $CONTROL_PLANE_IMAGE"
 
 register_worker() {
     local name=$1

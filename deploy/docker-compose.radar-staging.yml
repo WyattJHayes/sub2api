@@ -11,7 +11,8 @@ services:
         VERSION: ${RADAR_RELEASE_VERSION:?RADAR_RELEASE_VERSION is required}
         COMMIT: ${RADAR_RELEASE_COMMIT:?RADAR_RELEASE_COMMIT is required}
         DATE: ${RADAR_RELEASE_DATE:?RADAR_RELEASE_DATE is required}
-    image: sub2api/radar-control-plane:staging
+    image: ${RADAR_CONTROL_PLANE_IMAGE:-sub2api/radar-control-plane:staging}
+    pull_policy: ${RADAR_IMAGE_PULL_POLICY:-build}
     restart: unless-stopped
     ports:
       - "127.0.0.1:${RADAR_CONTROL_PLANE_PORT:-18080}:8080"
@@ -179,7 +180,8 @@ services:
       retries: 18
 
   radar-synthetic-upstream:
-    image: sub2api/radar-worker:staging
+    image: ${RADAR_WORKER_IMAGE:-sub2api/radar-worker:staging}
+    pull_policy: ${RADAR_IMAGE_PULL_POLICY:-build}
     restart: unless-stopped
     entrypoint: ["python", "-m", "sub2api_radar.synthetic_upstream"]
     environment:

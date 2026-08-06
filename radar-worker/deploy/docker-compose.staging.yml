@@ -9,7 +9,8 @@ services:
       dockerfile: Dockerfile
       args:
         RADAR_WORKER_BASE_IMAGE: ${RADAR_WORKER_BASE_IMAGE:-sub2api/radar-worker:staging}
-    image: sub2api/radar-worker:staging
+    image: ${RADAR_WORKER_IMAGE:-sub2api/radar-worker:staging}
+    pull_policy: ${RADAR_IMAGE_PULL_POLICY:-build}
     restart: unless-stopped
     entrypoint: ["/usr/local/bin/radar-runner"]
     environment:
@@ -48,7 +49,8 @@ services:
       retries: 3
 
   radar-grader:
-    image: sub2api/radar-worker:staging
+    image: ${RADAR_WORKER_IMAGE:-sub2api/radar-worker:staging}
+    pull_policy: ${RADAR_IMAGE_PULL_POLICY:-build}
     build:
       context: ..
       dockerfile: Dockerfile
@@ -89,7 +91,8 @@ services:
       retries: 3
 
   radar-statistics:
-    image: sub2api/radar-worker:staging
+    image: ${RADAR_WORKER_IMAGE:-sub2api/radar-worker:staging}
+    pull_policy: ${RADAR_IMAGE_PULL_POLICY:-build}
     build:
       context: ..
       dockerfile: Dockerfile

@@ -3,7 +3,8 @@ name: sub2api-radar-staging
 services:
   radar-loadgen:
     profiles: ["reliability"]
-    image: sub2api/radar-worker:staging
+    image: ${RADAR_WORKER_IMAGE:-sub2api/radar-worker:staging}
+    pull_policy: ${RADAR_IMAGE_PULL_POLICY:-build}
     build:
       context: ..
       dockerfile: Dockerfile
@@ -47,7 +48,8 @@ services:
 
   radar-chaos-controller:
     profiles: ["chaos"]
-    image: sub2api/radar-worker:staging
+    image: ${RADAR_WORKER_IMAGE:-sub2api/radar-worker:staging}
+    pull_policy: ${RADAR_IMAGE_PULL_POLICY:-build}
     build:
       context: ..
       dockerfile: Dockerfile
@@ -85,7 +87,8 @@ services:
 
   radar-recovery-verifier:
     profiles: ["reliability", "chaos"]
-    image: sub2api/radar-worker:staging
+    image: ${RADAR_WORKER_IMAGE:-sub2api/radar-worker:staging}
+    pull_policy: ${RADAR_IMAGE_PULL_POLICY:-build}
     build:
       context: ..
       dockerfile: Dockerfile
