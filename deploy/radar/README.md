@@ -61,7 +61,7 @@ The live script is an opt-in, pre-bound drill. The control plane currently expos
 - a pending `RADAR_LIVE_RECOVERY_EVIDENCE_ID`
 - the exact approved `RADAR_LIVE_CHAOS_TARGET_WORKER_ID`
 
-The complete script also requires `RADAR_LIVE_ENV_FILE`. It must be a regular file with mode `0600` and contain the Compose release, database, object-store, ClamAV, and staging service settings. The script does not source this file, so administrator credentials, evaluation key, and Worker tokens must be exported in the invoking environment. This keeps the file format declarative and avoids executing shell code from a credentials file.
+The complete script also requires `RADAR_LIVE_ENV_FILE`. It must be a regular file with mode `0600` and contain the Compose release, database, object-store, ClamAV, and staging service settings. The script does not source this file, so administrator credentials, evaluation key, Worker tokens, and the candidate image references must be exported in the invoking environment. This keeps the file format declarative and avoids executing shell code from a credentials file.
 
 Live mode is fail-closed. `RADAR_LIVE_E2E=1` is required before any Docker or network operation. Every administrator credential, evaluation key, and Worker token must be a dedicated value of at least 32 characters. Values containing synthetic, placeholder, demo, fake, test, or example markers, whitespace, or a repeated single character are rejected. The staging contract harness exercises these failures with a Docker stub, so it does not contact staging or start containers.
 
@@ -70,6 +70,10 @@ Example invocation:
 ```bash
 export RADAR_LIVE_E2E=1
 export RADAR_LIVE_ENV_FILE=/absolute/path/radar-staging.env
+export RADAR_CONTROL_PLANE_IMAGE=registry.example/sub2api/radar-control-plane@sha256:<candidate>
+export RADAR_WORKER_IMAGE=registry.example/sub2api/radar-worker@sha256:<candidate>
+export RADAR_LIVE_CONTROL_PLANE_IMAGE_DIGEST=sha256:<candidate>
+export RADAR_LIVE_WORKER_IMAGE_DIGEST=sha256:<candidate>
 export RADAR_LIVE_ADMIN_API_KEY="${STAGING_ADMIN_API_KEY:?load this value from the staging secret manager}"
 export RADAR_LIVE_EVALUATION_API_KEY="${STAGING_EVALUATION_API_KEY:?load this value from the staging secret manager}"
 export RADAR_RUNNER_WORKER_TOKEN="${STAGING_RUNNER_TOKEN:?load this value from the staging secret manager}"
@@ -139,3 +143,8 @@ The verifier recomputes every returned snapshot hash from its immutable fields, 
 Enable the Worker metrics endpoint with `RADAR_METRICS_ENABLED=true`, then set `RADAR_METRICS_HOST` and `RADAR_METRICS_PORT` for the container network. The endpoint serves Prometheus text at `/metrics`. It exposes fixed-boundary latency and TTFT histograms, Gateway outcomes, queue lag, lease age, analysis lag, recovery duration, cost, billing idempotency failures, worker heartbeat age, GPU utilization, and W3C trace propagation on control-plane and Gateway calls.
 
 Load the alert rules from `deploy/radar/prometheus-rules.yml` and import `deploy/radar/grafana-dashboard.json` into Grafana. The operational procedures for secret rotation, digest pinning, migration cutover, backup and PITR, failover, artifact retention, and rollback are in `deploy/radar/production-runbook.md`.
+
+The v0.1.171 upgrade rehearsal and isolated trial procedure is documented in
+`deploy/radar/v01171-upgrade-runbook.md`. Run
+`deploy/radar/rehearse-v01171-migrations.sh` against a disposable restore before
+using any candidate digest in staging.
