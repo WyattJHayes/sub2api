@@ -159,7 +159,7 @@ func (s *S3EvaluationArtifactObjectStore) Head(ctx context.Context, objectKey st
 	if err != nil {
 		return nil, err
 	}
-	etag := strings.Trim(strings.TrimSpace(valueOrEmpty(result.ETag)), "\"")
+	etag := strings.Trim(strings.TrimSpace(artifactStringValueOrEmpty(result.ETag)), "\"")
 	return &service.ArtifactObjectMetadata{
 		ObjectKey: key,
 		Bytes:     *result.ContentLength,
@@ -184,7 +184,7 @@ func artifactSHA256FromHead(result *s3.HeadObjectOutput) (string, error) {
 	return "", fmt.Errorf("%w: sha256 metadata is missing or invalid", service.ErrArtifactObjectMetadataUnavailable)
 }
 
-func valueOrEmpty(value *string) string {
+func artifactStringValueOrEmpty(value *string) string {
 	if value == nil {
 		return ""
 	}
