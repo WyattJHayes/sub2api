@@ -23,7 +23,7 @@ func TestRadarGovernanceActionRoutesDoNotConflictWithAlertIDs(t *testing.T) {
 	stepUp := servermiddleware.StepUpAuthMiddleware(func(c *gin.Context) { c.Next() })
 
 	require.NotPanics(t, func() {
-		RegisterAdminRoutes(router.Group("/api/v1"), handlers, adminAuth, auditLog, stepUp, nil)
+		RegisterAdminRoutes(router.Group("/api/v1"), handlers, adminAuth, auditLog, stepUp, nil, nil)
 	})
 
 	routes := map[string]bool{}
@@ -31,6 +31,7 @@ func TestRadarGovernanceActionRoutesDoNotConflictWithAlertIDs(t *testing.T) {
 		routes[route.Method+" "+route.Path] = true
 	}
 	for _, route := range []string{
+		http.MethodGet + " /api/v1/admin/radar/overview",
 		http.MethodPost + " /api/v1/admin/radar/datasets",
 		http.MethodPost + " /api/v1/admin/radar/datasets/:id/publish",
 		http.MethodPost + " /api/v1/admin/radar/plans",

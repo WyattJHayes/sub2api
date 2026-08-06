@@ -177,7 +177,7 @@ func TestAPIKeyRepository_UpdatePersistsEvaluationFlag(t *testing.T) {
 	require.NoError(t, repo.Create(ctx, key))
 
 	key.IsEvaluation = true
-	require.NoError(t, repo.Update(ctx, key))
+	require.NoError(t, repo.Update(ctx, key, service.APIKeyUpdateFields{IsEvaluation: true}))
 
 	got, err := repo.GetByID(ctx, key.ID)
 	require.NoError(t, err)

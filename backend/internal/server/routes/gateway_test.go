@@ -172,9 +172,14 @@ func TestGatewayRoutesRunEvaluationEvidenceAfterAuthenticationForEveryGatewayFam
 		google bool
 	}{
 		{name: "versioned gateway", method: http.MethodPost, path: "/v1/messages"},
+		{name: "versioned responses", method: http.MethodPost, path: "/v1/responses"},
+		{name: "versioned responses subpath", method: http.MethodPost, path: "/v1/responses/compact"},
+		{name: "versioned alpha search", method: http.MethodPost, path: "/v1/alpha/search"},
 		{name: "google compatible", method: http.MethodPost, path: "/v1beta/models/gemini-public:generateContent", google: true},
 		{name: "root alias", method: http.MethodPost, path: "/responses"},
+		{name: "root alias responses subpath", method: http.MethodPost, path: "/responses/compact"},
 		{name: "codex direct", method: http.MethodPost, path: "/backend-api/codex/responses"},
+		{name: "codex direct responses subpath", method: http.MethodPost, path: "/backend-api/codex/responses/compact"},
 		{name: "chat alias", method: http.MethodPost, path: "/chat/completions"},
 		{name: "antigravity versioned", method: http.MethodPost, path: "/antigravity/v1/messages"},
 		{name: "antigravity google", method: http.MethodPost, path: "/antigravity/v1beta/models/gemini-public:generateContent", google: true},
@@ -471,6 +476,33 @@ func TestGatewayRoutesGrokAllowsCLICompatibilityEntrypoints(t *testing.T) {
 
 		router.ServeHTTP(w, req)
 		require.NotEqual(t, http.StatusNotFound, w.Code, "path=%s should still reach Responses handler", path)
+	}
+}
+
+// TestGatewayRoutesResponsesSubpathRejectsNonConformingSubpaths 端到端锁定不变式：
+// /responses/*subpath 的子路径会被转发到上游同名端点之后，因此不合规的子路径必须
+// 在入口就被拒绝，不得进入调度与转发流程。
+func TestGatewayRoutesResponsesSubpathRejectsNonConformingSubpaths(t *testing.T) {
+	router := newGatewayRoutesTestRouter()
+
+	for _, path := range []string{
+		"/v1/responses/../../x/y",
+		"/v1/responses/..%2f..%2fx/y",
+		"/v1/responses/%2e%2e/%2e%2e/x",
+		"/responses/%2e%2e%2fx",
+		"/backend-api/codex/responses/..%2f..%2fx",
+		`/v1/responses/..\..\x`,
+		"/v1/responses/%3fa=b",
+		"/v1/responses/x%23frag",
+		"/v1/responses/compact%2f..",
+	} {
+		req := httptest.NewRequest(http.MethodPost, path, strings.NewReader(`{"model":"gpt-5"}`))
+		req.Header.Set("Content-Type", "application/json")
+		w := httptest.NewRecorder()
+
+		router.ServeHTTP(w, req)
+		require.Equal(t, http.StatusNotFound, w.Code, "path=%s must be rejected at the edge", path)
+		require.Contains(t, w.Body.String(), "Unsupported responses subpath", "path=%s", path)
 	}
 }
 
