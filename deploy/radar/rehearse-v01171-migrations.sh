@@ -90,6 +90,17 @@ sha256_file() {
     shasum -a 256 "$1" | awk '{print $1}'
 }
 
+migration_checksum() {
+    python3 - "$1" <<'PY'
+import hashlib
+import pathlib
+import sys
+
+content = pathlib.Path(sys.argv[1]).read_text(encoding="utf-8").strip()
+print(hashlib.sha256(content.encode("utf-8")).hexdigest())
+PY
+}
+
 require_image_binding() {
     local name=$1
     local image=$2
@@ -236,6 +247,7 @@ render_plan() {
 wait_for_database() {
     for _ in $(seq 1 "${RADAR_MIGRATION_REHEARSAL_DB_WAIT_ATTEMPTS:-60}"); do
         if docker_exec "$DB_CONTAINER" pg_isready -U "$DATABASE_USER" -d "$DATABASE_NAME" >/dev/null 2>&1; then
+            sleep 5
             return 0
         fi
         sleep 2
@@ -271,7 +283,7 @@ require_migrations_once() {
     for name in "${MIGRATION_NAMES[@]}"; do
         file="$MIGRATIONS_DIR/$name"
         [[ -f "$file" ]] || fail "required migration is missing: $name"
-        checksum=$(sha256_file "$file")
+        checksum=$(migration_checksum "$file")
         count=$(awk -F'|' -v name="$name" '$1 == name {count++} END {print count + 0}' "$path")
         [[ "$count" == 1 ]] || fail "migration must be recorded exactly once: $name"
         actual=$(awk -F'|' -v name="$name" '$1 == name {print $2}' "$path")
@@ -288,7 +300,7 @@ require_historical_radar_migrations() {
         "193_add_radar_grading_statistics.sql"; do
         file="$MIGRATIONS_DIR/$name"
         [[ -f "$file" ]] || fail "historical Radar migration is missing: $name"
-        checksum=$(sha256_file "$file")
+        checksum=$(migration_checksum "$file")
         count=$(awk -F'|' -v name="$name" '$1 == name {count++} END {print count + 0}' "$path")
         [[ "$count" == 1 ]] || fail "historical migration must be recorded exactly once: $name"
         actual=$(awk -F'|' -v name="$name" '$1 == name {print $2}' "$path")
@@ -301,8 +313,10 @@ run_rehearsal() {
         --network-alias "$DATABASE_HOST" \
         --label "radar.rehearsal.project=$PROJECT_NAME" \
         -e POSTGRES_USER="$DATABASE_USER" -e POSTGRES_PASSWORD="$DATABASE_PASSWORD" \
-        -e POSTGRES_DB="$DATABASE_NAME" -v "$VOLUME:/var/lib/postgresql/data" "$POSTGRES_IMAGE" >/dev/null
+        -e POSTGRES_DB="$DATABASE_NAME" -v "$VOLUME:/var/lib/postgresql" "$POSTGRES_IMAGE" >/dev/null
     CONTAINERS_STARTED=1
+    DATABASE_HOST=$(docker inspect -f '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}' "$DB_CONTAINER")
+    [[ -n "$DATABASE_HOST" ]] || fail "rehearsal PostgreSQL did not receive an isolated network address"
     wait_for_database
     docker run --rm --network "$NETWORK" -v "$BACKUP:/backup.dump:ro" \
         -e PGPASSWORD="$DATABASE_PASSWORD" "$POSTGRES_IMAGE" \
@@ -329,7 +343,7 @@ run_rehearsal() {
 
     docker run -d --name "$ROLLBACK_CONTAINER" --network "$NETWORK" \
         --label "radar.rehearsal.project=$PROJECT_NAME" --env-file "$ENV_FILE" \
-        -e AUTO_SETUP=false -e DATABASE_HOST="$DATABASE_HOST" -e DATABASE_PORT=5432 \
+        -e AUTO_SETUP=true -e DATABASE_HOST="$DATABASE_HOST" -e DATABASE_PORT=5432 \
         -e DATABASE_USER="$DATABASE_USER" -e DATABASE_PASSWORD="$DATABASE_PASSWORD" \
         -e DATABASE_DBNAME="$DATABASE_NAME" -e REDIS_HOST="$REDIS_CONTAINER" \
         "$ROLLBACK_IMAGE" >/dev/null

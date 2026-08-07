@@ -179,6 +179,26 @@ class MigrationRehearsalContractTests(unittest.TestCase):
         self.assertEqual("sha256:" + "d" * 64, summary["rollback_worker_digest"])
         self.assertFalse(summary["rollback_worker_probe_ok"])
 
+    def test_postgres_18_and_runtime_checksum_contracts_are_preserved(self) -> None:
+        body = SCRIPT.read_text(encoding="utf-8")
+        self.assertIn('-v "$VOLUME:/var/lib/postgresql"', body)
+        self.assertNotIn('-v "$VOLUME:/var/lib/postgresql/data"', body)
+        self.assertIn('content = pathlib.Path(sys.argv[1]).read_text(encoding="utf-8").strip()', body)
+        self.assertEqual(2, body.count('checksum=$(migration_checksum "$file")'))
+        self.assertIn(
+            "DATABASE_HOST=$(docker inspect -f "
+            "'{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}' \"$DB_CONTAINER\")",
+            body,
+        )
+
+    def test_rollback_control_plane_bootstraps_disposable_configuration(self) -> None:
+        body = SCRIPT.read_text(encoding="utf-8")
+        rollback_start = body.index('docker run -d --name "$ROLLBACK_CONTAINER"')
+        rollback_worker_start = body.index('docker run --rm --name "$ROLLBACK_WORKER_CONTAINER"')
+        rollback_block = body[rollback_start:rollback_worker_start]
+        self.assertIn('-e AUTO_SETUP=true', rollback_block)
+        self.assertNotIn('-e AUTO_SETUP=false', rollback_block)
+
 
 if __name__ == "__main__":
     unittest.main()
