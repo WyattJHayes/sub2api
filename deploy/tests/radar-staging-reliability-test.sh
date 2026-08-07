@@ -124,6 +124,16 @@ SH
     [[ ! -s "$docker_log" ]] || fail "live E2E invoked Docker after rejecting a missing control-plane digest"
 
     : >"$docker_log"
+    output="$contract_root/missing-worker-digest.out"
+    if env -i "${base_env[@]}" RADAR_LIVE_WORKER_IMAGE_DIGEST= \
+        "$LIVE_E2E_SCRIPT" >"$output" 2>&1; then
+        fail "live E2E accepted a missing Worker digest"
+    fi
+    grep -Fq 'RADAR_LIVE_WORKER_IMAGE_DIGEST must be a lowercase sha256 image digest' "$output" || \
+        fail "live E2E did not identify a missing Worker digest"
+    [[ ! -s "$docker_log" ]] || fail "live E2E invoked Docker after rejecting a missing Worker digest"
+
+    : >"$docker_log"
     output="$contract_root/mismatched-worker-digest.out"
     if env -i "${base_env[@]}" \
         RADAR_LIVE_WORKER_IMAGE_DIGEST=sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc \
@@ -133,6 +143,17 @@ SH
     grep -Fq 'RADAR_WORKER_IMAGE must end with RADAR_LIVE_WORKER_IMAGE_DIGEST' "$output" || \
         fail "live E2E did not identify a mismatched Worker digest"
     [[ ! -s "$docker_log" ]] || fail "live E2E invoked Docker after rejecting a mismatched Worker digest"
+
+    : >"$docker_log"
+    output="$contract_root/mismatched-control-digest.out"
+    if env -i "${base_env[@]}" \
+        RADAR_LIVE_CONTROL_PLANE_IMAGE_DIGEST=sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc \
+        "$LIVE_E2E_SCRIPT" >"$output" 2>&1; then
+        fail "live E2E accepted a mismatched control-plane image digest"
+    fi
+    grep -Fq 'RADAR_CONTROL_PLANE_IMAGE must end with RADAR_LIVE_CONTROL_PLANE_IMAGE_DIGEST' "$output" || \
+        fail "live E2E did not identify a mismatched control-plane digest"
+    [[ ! -s "$docker_log" ]] || fail "live E2E invoked Docker after rejecting a mismatched control-plane digest"
 
     : >"$docker_log"
     output="$contract_root/valid.out"

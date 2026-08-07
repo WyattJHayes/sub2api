@@ -14,6 +14,7 @@ IMAGE_DIGEST_RE = re.compile(r"^sha256:[0-9a-f]{64}$")
 REPO_ROOT = Path(__file__).resolve().parents[2]
 COMPOSE_FILE = REPO_ROOT / "deploy" / "docker-compose.radar-staging.yml"
 RELIABILITY_COMPOSE_FILE = REPO_ROOT / "deploy" / "docker-compose.radar-reliability.yml"
+WORKER_COMPOSE_FILE = REPO_ROOT / "radar-worker" / "deploy" / "docker-compose.staging.yml"
 
 
 class RadarCandidateImageConfigTest(unittest.TestCase):
@@ -105,6 +106,50 @@ class RadarCandidateImageConfigTest(unittest.TestCase):
             self.fail(f"docker compose config failed: {result.stderr.strip()}")
         return json.loads(result.stdout)
 
+    def _render_worker(self) -> dict:
+        if shutil.which("docker") is None:
+            raise RuntimeError("Docker Compose is required for candidate image configuration checks")
+
+        worker_digest = "sha256:" + "b" * 64
+        env = {
+            "RADAR_COMPOSE_PROJECT_NAME": "sub2api-radar-v11-test",
+            "RADAR_COMPOSE_RESOURCE_PREFIX": "sub2api-radar-v11-test",
+            "RADAR_WORKER_IMAGE": f"registry.example.invalid/sub2api/radar-worker@{worker_digest}",
+            "RADAR_IMAGE_PULL_POLICY": "always",
+            "RADAR_RUNNER_WORKER_TOKEN": "r" * 40,
+            "RADAR_GRADER_WORKER_TOKEN": "g" * 40,
+            "RADAR_STATISTICS_WORKER_TOKEN": "s" * 40,
+        }
+
+        with tempfile.TemporaryDirectory(prefix="radar-worker-compose-config-") as temp_dir:
+            env_file = Path(temp_dir) / "candidate.env"
+            env_file.write_text(
+                "".join(f"{key}={value}\n" for key, value in env.items()),
+                encoding="utf-8",
+            )
+            env_file.chmod(0o600)
+            result = subprocess.run(
+                [
+                    "docker",
+                    "compose",
+                    "--env-file",
+                    str(env_file),
+                    "-f",
+                    str(WORKER_COMPOSE_FILE),
+                    "config",
+                    "--format",
+                    "json",
+                ],
+                cwd=REPO_ROOT,
+                env={**os.environ, **env},
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+        if result.returncode != 0:
+            self.fail(f"docker compose config failed: {result.stderr.strip()}")
+        return json.loads(result.stdout)
+
     def test_candidate_images_are_digest_pinned_and_workers_are_private(self) -> None:
         config = self._render()
         services = config["services"]
@@ -141,6 +186,12 @@ class RadarCandidateImageConfigTest(unittest.TestCase):
         services = config["services"]
         expected = "registry.example.invalid/sub2api/radar-worker@sha256:" + "b" * 64
 
+        self.assertEqual("sub2api-radar-v11-test", config["name"])
+        self.assertEqual(
+            "sub2api-radar-v11-test-reliability",
+            config["networks"]["radar_reliability_internal"]["name"],
+        )
+
         for name in ["radar-loadgen", "radar-chaos-controller", "radar-recovery-verifier"]:
             service = services[name]
             self.assertEqual(expected, service["image"], name)
@@ -148,6 +199,20 @@ class RadarCandidateImageConfigTest(unittest.TestCase):
             self.assertNotIn("ports", service, name)
             self.assertTrue(service.get("read_only"), name)
             self.assertIn("ALL", service.get("cap_drop", []), name)
+
+    def test_standalone_worker_resources_use_trial_prefix(self) -> None:
+        worker_config = self._render_worker()
+        expected = {
+            "radar_worker_internal": "sub2api-radar-v11-test-internal",
+        }
+
+        self.assertEqual("sub2api-radar-v11-test", worker_config["name"])
+        for key, name in expected.items():
+            self.assertEqual(name, worker_config["networks"][key]["name"])
+        self.assertEqual(
+            "sub2api-radar-v11-test-runner",
+            worker_config["volumes"]["radar_runner_state"]["name"],
+        )
 
 
 if __name__ == "__main__":

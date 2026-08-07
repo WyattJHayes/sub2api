@@ -1,4 +1,4 @@
-name: sub2api-radar-staging
+name: ${RADAR_COMPOSE_PROJECT_NAME:-sub2api-radar-staging}
 
 services:
   radar-loadgen:
@@ -136,5 +136,5 @@ services:
 
 networks:
   radar_reliability_internal:
-    name: sub2api-radar-staging-reliability
+    name: ${RADAR_COMPOSE_RESOURCE_PREFIX:-sub2api-radar-staging}-reliability
     internal: true

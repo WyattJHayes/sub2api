@@ -1,4 +1,4 @@
-name: sub2api-radar-staging
+name: ${RADAR_COMPOSE_PROJECT_NAME:-sub2api-radar-staging}
 
 # Add docker-compose.reliability.yml explicitly for reliability or chaos drills.
 
@@ -135,13 +135,13 @@ services:
 
 networks:
   radar_worker_internal:
-    name: sub2api-radar-staging-internal
+    name: ${RADAR_COMPOSE_RESOURCE_PREFIX:-sub2api-radar-staging}-internal
     internal: true
 
 volumes:
   radar_runner_state:
-    name: sub2api-radar-staging-runner
+    name: ${RADAR_COMPOSE_RESOURCE_PREFIX:-sub2api-radar-staging}-runner
   radar_grader_state:
-    name: sub2api-radar-staging-grader
+    name: ${RADAR_COMPOSE_RESOURCE_PREFIX:-sub2api-radar-staging}-grader
   radar_statistics_state:
-    name: sub2api-radar-staging-statistics
+    name: ${RADAR_COMPOSE_RESOURCE_PREFIX:-sub2api-radar-staging}-statistics
