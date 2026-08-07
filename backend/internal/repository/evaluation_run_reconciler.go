@@ -195,6 +195,19 @@ func loadRunReconcileFacts(ctx context.Context, tx *sql.Tx, runID uuid.UUID, fac
 		FROM evaluation_samples WHERE run_id = $1`, runID).Scan(&p0Expected, &p0Successful, &p0Active, &pending); err != nil {
 		return facts, fmt.Errorf("load evaluation run work counts: %w", err)
 	}
+	var pendingPipeline int
+	if err := tx.QueryRowContext(ctx, `
+		SELECT
+			(SELECT COUNT(*) FROM evaluation_grading_jobs
+			 WHERE run_id=$1 AND status NOT IN ('completed','cancelled','failed')) +
+			(SELECT COUNT(*) FROM evaluation_analysis_jobs
+			 WHERE run_id=$1 AND status NOT IN ('completed','cancelled','failed')) +
+			(SELECT COUNT(*) FROM evaluation_outbox_events
+			 WHERE run_id=$1 AND COALESCE(work_origin,'initial')='initial'
+			   AND status IN ('pending','leased'))`, runID).Scan(&pendingPipeline); err != nil {
+		return facts, fmt.Errorf("load evaluation run pipeline work count: %w", err)
+	}
+	pending += pendingPipeline
 	facts.P0Expected, facts.P0Successful, facts.P0Active, facts.PendingWork = p0Expected, p0Successful, p0Active, pending
 	if p0Expected == 0 {
 		facts.P0ScoreHeadsReady = true
@@ -212,44 +225,14 @@ func loadRunReconcileFacts(ctx context.Context, tx *sql.Tx, runID uuid.UUID, fac
 	var currentAggregateCount, expectedAggregateCount int
 	if err := tx.QueryRowContext(ctx, `
 		SELECT
-			COUNT(DISTINCT c.capability_domain || ':' || s.model_route),
-			COUNT(DISTINCT c.capability_domain || ':' || s.model_route) FILTER (WHERE EXISTS (
+			COUNT(DISTINCT c.capability_domain || ':' || regexp_replace(s.model_route, '^(baseline|candidate):', '')),
+			COUNT(DISTINCT c.capability_domain || ':' || regexp_replace(s.model_route, '^(baseline|candidate):', '')) FILTER (WHERE EXISTS (
 				SELECT 1
-				FROM evaluation_aggregate_snapshots current_aggregate
+				FROM evaluation_aggregate_heads current_aggregate
 				WHERE current_aggregate.run_id = s.run_id
 				  AND current_aggregate.capability_domain = c.capability_domain
-				  AND current_aggregate.model_route = s.model_route
-				  AND current_aggregate.window = 'daily'
-				  AND NOT EXISTS (
-					SELECT 1 FROM evaluation_aggregate_snapshots newer
-					WHERE newer.run_id = current_aggregate.run_id
-					  AND newer.capability_domain = current_aggregate.capability_domain
-					  AND newer.model_route = current_aggregate.model_route
-					  AND newer.window = current_aggregate.window
-					  AND newer.created_at > current_aggregate.created_at
-				  )
-				  AND NOT EXISTS (
-					SELECT 1
-					FROM evaluation_samples covered
-					JOIN evaluation_cases covered_case ON covered_case.id = covered.case_id
-					JOIN evaluation_score_heads covered_head ON covered_head.sample_id = covered.id
-					WHERE covered.run_id = s.run_id
-					  AND covered.status = 'completed'
-					  AND covered_case.capability_domain = c.capability_domain
-					  AND covered.model_route = s.model_route
-					  AND NOT (covered_head.score_id = ANY(current_aggregate.score_ids))
-				  )
-				  AND EXISTS (
-					SELECT 1
-					FROM evaluation_samples headed
-					JOIN evaluation_cases headed_case ON headed_case.id = headed.case_id
-					JOIN evaluation_score_heads headed_head ON headed_head.sample_id = headed.id
-					WHERE headed.run_id = s.run_id
-					  AND headed.status = 'completed'
-					  AND headed_case.capability_domain = c.capability_domain
-					  AND headed.model_route = s.model_route
-					  AND headed_head.score_id = ANY(current_aggregate.score_ids)
-				  )
+				  AND current_aggregate.canonical_model_route = regexp_replace(s.model_route, '^(baseline|candidate):', '')
+				  AND current_aggregate.analysis_version = 'v1'
 			))
 		FROM evaluation_samples s
 		JOIN evaluation_cases c ON c.id = s.case_id

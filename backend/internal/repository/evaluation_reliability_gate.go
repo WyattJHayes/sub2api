@@ -387,6 +387,7 @@ func loadRadarGateAuthoritativeInput(
 		EvidenceSufficient:   global != nil && global.Sufficient && allQualitySufficient,
 		RouteEvidencePresent: totalSamples > 0 && sealedSamples == totalSamples,
 		RouteMatch:           baselineSamples > 0 && matchedBaselineSamples == baselineSamples,
+		ObservedAt:           observedAt.UTC(),
 		ObservationDays:      observationDays(observedAt, runStartedAt),
 		NewP0Failure:         p0Failures > 0,
 		JudgeDisagreement:    judgeDisagreement,
@@ -690,7 +691,7 @@ func validateGateReliabilityWatermark(ctx context.Context, tx *sql.Tx, runID, po
 	}
 	var watermark radarGateReliabilityWatermark
 	if err := json.Unmarshal(raw, &watermark); err != nil || watermark.Version != "radar-gate-reliability-watermark-v1" ||
-		watermark.RunID != runID || watermark.PolicyID != policyID || len(watermark.SnapshotRefs) == 0 {
+		watermark.RunID != runID || watermark.PolicyID != policyID {
 		return service.ErrGovernanceHeadConflict
 	}
 	if watermark.GateInputHash != "" {
@@ -704,17 +705,42 @@ func validateGateReliabilityWatermark(ctx context.Context, tx *sql.Tx, runID, po
 		}
 	}
 	var currentPolicyHash string
+	var rawPolicy []byte
 	if err := tx.QueryRowContext(ctx, `
-		SELECT policy_hash FROM evaluation_gate_policies
+		SELECT policy_hash, policy FROM evaluation_gate_policies
 		WHERE id=$1 AND retired_at IS NULL
-		FOR SHARE`, policyID).Scan(&currentPolicyHash); err != nil || currentPolicyHash != watermark.PolicyHash {
+		FOR SHARE`, policyID).Scan(&currentPolicyHash, &rawPolicy); err != nil || currentPolicyHash != watermark.PolicyHash {
 		return service.ErrGovernanceHeadConflict
+	}
+	var policy storedReliabilityGatePolicy
+	if err := json.Unmarshal(rawPolicy, &policy); err != nil {
+		return service.ErrGovernanceHeadConflict
+	}
+	var requirements []reliabilityGateSliceRequirement
+	if policy.Reliability != nil {
+		var err error
+		requirements, err = normalizeReliabilityGateRequirements(policy.Reliability.RequiredSlices)
+		if err != nil {
+			return service.ErrGovernanceHeadConflict
+		}
+	}
+	if len(watermark.SnapshotRefs) != len(requirements) {
+		return service.ErrGovernanceHeadConflict
+	}
+	expectedRefs := make(map[string]struct{}, len(requirements))
+	for _, requirement := range requirements {
+		expectedRefs[requirement.ProfileID+"\x00"+requirement.SliceKey] = struct{}{}
 	}
 	var transactionNow time.Time
 	if err := tx.QueryRowContext(ctx, `SELECT transaction_timestamp()`).Scan(&transactionNow); err != nil {
 		return service.ErrGovernanceHeadConflict
 	}
 	for _, ref := range watermark.SnapshotRefs {
+		key := ref.ProfileID + "\x00" + ref.SliceKey
+		if _, expected := expectedRefs[key]; !expected {
+			return service.ErrGovernanceHeadConflict
+		}
+		delete(expectedRefs, key)
 		var snapshotID, headEventID uuid.UUID
 		var snapshotHash, sourceHash string
 		var createdAt, freshUntil time.Time

@@ -39,6 +39,7 @@ func TestValidateGateReliabilityWatermarkUsesTransactionTimestampForFreshness(t 
 	snapshotID := uuid.New()
 	headEventID := uuid.New()
 	policyHash := strings.Repeat("a", 64)
+	policy := json.RawMessage(`{"observation_days":14,"critical_domain_delta_pp":3,"aggregate_delta_pp":2,"confidence_level":0.95,"require_ci_exclude_zero":true,"reliability":{"required_slices":[{"profile_id":"profile-v1","slice_key":"region:global"}],"allowed_query_versions":["reliability-query-v1"],"max_p99_latency_ms":1000,"max_error_rate":"0.01","max_cost_per_success":"1"}}`)
 	snapshotHash := strings.Repeat("b", 64)
 	sourceHash := strings.Repeat("c", 64)
 	createdAt := time.Now().UTC().Add(-time.Hour)
@@ -55,7 +56,7 @@ func TestValidateGateReliabilityWatermarkUsesTransactionTimestampForFreshness(t 
 	require.NoError(t, err)
 	mock.ExpectQuery(`(?s)SELECT policy_hash.*FROM evaluation_gate_policies`).
 		WithArgs(policyID).
-		WillReturnRows(sqlmock.NewRows([]string{"policy_hash"}).AddRow(policyHash))
+		WillReturnRows(sqlmock.NewRows([]string{"policy_hash", "policy"}).AddRow(policyHash, policy))
 	mock.ExpectQuery(`SELECT transaction_timestamp\(\)`).
 		WillReturnRows(sqlmock.NewRows([]string{"transaction_timestamp"}).AddRow(databaseNow))
 	mock.ExpectQuery(`(?s)SELECT h.snapshot_id, h.head_event_id, h.snapshot_hash.*FROM evaluation_reliability_heads`).
@@ -78,6 +79,7 @@ func TestRecordGateDecisionRejectsWhenPolicyHeadChangedAfterEvidenceLoad(t *test
 
 	runID, policyID := uuid.New(), uuid.New()
 	policyHash := strings.Repeat("a", 64)
+	policy := json.RawMessage(`{"observation_days":14,"critical_domain_delta_pp":3,"aggregate_delta_pp":2,"confidence_level":0.95,"require_ci_exclude_zero":true,"reliability":{"required_slices":[{"profile_id":"profile-v1","slice_key":"region:global"}],"allowed_query_versions":["reliability-query-v1"],"max_p99_latency_ms":1000,"max_error_rate":"0.01","max_cost_per_success":"1"}}`)
 	snapshotID, headEventID := uuid.New(), uuid.New()
 	createdAt := time.Now().UTC().Add(-time.Minute)
 	freshUntil := time.Now().UTC().Add(time.Hour)
@@ -93,7 +95,7 @@ func TestRecordGateDecisionRejectsWhenPolicyHeadChangedAfterEvidenceLoad(t *test
 
 	expectRadarWorkerWriter(t, mock)
 	mock.ExpectQuery(`(?s)SELECT policy_hash.*FROM evaluation_gate_policies`).
-		WithArgs(policyID).WillReturnRows(sqlmock.NewRows([]string{"policy_hash"}).AddRow(policyHash))
+		WithArgs(policyID).WillReturnRows(sqlmock.NewRows([]string{"policy_hash", "policy"}).AddRow(policyHash, policy))
 	mock.ExpectQuery(`SELECT transaction_timestamp\(\)`).
 		WillReturnRows(sqlmock.NewRows([]string{"transaction_timestamp"}).AddRow(time.Now().UTC()))
 	mock.ExpectQuery(`(?s)SELECT h\.snapshot_id, h\.head_event_id, h\.snapshot_hash.*FROM evaluation_reliability_heads`).
