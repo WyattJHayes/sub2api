@@ -155,21 +155,25 @@ Minimum backup evidence shape:
 
 ## Production Promotion Manifest And Input Audit
 
-Before changing the production image reference, generate a promotion manifest that binds the accepted staging candidate, staging gate, migration rehearsal, production target preflight, fresh production backup, active production image digest, configuration hashes, rollback digest, and post-rollback restoration plan. The manifest builder keeps missing production-only values empty so the audit fails closed until those values exist.
+Before changing production image references, generate a promotion manifest that binds the accepted control-plane and Worker candidates, staging gate, migration rehearsal, production target preflight, fresh production backup, both active production digests, configuration hashes, both rollback digests, and the post-rollback restoration plan. The manifest builder keeps missing production-only values empty so the audit fails closed until those values exist.
 
 ```bash
 python3 deploy/radar/production_promotion_manifest.py \
   --preflight-result /tmp/radar-production-target-preflight.json \
   --target-snapshot /tmp/radar-production-target-snapshot.json \
-  --accepted-staging-image-digest sha256:... \
+  --candidate-control-plane-digest sha256:... \
+  --candidate-worker-digest sha256:... \
   --staging-gate-ok \
   --migration-rehearsal-ok \
   --production-backup-path /opt/sub2api-backups/prod.dump \
   --production-backup-sha256 ... \
   --production-backup-restore-verified \
-  --production-active-image-digest sha256:... \
-  --rollback-previous-image-digest sha256:... \
-  --rollback-image-available \
+  --active-control-plane-digest sha256:... \
+  --active-worker-digest sha256:... \
+  --rollback-control-plane-digest sha256:... \
+  --rollback-worker-digest sha256:... \
+  --rollback-control-plane-available \
+  --rollback-worker-available \
   --accepted-candidate-restoration-planned \
   --output /tmp/radar-production-promotion-manifest.json
 ```
@@ -182,14 +186,15 @@ python3 deploy/radar/production_promotion_audit.py \
   --output /tmp/radar-production-promotion-audit.json
 ```
 
-The audit exits `0` only when every required production promotion input is present and well-formed. It exits `1` when the JSON result contains blockers such as a failed production target preflight, missing fresh backup SHA256, missing restore verification, missing active production digest, malformed configuration hash, unavailable rollback digest, rollback digest equal to the accepted candidate, or a missing plan to restore the accepted candidate after rollback. It exits `2` when the manifest cannot be read or parsed.
+The audit exits `0` only when every required production promotion input is present and well-formed. It exits `1` when the JSON result contains blockers such as a failed production target preflight, missing fresh backup SHA256, missing restore verification, either missing active production digest, malformed configuration hash, either unavailable rollback image, either rollback digest equal to its accepted candidate, or a missing plan to restore the accepted candidates after rollback. It exits `2` when the manifest cannot be read or parsed.
 
 The minimum manifest shape is:
 
 ```json
 {
   "candidate": {
-    "accepted_staging_image_digest": "sha256:...",
+    "control_plane_digest": "sha256:...",
+    "worker_digest": "sha256:...",
     "staging_gate_ok": true,
     "migration_rehearsal_ok": true
   },
@@ -205,7 +210,8 @@ The minimum manifest shape is:
     "restore_verified": true
   },
   "production_active": {
-    "image_digest": "sha256:...",
+    "control_plane_digest": "sha256:...",
+    "worker_digest": "sha256:...",
     "config_hashes": {
       "docker-compose.yml": "...",
       "docker-compose.override.yml": "...",
@@ -214,8 +220,10 @@ The minimum manifest shape is:
     }
   },
   "rollback": {
-    "previous_image_digest": "sha256:...",
-    "rollback_image_available": true
+    "control_plane_digest": "sha256:...",
+    "worker_digest": "sha256:...",
+    "control_plane_available": true,
+    "worker_available": true
   },
   "post_rollback": {
     "accepted_candidate_restoration_planned": true

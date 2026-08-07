@@ -12,8 +12,8 @@ from pathlib import Path
 from typing import Any
 
 
-INPUT_SCHEMA_VERSION = "radar-production-promotion-audit-input-v1"
-OUTPUT_SCHEMA_VERSION = "radar-production-promotion-audit-v1"
+INPUT_SCHEMA_VERSION = "radar-production-promotion-audit-input-v2"
+OUTPUT_SCHEMA_VERSION = "radar-production-promotion-audit-v2"
 
 IMAGE_DIGEST_RE = re.compile(r"^sha256:[0-9a-f]{64}$")
 SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
@@ -34,14 +34,23 @@ def audit_manifest(manifest: dict[str, Any]) -> dict[str, Any]:
     rollback = _mapping(manifest.get("rollback"))
     post_rollback = _mapping(manifest.get("post_rollback"))
 
-    accepted_digest = str(candidate.get("accepted_staging_image_digest") or "")
+    candidate_control_plane_digest = str(candidate.get("control_plane_digest") or "")
     _add_check(
         checks,
         blockers,
-        "accepted_staging_image_digest",
-        _valid_image_digest(accepted_digest),
-        "accepted staging image digest must be sha256:<64 lowercase hex>",
-        value=accepted_digest or None,
+        "candidate_control_plane_digest",
+        _valid_image_digest(candidate_control_plane_digest),
+        "candidate control-plane digest must be sha256:<64 lowercase hex>",
+        value=candidate_control_plane_digest or None,
+    )
+    candidate_worker_digest = str(candidate.get("worker_digest") or "")
+    _add_check(
+        checks,
+        blockers,
+        "candidate_worker_digest",
+        _valid_image_digest(candidate_worker_digest),
+        "candidate Worker digest must be sha256:<64 lowercase hex>",
+        value=candidate_worker_digest or None,
     )
 
     _add_bool_check(checks, blockers, candidate, "staging_gate_ok")
@@ -85,14 +94,23 @@ def audit_manifest(manifest: dict[str, Any]) -> dict[str, Any]:
         source_key="restore_verified",
     )
 
-    active_digest = str(production_active.get("image_digest") or "")
+    active_control_plane_digest = str(production_active.get("control_plane_digest") or "")
     _add_check(
         checks,
         blockers,
-        "production_active_image_digest",
-        _valid_image_digest(active_digest),
-        "active production image digest must be sha256:<64 lowercase hex>",
-        value=active_digest or None,
+        "production_active_control_plane_digest",
+        _valid_image_digest(active_control_plane_digest),
+        "active production control-plane digest must be sha256:<64 lowercase hex>",
+        value=active_control_plane_digest or None,
+    )
+    active_worker_digest = str(production_active.get("worker_digest") or "")
+    _add_check(
+        checks,
+        blockers,
+        "production_active_worker_digest",
+        _valid_image_digest(active_worker_digest),
+        "active production Worker digest must be sha256:<64 lowercase hex>",
+        value=active_worker_digest or None,
     )
 
     config_hashes = _mapping(production_active.get("config_hashes"))
@@ -125,22 +143,59 @@ def audit_manifest(manifest: dict[str, Any]) -> dict[str, Any]:
                 value=value or None,
             )
 
-    previous_digest = str(rollback.get("previous_image_digest") or "")
+    rollback_control_plane_digest = str(rollback.get("control_plane_digest") or "")
     _add_check(
         checks,
         blockers,
-        "rollback_previous_image_digest",
-        _valid_image_digest(previous_digest),
-        "previous image digest must be sha256:<64 lowercase hex>",
-        value=previous_digest or None,
+        "rollback_control_plane_digest",
+        _valid_image_digest(rollback_control_plane_digest),
+        "rollback control-plane digest must be sha256:<64 lowercase hex>",
+        value=rollback_control_plane_digest or None,
     )
-    _add_bool_check(checks, blockers, rollback, "rollback_image_available")
+    rollback_worker_digest = str(rollback.get("worker_digest") or "")
     _add_check(
         checks,
         blockers,
-        "rollback_digest_distinct_from_candidate",
-        bool(previous_digest and accepted_digest and previous_digest != accepted_digest),
-        "rollback digest must be distinct from accepted candidate digest",
+        "rollback_worker_digest",
+        _valid_image_digest(rollback_worker_digest),
+        "rollback Worker digest must be sha256:<64 lowercase hex>",
+        value=rollback_worker_digest or None,
+    )
+    _add_bool_check(
+        checks,
+        blockers,
+        rollback,
+        "rollback_control_plane_available",
+        source_key="control_plane_available",
+    )
+    _add_bool_check(
+        checks,
+        blockers,
+        rollback,
+        "rollback_worker_available",
+        source_key="worker_available",
+    )
+    _add_check(
+        checks,
+        blockers,
+        "rollback_control_plane_digest_distinct_from_candidate",
+        bool(
+            rollback_control_plane_digest
+            and candidate_control_plane_digest
+            and rollback_control_plane_digest != candidate_control_plane_digest
+        ),
+        "rollback control-plane digest must be distinct from the candidate",
+    )
+    _add_check(
+        checks,
+        blockers,
+        "rollback_worker_digest_distinct_from_candidate",
+        bool(
+            rollback_worker_digest
+            and candidate_worker_digest
+            and rollback_worker_digest != candidate_worker_digest
+        ),
+        "rollback Worker digest must be distinct from the candidate",
     )
 
     _add_bool_check(
@@ -158,9 +213,12 @@ def audit_manifest(manifest: dict[str, Any]) -> dict[str, Any]:
         "checks": checks,
         "blockers": blockers,
         "summary": {
-            "accepted_staging_image_digest": accepted_digest,
-            "previous_image_digest": previous_digest,
-            "production_active_image_digest": active_digest,
+            "candidate_control_plane_digest": candidate_control_plane_digest,
+            "candidate_worker_digest": candidate_worker_digest,
+            "rollback_control_plane_digest": rollback_control_plane_digest,
+            "rollback_worker_digest": rollback_worker_digest,
+            "production_active_control_plane_digest": active_control_plane_digest,
+            "production_active_worker_digest": active_worker_digest,
             "production_backup_sha256": backup_sha,
             "production_preflight_ok": preflight_ok,
         },

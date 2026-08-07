@@ -22,7 +22,8 @@ REQUIRED_CONFIG_HASH_KEYS = {
 
 def build_manifest(
     *,
-    accepted_staging_image_digest: str,
+    candidate_control_plane_digest: str,
+    candidate_worker_digest: str,
     staging_gate_ok: bool,
     migration_rehearsal_ok: bool,
     production_preflight: dict[str, Any],
@@ -30,15 +31,19 @@ def build_manifest(
     production_backup_path: str = "",
     production_backup_sha256: str = "",
     production_backup_restore_verified: bool = False,
-    production_active_image_digest: str = "",
-    rollback_previous_image_digest: str = "",
-    rollback_image_available: bool = False,
+    active_control_plane_digest: str = "",
+    active_worker_digest: str = "",
+    rollback_control_plane_digest: str = "",
+    rollback_worker_digest: str = "",
+    rollback_control_plane_available: bool = False,
+    rollback_worker_available: bool = False,
     accepted_candidate_restoration_planned: bool = False,
 ) -> dict[str, Any]:
     return {
         "schema_version": INPUT_SCHEMA_VERSION,
         "candidate": {
-            "accepted_staging_image_digest": accepted_staging_image_digest,
+            "control_plane_digest": candidate_control_plane_digest,
+            "worker_digest": candidate_worker_digest,
             "staging_gate_ok": staging_gate_ok,
             "migration_rehearsal_ok": migration_rehearsal_ok,
         },
@@ -55,12 +60,15 @@ def build_manifest(
             "restore_verified": production_backup_restore_verified,
         },
         "production_active": {
-            "image_digest": production_active_image_digest,
+            "control_plane_digest": active_control_plane_digest,
+            "worker_digest": active_worker_digest,
             "config_hashes": extract_config_hashes(target_snapshot),
         },
         "rollback": {
-            "previous_image_digest": rollback_previous_image_digest,
-            "rollback_image_available": rollback_image_available,
+            "control_plane_digest": rollback_control_plane_digest,
+            "worker_digest": rollback_worker_digest,
+            "control_plane_available": rollback_control_plane_available,
+            "worker_available": rollback_worker_available,
         },
         "post_rollback": {
             "accepted_candidate_restoration_planned": accepted_candidate_restoration_planned,
@@ -117,15 +125,19 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     )
     parser.add_argument("--preflight-result", type=Path, required=True)
     parser.add_argument("--target-snapshot", type=Path, required=True)
-    parser.add_argument("--accepted-staging-image-digest", required=True)
+    parser.add_argument("--candidate-control-plane-digest", required=True)
+    parser.add_argument("--candidate-worker-digest", required=True)
     parser.add_argument("--staging-gate-ok", action="store_true")
     parser.add_argument("--migration-rehearsal-ok", action="store_true")
     parser.add_argument("--production-backup-path", default="")
     parser.add_argument("--production-backup-sha256", default="")
     parser.add_argument("--production-backup-restore-verified", action="store_true")
-    parser.add_argument("--production-active-image-digest", default="")
-    parser.add_argument("--rollback-previous-image-digest", default="")
-    parser.add_argument("--rollback-image-available", action="store_true")
+    parser.add_argument("--active-control-plane-digest", default="")
+    parser.add_argument("--active-worker-digest", default="")
+    parser.add_argument("--rollback-control-plane-digest", default="")
+    parser.add_argument("--rollback-worker-digest", default="")
+    parser.add_argument("--rollback-control-plane-available", action="store_true")
+    parser.add_argument("--rollback-worker-available", action="store_true")
     parser.add_argument("--accepted-candidate-restoration-planned", action="store_true")
     parser.add_argument("--output", type=Path, help="write JSON manifest to this path")
     return parser.parse_args(argv)
@@ -135,7 +147,8 @@ def main(argv: list[str] | None = None) -> int:
     args = parse_args(argv or sys.argv[1:])
     try:
         manifest = build_manifest(
-            accepted_staging_image_digest=args.accepted_staging_image_digest,
+            candidate_control_plane_digest=args.candidate_control_plane_digest,
+            candidate_worker_digest=args.candidate_worker_digest,
             staging_gate_ok=args.staging_gate_ok,
             migration_rehearsal_ok=args.migration_rehearsal_ok,
             production_preflight=read_json(args.preflight_result),
@@ -143,9 +156,12 @@ def main(argv: list[str] | None = None) -> int:
             production_backup_path=args.production_backup_path,
             production_backup_sha256=args.production_backup_sha256,
             production_backup_restore_verified=args.production_backup_restore_verified,
-            production_active_image_digest=args.production_active_image_digest,
-            rollback_previous_image_digest=args.rollback_previous_image_digest,
-            rollback_image_available=args.rollback_image_available,
+            active_control_plane_digest=args.active_control_plane_digest,
+            active_worker_digest=args.active_worker_digest,
+            rollback_control_plane_digest=args.rollback_control_plane_digest,
+            rollback_worker_digest=args.rollback_worker_digest,
+            rollback_control_plane_available=args.rollback_control_plane_available,
+            rollback_worker_available=args.rollback_worker_available,
             accepted_candidate_restoration_planned=args.accepted_candidate_restoration_planned,
         )
         emit_json(manifest, args.output)

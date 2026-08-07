@@ -26,6 +26,7 @@ audit = load_script("radar_production_promotion_audit", "production_promotion_au
 SHA_A = "sha256:" + "a" * 64
 SHA_B = "sha256:" + "b" * 64
 SHA_C = "sha256:" + "c" * 64
+SHA_D = "sha256:" + "d" * 64
 HEX_D = "d" * 64
 HEX_E = "e" * 64
 
@@ -34,7 +35,8 @@ def complete_manifest() -> dict[str, Any]:
     return {
         "schema_version": audit.INPUT_SCHEMA_VERSION,
         "candidate": {
-            "accepted_staging_image_digest": SHA_A,
+            "control_plane_digest": SHA_A,
+            "worker_digest": SHA_B,
             "staging_gate_ok": True,
             "migration_rehearsal_ok": True,
         },
@@ -50,7 +52,8 @@ def complete_manifest() -> dict[str, Any]:
             "restore_verified": True,
         },
         "production_active": {
-            "image_digest": SHA_B,
+            "control_plane_digest": SHA_C,
+            "worker_digest": SHA_D,
             "config_hashes": {
                 "docker-compose.yml": HEX_D,
                 "docker-compose.override.yml": HEX_E,
@@ -59,8 +62,10 @@ def complete_manifest() -> dict[str, Any]:
             },
         },
         "rollback": {
-            "previous_image_digest": SHA_B,
-            "rollback_image_available": True,
+            "control_plane_digest": SHA_C,
+            "worker_digest": SHA_D,
+            "control_plane_available": True,
+            "worker_available": True,
         },
         "post_rollback": {
             "accepted_candidate_restoration_planned": True,
@@ -72,11 +77,14 @@ class ProductionPromotionAuditTests(unittest.TestCase):
     def test_complete_manifest_is_ready_for_promotion(self) -> None:
         result = audit.audit_manifest(complete_manifest())
 
+        self.assertEqual("radar-production-promotion-audit-v2", result["schema_version"])
         self.assertTrue(result["ok"], result)
         self.assertTrue(result["promotion_ready"], result)
         self.assertEqual([], result["blockers"])
-        self.assertEqual(SHA_A, result["summary"]["accepted_staging_image_digest"])
-        self.assertEqual(SHA_B, result["summary"]["previous_image_digest"])
+        self.assertEqual(SHA_A, result["summary"]["candidate_control_plane_digest"])
+        self.assertEqual(SHA_B, result["summary"]["candidate_worker_digest"])
+        self.assertEqual(SHA_C, result["summary"]["rollback_control_plane_digest"])
+        self.assertEqual(SHA_D, result["summary"]["rollback_worker_digest"])
 
     def test_current_remote_state_fails_until_authorized_production_inputs_exist(self) -> None:
         manifest = complete_manifest()
@@ -99,33 +107,59 @@ class ProductionPromotionAuditTests(unittest.TestCase):
         self.assertIn("production_preflight_ok", result["blockers"])
         self.assertIn("production_backup_sha256", result["blockers"])
         self.assertIn("production_backup_restore_verified", result["blockers"])
-        self.assertIn("production_active_image_digest", result["blockers"])
+        self.assertIn("production_active_control_plane_digest", result["blockers"])
+        self.assertIn("production_active_worker_digest", result["blockers"])
         self.assertIn("production_config_hashes", result["blockers"])
         self.assertIn("production_requires_operator_authorization", result["blockers"])
 
     def test_malformed_digests_and_hashes_fail_closed(self) -> None:
         manifest = complete_manifest()
-        manifest["candidate"]["accepted_staging_image_digest"] = "sha256:bad"
+        manifest["candidate"]["control_plane_digest"] = "sha256:bad"
         manifest["production_backup"]["sha256"] = "not-a-hash"
         manifest["production_active"]["config_hashes"][".env"] = "short"
 
         result = audit.audit_manifest(manifest)
 
         self.assertFalse(result["ok"], result)
-        self.assertIn("accepted_staging_image_digest", result["blockers"])
+        self.assertIn("candidate_control_plane_digest", result["blockers"])
         self.assertIn("production_backup_sha256", result["blockers"])
         self.assertIn("production_config_hash_.env", result["blockers"])
 
-    def test_rollback_digest_must_be_available_and_distinct_from_candidate(self) -> None:
+    def test_missing_worker_candidate_digest_fails_closed(self) -> None:
         manifest = complete_manifest()
-        manifest["rollback"]["previous_image_digest"] = SHA_A
-        manifest["rollback"]["rollback_image_available"] = False
+        del manifest["candidate"]["worker_digest"]
 
         result = audit.audit_manifest(manifest)
 
         self.assertFalse(result["ok"], result)
-        self.assertIn("rollback_image_available", result["blockers"])
-        self.assertIn("rollback_digest_distinct_from_candidate", result["blockers"])
+        self.assertIn("candidate_worker_digest", result["blockers"])
+
+    def test_unavailable_worker_rollback_image_fails_closed(self) -> None:
+        manifest = complete_manifest()
+        manifest["rollback"]["worker_available"] = False
+
+        result = audit.audit_manifest(manifest)
+
+        self.assertFalse(result["ok"], result)
+        self.assertIn("rollback_worker_available", result["blockers"])
+
+    def test_control_plane_rollback_digest_must_differ_from_candidate(self) -> None:
+        manifest = complete_manifest()
+        manifest["rollback"]["control_plane_digest"] = SHA_A
+
+        result = audit.audit_manifest(manifest)
+
+        self.assertFalse(result["ok"], result)
+        self.assertIn("rollback_control_plane_digest_distinct_from_candidate", result["blockers"])
+
+    def test_worker_rollback_digest_must_differ_from_candidate(self) -> None:
+        manifest = complete_manifest()
+        manifest["rollback"]["worker_digest"] = SHA_B
+
+        result = audit.audit_manifest(manifest)
+
+        self.assertFalse(result["ok"], result)
+        self.assertIn("rollback_worker_digest_distinct_from_candidate", result["blockers"])
 
     def test_restore_candidate_after_rollback_must_be_planned(self) -> None:
         manifest = complete_manifest()

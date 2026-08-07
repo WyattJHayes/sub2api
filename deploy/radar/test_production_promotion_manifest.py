@@ -26,6 +26,8 @@ audit = load_script("radar_production_promotion_audit", "production_promotion_au
 
 SHA_A = "sha256:" + "a" * 64
 SHA_B = "sha256:" + "b" * 64
+SHA_C = "sha256:" + "c" * 64
+SHA_D = "sha256:" + "d" * 64
 HEX_C = "c" * 64
 HEX_D = "d" * 64
 HEX_E = "e" * 64
@@ -59,7 +61,8 @@ def target_snapshot() -> dict[str, Any]:
 class ProductionPromotionManifestTests(unittest.TestCase):
     def test_builds_audit_ready_manifest_from_preflight_and_snapshot(self) -> None:
         manifest = manifest_tool.build_manifest(
-            accepted_staging_image_digest=SHA_A,
+            candidate_control_plane_digest=SHA_A,
+            candidate_worker_digest=SHA_B,
             staging_gate_ok=True,
             migration_rehearsal_ok=True,
             production_preflight=preflight_result(),
@@ -67,14 +70,19 @@ class ProductionPromotionManifestTests(unittest.TestCase):
             production_backup_path="/opt/sub2api-backups/prod.dump",
             production_backup_sha256=HEX_C,
             production_backup_restore_verified=True,
-            production_active_image_digest=SHA_B,
-            rollback_previous_image_digest=SHA_B,
-            rollback_image_available=True,
+            active_control_plane_digest=SHA_C,
+            active_worker_digest=SHA_D,
+            rollback_control_plane_digest=SHA_C,
+            rollback_worker_digest=SHA_D,
+            rollback_control_plane_available=True,
+            rollback_worker_available=True,
             accepted_candidate_restoration_planned=True,
         )
 
+        self.assertEqual("radar-production-promotion-audit-input-v2", audit.INPUT_SCHEMA_VERSION)
         self.assertEqual(audit.INPUT_SCHEMA_VERSION, manifest["schema_version"])
-        self.assertEqual(SHA_A, manifest["candidate"]["accepted_staging_image_digest"])
+        self.assertEqual(SHA_A, manifest["candidate"]["control_plane_digest"])
+        self.assertEqual(SHA_B, manifest["candidate"]["worker_digest"])
         self.assertTrue(manifest["candidate"]["staging_gate_ok"])
         self.assertTrue(manifest["candidate"]["migration_rehearsal_ok"])
         self.assertEqual(
@@ -86,11 +94,23 @@ class ProductionPromotionManifestTests(unittest.TestCase):
             },
             manifest["production_active"]["config_hashes"],
         )
+        self.assertEqual(SHA_C, manifest["production_active"]["control_plane_digest"])
+        self.assertEqual(SHA_D, manifest["production_active"]["worker_digest"])
+        self.assertEqual(
+            {
+                "control_plane_digest": SHA_C,
+                "worker_digest": SHA_D,
+                "control_plane_available": True,
+                "worker_available": True,
+            },
+            manifest["rollback"],
+        )
         self.assertTrue(audit.audit_manifest(manifest)["promotion_ready"])
 
     def test_missing_production_runtime_inputs_remain_empty_for_fail_closed_audit(self) -> None:
         manifest = manifest_tool.build_manifest(
-            accepted_staging_image_digest=SHA_A,
+            candidate_control_plane_digest=SHA_A,
+            candidate_worker_digest=SHA_B,
             staging_gate_ok=True,
             migration_rehearsal_ok=True,
             production_preflight=preflight_result(ok=False),
@@ -101,19 +121,24 @@ class ProductionPromotionManifestTests(unittest.TestCase):
 
         self.assertFalse(result["promotion_ready"])
         self.assertEqual("", manifest["production_backup"]["sha256"])
-        self.assertEqual("", manifest["production_active"]["image_digest"])
-        self.assertEqual("", manifest["rollback"]["previous_image_digest"])
-        self.assertFalse(manifest["rollback"]["rollback_image_available"])
+        self.assertEqual("", manifest["production_active"]["control_plane_digest"])
+        self.assertEqual("", manifest["production_active"]["worker_digest"])
+        self.assertEqual("", manifest["rollback"]["control_plane_digest"])
+        self.assertEqual("", manifest["rollback"]["worker_digest"])
+        self.assertFalse(manifest["rollback"]["control_plane_available"])
+        self.assertFalse(manifest["rollback"]["worker_available"])
         self.assertIn("production_preflight_ok", result["blockers"])
         self.assertIn("production_backup_sha256", result["blockers"])
-        self.assertIn("production_active_image_digest", result["blockers"])
+        self.assertIn("production_active_control_plane_digest", result["blockers"])
+        self.assertIn("production_active_worker_digest", result["blockers"])
 
     def test_missing_required_config_hashes_are_reported_by_audit(self) -> None:
         snapshot = target_snapshot()
         del snapshot["hashes"]["/opt/sub2api/.env"]
 
         manifest = manifest_tool.build_manifest(
-            accepted_staging_image_digest=SHA_A,
+            candidate_control_plane_digest=SHA_A,
+            candidate_worker_digest=SHA_B,
             staging_gate_ok=True,
             migration_rehearsal_ok=True,
             production_preflight=preflight_result(),
@@ -121,9 +146,12 @@ class ProductionPromotionManifestTests(unittest.TestCase):
             production_backup_path="/opt/sub2api-backups/prod.dump",
             production_backup_sha256=HEX_C,
             production_backup_restore_verified=True,
-            production_active_image_digest=SHA_B,
-            rollback_previous_image_digest=SHA_B,
-            rollback_image_available=True,
+            active_control_plane_digest=SHA_C,
+            active_worker_digest=SHA_D,
+            rollback_control_plane_digest=SHA_C,
+            rollback_worker_digest=SHA_D,
+            rollback_control_plane_available=True,
+            rollback_worker_available=True,
             accepted_candidate_restoration_planned=True,
         )
 
