@@ -9,7 +9,7 @@ ARG GOSUMDB=sum.golang.org
 FROM ${NODE_IMAGE} AS frontend-builder
 
 WORKDIR /app/frontend
-ENV NODE_OPTIONS=--max-old-space-size=1536
+ENV NODE_OPTIONS=--max-old-space-size=4096
 
 RUN corepack enable && corepack prepare pnpm@11.5.2 --activate
 
