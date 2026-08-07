@@ -17,6 +17,41 @@ RADAR_WORKER_IMAGE_DIGEST=sha256:<64 lowercase hex>
 The candidate control-plane digest and the retained v10 rollback digest must be
 different. Mutable tags are suitable for local builds only.
 
+## Private GHCR Authentication and Candidate Build
+
+Authenticate interactively before publishing. The local release credential
+requires `write:packages`; the separate offshore credential requires only
+`read:packages`. Paste each token at the password prompt. Do not put tokens in
+shell history, command arguments, environment files, release evidence, or the
+repository.
+
+```bash
+docker login ghcr.io -u a895411690
+```
+
+Resolve every build base to a full `name@sha256:<64 lowercase hex>` reference.
+After Tasks 1 through 6 and source verification are committed, run the recorder
+from the repository root with the final 40-character commit and one UTC build
+instant. The timestamp embedded in `--version` must match `--date`.
+
+```bash
+deploy/radar/build_v01171_ghcr.py \
+  --version 0.1.171-radar-v11-YYYYMMDDTHHMMSSZ \
+  --commit <40 lowercase hex> \
+  --date YYYY-MM-DDTHH:MM:SSZ \
+  --node-image node:24-alpine@sha256:<64 lowercase hex> \
+  --golang-image golang:1.26.5-alpine@sha256:<64 lowercase hex> \
+  --alpine-image alpine:3.20@sha256:<64 lowercase hex> \
+  --worker-python-base-image python:3.14-slim@sha256:<64 lowercase hex> \
+  --push \
+  --output /secure/release/radar-v01171-image-record.json
+```
+
+The recorder publishes only the two approved private repositories, pulls each
+result by manifest digest, verifies its runtime version, and creates the JSON
+record at mode `0600`. It refuses an existing output path and never records
+Docker credentials or environment values.
+
 ## Disposable Migration Rehearsal
 
 Create a custom-format PostgreSQL backup outside `/opt/sub2api`, verify its
