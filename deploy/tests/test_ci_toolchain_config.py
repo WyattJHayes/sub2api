@@ -24,7 +24,7 @@ NODE_SETUP_VERSION_RE = re.compile(
     r"\s+with:\n"
     r"\s+node-version: ['\"]?([^\s'\"#]+)"
 )
-NODE_IMAGE_VERSION_RE = re.compile(r"(?m)^ARG NODE_IMAGE=node:(\d+)-alpine$")
+NODE_MAJOR_VERSION = "24"
 
 
 class CIToolchainConfigTest(unittest.TestCase):
@@ -42,19 +42,12 @@ class CIToolchainConfigTest(unittest.TestCase):
             self.assertIsNotNone(match, relative_path)
             self.assertEqual(expected_version, match.group(1), relative_path)
 
-    def test_workflows_use_frontend_builder_node_major(self) -> None:
-        dockerfile = (REPO_ROOT / "deploy" / "Dockerfile.radar-control-staging").read_text(
-            encoding="utf-8"
-        )
-        image_match = NODE_IMAGE_VERSION_RE.search(dockerfile)
-        self.assertIsNotNone(image_match)
-        expected_version = image_match.group(1)
-
+    def test_workflows_use_v01171_node_major(self) -> None:
         for relative_path in WORKFLOW_PATHS:
             workflow = (REPO_ROOT / relative_path).read_text(encoding="utf-8")
             match = NODE_SETUP_VERSION_RE.search(workflow)
             self.assertIsNotNone(match, relative_path)
-            self.assertEqual(expected_version, match.group(1), relative_path)
+            self.assertEqual(NODE_MAJOR_VERSION, match.group(1), relative_path)
 
 
 if __name__ == "__main__":
