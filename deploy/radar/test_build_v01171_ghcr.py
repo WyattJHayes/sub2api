@@ -97,6 +97,39 @@ class BuildV01171GhcrTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "containerimage.config.digest"):
                 build_tool.parse_metadata(metadata)
 
+    def test_metadata_resolves_missing_config_digest_from_amd64_manifest(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            metadata = Path(directory) / "metadata.json"
+            metadata.write_text(
+                json.dumps(
+                    {
+                        "containerimage.digest": SHA_A,
+                        "image.name": "ghcr.io/example/radar:v11",
+                    }
+                ),
+                encoding="utf-8",
+            )
+            index = json.dumps(
+                {
+                    "mediaType": "application/vnd.oci.image.index.v1+json",
+                    "manifests": [
+                        {
+                            "digest": SHA_B,
+                            "platform": {"os": "linux", "architecture": "amd64"},
+                        }
+                    ],
+                }
+            )
+            manifest = json.dumps(
+                {
+                    "mediaType": "application/vnd.oci.image.manifest.v1+json",
+                    "config": {"digest": SHA_A},
+                }
+            )
+            with patch.object(build_tool, "run_checked", side_effect=[index, manifest]) as run:
+                self.assertEqual((SHA_A, SHA_A), build_tool.parse_metadata(metadata))
+            self.assertEqual(2, run.call_count)
+
     def test_runtime_version_must_match_expected_value(self) -> None:
         self.assertEqual(
             "sub2api 0.1.171-radar-v11-20260807T010203Z",

@@ -142,6 +142,47 @@ def validate_digest(value: object, label: str) -> str:
     return value
 
 
+def resolve_config_digest(image_name: str, manifest_digest: str) -> str:
+    """Resolve the amd64 config digest when Buildx omits it from metadata."""
+    raw = run_checked(
+        [
+            "docker",
+            "buildx",
+            "imagetools",
+            "inspect",
+            f"{image_name}@{manifest_digest}",
+            "--raw",
+        ]
+    )
+    try:
+        document = json.loads(raw)
+    except json.JSONDecodeError as exc:
+        raise ValueError("OCI manifest response must be valid JSON") from exc
+    if not isinstance(document, dict):
+        raise ValueError("OCI manifest response must be an object")
+    if document.get("mediaType") == "application/vnd.oci.image.index.v1+json":
+        manifests = document.get("manifests")
+        if not isinstance(manifests, list):
+            raise ValueError("OCI image index is missing manifests")
+        amd64 = next(
+            (
+                item
+                for item in manifests
+                if isinstance(item, dict)
+                and item.get("platform", {}).get("os") == "linux"
+                and item.get("platform", {}).get("architecture") == "amd64"
+            ),
+            None,
+        )
+        if not isinstance(amd64, dict) or not isinstance(amd64.get("digest"), str):
+            raise ValueError("OCI image index has no linux/amd64 manifest")
+        return resolve_config_digest(image_name, validate_digest(amd64["digest"], "platform manifest digest"))
+    config = document.get("config")
+    if not isinstance(config, dict):
+        raise ValueError("OCI manifest is missing config")
+    return validate_digest(config.get("digest"), "containerimage.config.digest")
+
+
 def parse_metadata(path: Path) -> tuple[str, str]:
     try:
         document = json.loads(path.read_text(encoding="utf-8"))
@@ -150,9 +191,14 @@ def parse_metadata(path: Path) -> tuple[str, str]:
     if not isinstance(document, dict):
         raise ValueError("Buildx metadata must be a JSON object")
     manifest = validate_digest(document.get("containerimage.digest"), "containerimage.digest")
-    config = validate_digest(
-        document.get("containerimage.config.digest"), "containerimage.config.digest"
-    )
+    config_value = document.get("containerimage.config.digest")
+    if config_value is None:
+        image_name = document.get("image.name")
+        if not isinstance(image_name, str) or not image_name:
+            raise ValueError("containerimage.config.digest")
+        config = resolve_config_digest(image_name, manifest)
+    else:
+        config = validate_digest(config_value, "containerimage.config.digest")
     return manifest, config
 
 
