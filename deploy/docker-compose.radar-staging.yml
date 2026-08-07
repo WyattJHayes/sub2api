@@ -8,6 +8,9 @@ services:
       context: ..
       dockerfile: deploy/Dockerfile.radar-control-staging
       args:
+        NODE_IMAGE: ${RADAR_NODE_BASE_IMAGE:?RADAR_NODE_BASE_IMAGE is required}
+        GOLANG_IMAGE: ${RADAR_GOLANG_BASE_IMAGE:?RADAR_GOLANG_BASE_IMAGE is required}
+        ALPINE_IMAGE: ${RADAR_ALPINE_BASE_IMAGE:?RADAR_ALPINE_BASE_IMAGE is required}
         VERSION: ${RADAR_RELEASE_VERSION:?RADAR_RELEASE_VERSION is required}
         COMMIT: ${RADAR_RELEASE_COMMIT:?RADAR_RELEASE_COMMIT is required}
         DATE: ${RADAR_RELEASE_DATE:?RADAR_RELEASE_DATE is required}

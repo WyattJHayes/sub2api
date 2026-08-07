@@ -10,9 +10,16 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 class RadarImageBuildContractTests(unittest.TestCase):
     def test_control_plane_requires_external_base_images(self) -> None:
         body = (REPO_ROOT / "deploy/Dockerfile.radar-control-staging").read_text()
-        self.assertIn("ARG NODE_IMAGE\n", body)
-        self.assertNotIn("ARG NODE_IMAGE=", body)
-        self.assertIn("FROM ${NODE_IMAGE} AS frontend-builder", body)
+        required_images = (
+            ("NODE_IMAGE", "FROM ${NODE_IMAGE} AS frontend-builder"),
+            ("GOLANG_IMAGE", "FROM ${GOLANG_IMAGE} AS backend-builder"),
+            ("ALPINE_IMAGE", "FROM ${ALPINE_IMAGE}"),
+        )
+
+        for argument, from_instruction in required_images:
+            self.assertIn(f"ARG {argument}\n", body)
+            self.assertNotIn(f"ARG {argument}=", body)
+            self.assertIn(from_instruction, body)
 
     def test_worker_has_no_staging_parent_and_uses_hash_lock(self) -> None:
         body = (REPO_ROOT / "radar-worker/Dockerfile").read_text()

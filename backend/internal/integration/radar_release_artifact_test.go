@@ -89,15 +89,17 @@ func validateRadarStagingDockerfile(dockerfile string) []string {
 	var validationErrors []string
 	required := []string{
 		"# syntax=docker/dockerfile:1.7",
-		"ARG ALPINE_IMAGE=alpine:3.20",
-		"AS frontend-builder",
+		"ARG NODE_IMAGE",
+		"ARG GOLANG_IMAGE",
+		"ARG ALPINE_IMAGE",
+		"FROM ${NODE_IMAGE} AS frontend-builder",
 		"corepack prepare pnpm@11.5.2 --activate",
 		"COPY frontend/package.json frontend/pnpm-lock.yaml frontend/pnpm-workspace.yaml ./",
 		"--mount=type=cache,id=sub2api-radar-pnpm-v11,target=/root/.local/share/pnpm/store",
 		"pnpm install --frozen-lockfile --prefer-offline",
 		"--fetch-retries=4",
 		"--fetch-timeout=120000",
-		"AS backend-builder",
+		"FROM ${GOLANG_IMAGE} AS backend-builder",
 		"--mount=type=cache,id=sub2api-radar-gomod,target=/go/pkg/mod",
 		"until go mod download; do",
 		"if [ \"$attempt\" -ge 4 ]",
@@ -114,6 +116,11 @@ func validateRadarStagingDockerfile(dockerfile string) []string {
 	for _, fragment := range required {
 		if !strings.Contains(dockerfile, fragment) {
 			validationErrors = append(validationErrors, "Radar staging Dockerfile missing "+fragment)
+		}
+	}
+	for _, argument := range []string{"NODE_IMAGE", "GOLANG_IMAGE", "ALPINE_IMAGE"} {
+		if strings.Contains(dockerfile, "ARG "+argument+"=") {
+			validationErrors = append(validationErrors, "Radar staging Dockerfile must not default "+argument)
 		}
 	}
 	if strings.Contains(dockerfile, "COPY radar-control-plane /app/sub2api") {
@@ -184,6 +191,9 @@ func TestRadarStagingComposeRequiresImmutableBuildIdentity(t *testing.T) {
 		"VERSION: ${RADAR_RELEASE_VERSION:?RADAR_RELEASE_VERSION is required}",
 		"COMMIT: ${RADAR_RELEASE_COMMIT:?RADAR_RELEASE_COMMIT is required}",
 		"DATE: ${RADAR_RELEASE_DATE:?RADAR_RELEASE_DATE is required}",
+		"NODE_IMAGE: ${RADAR_NODE_BASE_IMAGE:?RADAR_NODE_BASE_IMAGE is required}",
+		"GOLANG_IMAGE: ${RADAR_GOLANG_BASE_IMAGE:?RADAR_GOLANG_BASE_IMAGE is required}",
+		"ALPINE_IMAGE: ${RADAR_ALPINE_BASE_IMAGE:?RADAR_ALPINE_BASE_IMAGE is required}",
 	} {
 		if !strings.Contains(compose, fragment) {
 			t.Errorf("Radar staging Compose file missing %q", fragment)
@@ -191,39 +201,37 @@ func TestRadarStagingComposeRequiresImmutableBuildIdentity(t *testing.T) {
 	}
 }
 
-func TestRadarWorkerDockerfileReplacesInheritedSourceTree(t *testing.T) {
+func TestRadarWorkerDockerfileUsesHashLockedRuntimeBuild(t *testing.T) {
 	for _, validationError := range validateRadarWorkerDockerfile(readRadarWorkerDockerfile(t)) {
 		t.Error(validationError)
 	}
 }
 
-func TestRadarWorkerDockerfileRejectsDetachedInheritedSourceCleanup(t *testing.T) {
+func TestRadarWorkerDockerfileRejectsMutableRuntimeBase(t *testing.T) {
 	dockerfile := readRadarWorkerDockerfile(t)
-	cleanup := "USER root\nRUN rm -rf /opt/radar-worker/src\n"
-	mutated := strings.Replace(dockerfile, cleanup, "", 1)
-	mutated = strings.Replace(
-		mutated,
-		"FROM sub2api/radar-worker:staging AS runtime",
-		"FROM alpine:3.20 AS detached-cleanup\n"+cleanup+"\nFROM sub2api/radar-worker:staging AS runtime",
+	mutated := strings.Replace(
+		dockerfile,
+		"FROM ${RADAR_WORKER_PYTHON_BASE_IMAGE} AS runtime",
+		"FROM python:3.14-slim AS runtime",
 		1,
 	)
 	if mutated == dockerfile {
-		t.Fatal("test mutation must move the inherited source cleanup to another build stage")
+		t.Fatal("test mutation must replace the required Worker runtime base")
 	}
 
 	if len(validateRadarWorkerDockerfile(mutated)) == 0 {
-		t.Fatal("cleaning an unrelated build stage must not satisfy the Worker runtime source replacement contract")
+		t.Fatal("a mutable Worker runtime base must be rejected")
 	}
 }
 
-func TestRadarWorkerDockerfileRejectsBypassedSourceReplacementContract(t *testing.T) {
+func TestRadarWorkerDockerfileRejectsBypassedHashLockedDependencyContract(t *testing.T) {
 	dockerfile := readRadarWorkerDockerfile(t)
 	mutations := map[string]string{
 		"final root user": dockerfile + "\nUSER root\n",
-		"no-op cleanup": strings.Replace(
+		"unhashed dependencies": strings.Replace(
 			dockerfile,
-			"RUN rm -rf /opt/radar-worker/src",
-			"RUN printf '%s\\n' 'rm -rf /opt/radar-worker/src'",
+			" --require-hashes",
+			"",
 			1,
 		),
 		"source copied from old stage": strings.Replace(
@@ -273,70 +281,33 @@ func readRadarWorkerDockerfile(t *testing.T) string {
 
 func validateRadarWorkerDockerfile(dockerfile string) []string {
 	var validationErrors []string
-	instructions := dockerInstructions(dockerfile)
-	runtimeStageStart := -1
-	for index, instruction := range instructions {
-		if strings.HasPrefix(instruction, "FROM ") {
-			runtimeStageStart = index
+	for _, fragment := range []string{
+		"ARG RADAR_WORKER_PYTHON_BASE_IMAGE",
+		"FROM ${RADAR_WORKER_PYTHON_BASE_IMAGE} AS runtime",
+		"RUN groupadd --gid 10001 radar-worker",
+		"COPY requirements.lock ./",
+		"RUN python -m pip install --no-cache-dir --require-hashes -r requirements.lock",
+		"COPY src ./src",
+		"RUN python -m pip install --no-cache-dir --no-deps .",
+		"USER radar-worker",
+		"ENTRYPOINT [\"/usr/local/bin/radar-runner\"]",
+	} {
+		if !strings.Contains(dockerfile, fragment) {
+			validationErrors = append(validationErrors, "Radar Worker Dockerfile missing "+fragment)
 		}
 	}
-	if runtimeStageStart < 0 {
-		return []string{"Radar Worker Dockerfile must define a runtime build stage"}
+	if strings.Contains(dockerfile, "sub2api/radar-worker:staging") {
+		validationErrors = append(validationErrors, "Radar Worker Dockerfile must not inherit the mutable staging image")
 	}
-
 	activeUser := ""
-	cleanedInheritedSource := false
-	copiedCurrentSource := false
-	restoredRuntimeUser := false
-
-	for _, instruction := range instructions[runtimeStageStart+1:] {
-		switch {
-		case strings.HasPrefix(instruction, "USER "):
+	for _, instruction := range dockerInstructions(dockerfile) {
+		if strings.HasPrefix(instruction, "USER ") {
 			activeUser = strings.TrimSpace(strings.TrimPrefix(instruction, "USER "))
-			if copiedCurrentSource && activeUser == "radar-worker" {
-				restoredRuntimeUser = true
-			}
-		case instruction == "RUN rm -rf /opt/radar-worker/src":
-			if activeUser != "root" {
-				validationErrors = append(validationErrors, "Radar Worker Dockerfile must clean the inherited source tree as root")
-			}
-			cleanedInheritedSource = true
-		case copiesCurrentWorkerSource(instruction):
-			if !cleanedInheritedSource {
-				validationErrors = append(validationErrors, "Radar Worker Dockerfile must clean the inherited source tree before copying current source")
-			}
-			copiedCurrentSource = true
 		}
 	}
-
-	if !cleanedInheritedSource {
-		validationErrors = append(validationErrors, "Radar Worker Dockerfile must remove the inherited source tree")
-	}
-	if !copiedCurrentSource {
-		validationErrors = append(validationErrors, "Radar Worker Dockerfile must copy the current source tree")
-	}
-	if !restoredRuntimeUser || activeUser != "radar-worker" {
-		validationErrors = append(validationErrors, "Radar Worker Dockerfile must restore the radar-worker runtime user after copying source")
+	if activeUser != "radar-worker" {
+		validationErrors = append(validationErrors, "Radar Worker Dockerfile must finish with the radar-worker runtime user")
 	}
 
 	return validationErrors
-}
-
-func copiesCurrentWorkerSource(instruction string) bool {
-	fields := strings.Fields(instruction)
-	if len(fields) < 3 || fields[0] != "COPY" {
-		return false
-	}
-
-	var operands []string
-	for _, field := range fields[1:] {
-		if strings.HasPrefix(field, "--from=") {
-			return false
-		}
-		if strings.HasPrefix(field, "--") {
-			continue
-		}
-		operands = append(operands, field)
-	}
-	return len(operands) == 2 && operands[0] == "src" && operands[1] == "./src"
 }

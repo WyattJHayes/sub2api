@@ -24,6 +24,9 @@ class RadarCandidateImageConfigTest(unittest.TestCase):
 
         control_digest = "sha256:" + "a" * 64
         worker_digest = "sha256:" + "b" * 64
+        node_base_image = "node:24-alpine@sha256:" + "c" * 64
+        golang_base_image = "golang:1.26.5-alpine@sha256:" + "d" * 64
+        alpine_base_image = "alpine:3.20@sha256:" + "e" * 64
         env = {
             "RADAR_COMPOSE_PROJECT_NAME": "sub2api-radar-v11-test",
             "RADAR_COMPOSE_RESOURCE_PREFIX": "sub2api-radar-v11-test",
@@ -35,6 +38,9 @@ class RadarCandidateImageConfigTest(unittest.TestCase):
             ),
             "RADAR_WORKER_IMAGE": f"registry.example.invalid/sub2api/radar-worker@{worker_digest}",
             "RADAR_IMAGE_PULL_POLICY": "always",
+            "RADAR_NODE_BASE_IMAGE": node_base_image,
+            "RADAR_GOLANG_BASE_IMAGE": golang_base_image,
+            "RADAR_ALPINE_BASE_IMAGE": alpine_base_image,
             "RADAR_RELEASE_VERSION": "0.1.171-radar-v11-test",
             "RADAR_RELEASE_COMMIT": "d" * 40,
             "RADAR_RELEASE_DATE": "2026-08-06T00:00:00Z",
@@ -166,6 +172,17 @@ class RadarCandidateImageConfigTest(unittest.TestCase):
             control["image"],
         )
         self.assertEqual("always", control["pull_policy"])
+        self.assertEqual(
+            {
+                "ALPINE_IMAGE": "alpine:3.20@sha256:" + "e" * 64,
+                "GOLANG_IMAGE": "golang:1.26.5-alpine@sha256:" + "d" * 64,
+                "NODE_IMAGE": "node:24-alpine@sha256:" + "c" * 64,
+                "VERSION": "0.1.171-radar-v11-test",
+                "COMMIT": "d" * 40,
+                "DATE": "2026-08-06T00:00:00Z",
+            },
+            control["build"]["args"],
+        )
         for name in worker_names:
             service = services[name]
             self.assertEqual(
