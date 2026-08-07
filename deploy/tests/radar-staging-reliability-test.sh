@@ -202,6 +202,9 @@ SH
 run_live_preflight_contract
 
 compose_env=(
+    "RADAR_NODE_BASE_IMAGE=node:24-alpine@sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+    "RADAR_GOLANG_BASE_IMAGE=golang:1.26.5-alpine@sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
+    "RADAR_ALPINE_BASE_IMAGE=alpine:3.20@sha256:eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
     "RADAR_RELEASE_VERSION=staging-test"
     "RADAR_RELEASE_COMMIT=0123456789abcdef0123456789abcdef01234567"
     "RADAR_RELEASE_DATE=2026-07-30T00:00:00Z"
