@@ -7,12 +7,24 @@ from pathlib import Path
 
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
+WORKFLOW_PATHS = (
+    ".github/workflows/backend-ci.yml",
+    ".github/workflows/security-scan.yml",
+    ".github/workflows/release.yml",
+)
 PNPM_SETUP_VERSION_RE = re.compile(
     r"(?ms)^\s+- name: Set(?:up| up) pnpm\n"
     r"\s+uses: pnpm/action-setup@v6\n"
     r"\s+with:\n"
     r"\s+version: ['\"]?([^\s'\"#]+)"
 )
+NODE_SETUP_VERSION_RE = re.compile(
+    r"(?ms)^\s+- name: Set(?:up| up) Node\.js\n"
+    r"\s+uses: actions/setup-node@v6\n"
+    r"\s+with:\n"
+    r"\s+node-version: ['\"]?([^\s'\"#]+)"
+)
+NODE_IMAGE_VERSION_RE = re.compile(r"(?m)^ARG NODE_IMAGE=node:(\d+)-alpine$")
 
 
 class CIToolchainConfigTest(unittest.TestCase):
@@ -24,12 +36,23 @@ class CIToolchainConfigTest(unittest.TestCase):
         self.assertTrue(package_manager.startswith("pnpm@"))
         expected_version = package_manager.removeprefix("pnpm@")
 
-        for relative_path in (
-            ".github/workflows/backend-ci.yml",
-            ".github/workflows/security-scan.yml",
-        ):
+        for relative_path in WORKFLOW_PATHS:
             workflow = (REPO_ROOT / relative_path).read_text(encoding="utf-8")
             match = PNPM_SETUP_VERSION_RE.search(workflow)
+            self.assertIsNotNone(match, relative_path)
+            self.assertEqual(expected_version, match.group(1), relative_path)
+
+    def test_workflows_use_frontend_builder_node_major(self) -> None:
+        dockerfile = (REPO_ROOT / "deploy" / "Dockerfile.radar-control-staging").read_text(
+            encoding="utf-8"
+        )
+        image_match = NODE_IMAGE_VERSION_RE.search(dockerfile)
+        self.assertIsNotNone(image_match)
+        expected_version = image_match.group(1)
+
+        for relative_path in WORKFLOW_PATHS:
+            workflow = (REPO_ROOT / relative_path).read_text(encoding="utf-8")
+            match = NODE_SETUP_VERSION_RE.search(workflow)
             self.assertIsNotNone(match, relative_path)
             self.assertEqual(expected_version, match.group(1), relative_path)
 
