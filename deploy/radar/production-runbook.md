@@ -103,14 +103,17 @@ python3 deploy/radar/production_authorization_audit.py \
   --output /tmp/radar-production-authorization-audit.json
 ```
 
-The audit exits `0` only when the target directory matches `/opt/sub2api`, the accepted candidate digest is valid, an operator and timezone-aware authorization timestamp are present, the authorization is fresh, and all six required authorizations are true. It exits `1` when the JSON result contains blockers and `2` when evidence cannot be read or parsed.
+The audit exits `0` only when the target directory matches `/opt/sub2api`, both accepted candidate digests are valid, an operator and timezone-aware authorization timestamp are present, the authorization is fresh, and all six required authorizations are true. It exits `1` when the JSON result contains blockers and `2` when evidence cannot be read or parsed.
 
 Minimum authorization evidence shape:
 
 ```json
 {
   "target_dir": "/opt/sub2api",
-  "accepted_candidate_digest": "sha256:...",
+  "accepted_candidate": {
+    "control_plane_digest": "sha256:...",
+    "worker_digest": "sha256:..."
+  },
   "operator": "release-owner",
   "authorized_at": "2026-08-02T21:00:00Z",
   "checked_at": "2026-08-02T21:30:00Z",
@@ -233,7 +236,7 @@ The minimum manifest shape is:
 
 ## Production Smoke Evidence Audit
 
-After promoting the accepted candidate digest, capture the production smoke evidence and audit it before starting rollback drill:
+After promoting both accepted candidate digests, capture the production smoke evidence and audit it before starting the rollback drill:
 
 ```bash
 python3 deploy/radar/production_smoke_audit.py \
@@ -242,14 +245,20 @@ python3 deploy/radar/production_smoke_audit.py \
   --output /tmp/radar-production-smoke-audit.json
 ```
 
-The smoke audit exits `0` only when the active image digest matches the accepted candidate, the application is healthy, `/health` returns `200`, API smoke succeeds with enough successful calls, API errors are zero, P99 latency is at or below the recorded SLO, terminalization and evaluation outbox pending counts are zero, pricing source is valid, the pricing resource SHA256 is valid, pricing fallback failures are zero, artifact cleanup errors are zero, billing idempotency failures are zero, and runtime error counters are zero. It exits `1` when the JSON result contains blockers and `2` when evidence cannot be read or parsed.
+The smoke audit exits `0` only when both active image digests match their accepted candidates, the application is healthy, `/health` returns `200`, API smoke succeeds with enough successful calls, API errors are zero, P99 latency is at or below the recorded SLO, terminalization and evaluation outbox pending counts are zero, pricing source is valid, the pricing resource SHA256 is valid, pricing fallback failures are zero, artifact cleanup errors are zero, billing idempotency failures are zero, and runtime error counters are zero. It exits `1` when the JSON result contains blockers and `2` when evidence cannot be read or parsed.
 
 Minimum smoke evidence shape:
 
 ```json
 {
-  "accepted_candidate_digest": "sha256:...",
-  "active_image_digest": "sha256:...",
+  "accepted_candidate": {
+    "control_plane_digest": "sha256:...",
+    "worker_digest": "sha256:..."
+  },
+  "active": {
+    "control_plane_digest": "sha256:...",
+    "worker_digest": "sha256:..."
+  },
   "app_health": "healthy",
   "health_http_status": 200,
   "api_smoke_ok": true,
@@ -272,7 +281,7 @@ Minimum smoke evidence shape:
 
 ## Production Rollback Evidence Audit
 
-After the rollback drill restores the previous digest and the accepted candidate is promoted again, audit the rollback evidence before closing the release:
+After the rollback drill restores both previous digests and both accepted candidates are promoted again, audit the rollback evidence before closing the release:
 
 ```bash
 python3 deploy/radar/production_rollback_audit.py \
@@ -281,15 +290,22 @@ python3 deploy/radar/production_rollback_audit.py \
   --output /tmp/radar-production-rollback-audit.json
 ```
 
-The rollback audit exits `0` only when the accepted candidate digest and previous digest are valid and distinct, the rollback image was available, rollback was executed, rollback smoke passed, schema migrations still match the expected release count, reported budget ledger totals are unchanged, the accepted candidate was restored, post-restore smoke passed, and the final active digest matches the accepted candidate. It exits `1` when the JSON result contains blockers and `2` when evidence cannot be read or parsed.
+The rollback audit exits `0` only when both accepted candidate and previous digests are valid and distinct, both rollback images were available, rollback was executed, rollback smoke passed, schema migrations still match the expected release count, reported budget ledger totals are unchanged, both accepted candidates were restored, post-restore smoke passed, and both final active digests match. It exits `1` when the JSON result contains blockers and `2` when evidence cannot be read or parsed.
 
 Minimum rollback evidence shape:
 
 ```json
 {
-  "accepted_candidate_digest": "sha256:...",
-  "previous_image_digest": "sha256:...",
-  "rollback_image_available": true,
+  "accepted_candidate": {
+    "control_plane_digest": "sha256:...",
+    "worker_digest": "sha256:..."
+  },
+  "previous": {
+    "control_plane_digest": "sha256:...",
+    "worker_digest": "sha256:...",
+    "control_plane_available": true,
+    "worker_available": true
+  },
   "rollback_executed": true,
   "rollback_smoke_ok": true,
   "rollback_schema_migrations": 255,
@@ -297,7 +313,10 @@ Minimum rollback evidence shape:
   "budget_ledger_total_after": "123.45",
   "accepted_candidate_restored": true,
   "post_restore_smoke_ok": true,
-  "final_active_digest": "sha256:..."
+  "final_active": {
+    "control_plane_digest": "sha256:...",
+    "worker_digest": "sha256:..."
+  }
 }
 ```
 
@@ -307,7 +326,8 @@ After production promotion, smoke, rollback drill, and accepted candidate restor
 
 ```bash
 python3 deploy/radar/production_release_closure_evidence.py \
-  --accepted-candidate-digest sha256:... \
+  --accepted-candidate-control-plane-digest sha256:... \
+  --accepted-candidate-worker-digest sha256:... \
   --production-authorization-audit /tmp/radar-production-authorization-audit.json \
   --production-target-preflight /tmp/radar-production-target-preflight.json \
   --production-backup-audit /tmp/radar-production-backup-audit.json \
@@ -327,19 +347,25 @@ python3 deploy/radar/production_release_closure_audit.py \
   --output /tmp/radar-production-release-closure-audit.json
 ```
 
-The closure audit exits `0` only when the target preflight, backup audit, promotion audit, smoke audit, rollback audit, production promotion execution flag, and rollback drill execution flag all pass. It also requires the accepted candidate digest to match the promotion candidate digest, production smoke active digest, rollback candidate digest, and rollback final active digest. The previous rollback digest must be distinct from the accepted candidate. It exits `1` when the JSON result contains blockers and `2` when evidence cannot be read or parsed.
+The closure audit exits `0` only when the target preflight, backup audit, promotion audit, smoke audit, rollback audit, production promotion execution flag, and rollback drill execution flag all pass. It separately requires both accepted candidate digests to match authorization, promotion, smoke, rollback, and final active evidence. Both previous rollback digests must be distinct from their accepted candidates. It exits `1` when the JSON result contains blockers and `2` when evidence cannot be read or parsed.
 
 Minimum closure evidence shape:
 
 ```json
 {
-  "accepted_candidate_digest": "sha256:...",
+  "accepted_candidate": {
+    "control_plane_digest": "sha256:...",
+    "worker_digest": "sha256:..."
+  },
   "production_authorization_audit": {
     "ok": true,
     "summary": {
       "target_dir": "/opt/sub2api",
       "operator": "release-owner",
-      "accepted_candidate_digest": "sha256:..."
+      "accepted_candidate": {
+        "control_plane_digest": "sha256:...",
+        "worker_digest": "sha256:..."
+      }
     },
     "blockers": []
   },
@@ -362,9 +388,12 @@ Minimum closure evidence shape:
     "ok": true,
     "promotion_ready": true,
     "summary": {
-      "accepted_staging_image_digest": "sha256:...",
-      "previous_image_digest": "sha256:...",
-      "production_active_image_digest": "sha256:..."
+      "candidate_control_plane_digest": "sha256:...",
+      "candidate_worker_digest": "sha256:...",
+      "rollback_control_plane_digest": "sha256:...",
+      "rollback_worker_digest": "sha256:...",
+      "production_active_control_plane_digest": "sha256:...",
+      "production_active_worker_digest": "sha256:..."
     },
     "blockers": []
   },
@@ -372,8 +401,14 @@ Minimum closure evidence shape:
   "production_smoke_audit": {
     "ok": true,
     "summary": {
-      "accepted_candidate_digest": "sha256:...",
-      "active_image_digest": "sha256:..."
+      "accepted_candidate": {
+        "control_plane_digest": "sha256:...",
+        "worker_digest": "sha256:..."
+      },
+      "active": {
+        "control_plane_digest": "sha256:...",
+        "worker_digest": "sha256:..."
+      }
     },
     "blockers": []
   },
@@ -381,9 +416,18 @@ Minimum closure evidence shape:
   "production_rollback_audit": {
     "ok": true,
     "summary": {
-      "accepted_candidate_digest": "sha256:...",
-      "previous_image_digest": "sha256:...",
-      "final_active_digest": "sha256:..."
+      "accepted_candidate": {
+        "control_plane_digest": "sha256:...",
+        "worker_digest": "sha256:..."
+      },
+      "previous": {
+        "control_plane_digest": "sha256:...",
+        "worker_digest": "sha256:..."
+      },
+      "final_active": {
+        "control_plane_digest": "sha256:...",
+        "worker_digest": "sha256:..."
+      }
     },
     "blockers": []
   }

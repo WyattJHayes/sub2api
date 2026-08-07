@@ -14,7 +14,8 @@ from production_release_closure_audit import INPUT_SCHEMA_VERSION
 
 def build_closure_evidence(
     *,
-    accepted_candidate_digest: str,
+    accepted_candidate_control_plane_digest: str,
+    accepted_candidate_worker_digest: str,
     production_authorization_audit: dict[str, Any] | None = None,
     production_target_preflight: dict[str, Any] | None = None,
     production_backup_audit: dict[str, Any] | None = None,
@@ -26,7 +27,10 @@ def build_closure_evidence(
 ) -> dict[str, Any]:
     return {
         "schema_version": INPUT_SCHEMA_VERSION,
-        "accepted_candidate_digest": accepted_candidate_digest,
+        "accepted_candidate": {
+            "control_plane_digest": accepted_candidate_control_plane_digest,
+            "worker_digest": accepted_candidate_worker_digest,
+        },
         "production_authorization_audit": _mapping_or_empty(production_authorization_audit),
         "production_target_preflight": _mapping_or_empty(production_target_preflight),
         "production_backup_audit": _mapping_or_empty(production_backup_audit),
@@ -64,7 +68,8 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description="Build final Radar production release closure evidence."
     )
-    parser.add_argument("--accepted-candidate-digest", required=True)
+    parser.add_argument("--accepted-candidate-control-plane-digest", required=True)
+    parser.add_argument("--accepted-candidate-worker-digest", required=True)
     parser.add_argument("--production-authorization-audit", type=Path)
     parser.add_argument("--production-target-preflight", type=Path)
     parser.add_argument("--production-backup-audit", type=Path)
@@ -81,7 +86,10 @@ def main(argv: list[str] | None = None) -> int:
     args = parse_args(argv or sys.argv[1:])
     try:
         document = build_closure_evidence(
-            accepted_candidate_digest=args.accepted_candidate_digest,
+            accepted_candidate_control_plane_digest=(
+                args.accepted_candidate_control_plane_digest
+            ),
+            accepted_candidate_worker_digest=args.accepted_candidate_worker_digest,
             production_authorization_audit=read_json(args.production_authorization_audit),
             production_target_preflight=read_json(args.production_target_preflight),
             production_backup_audit=read_json(args.production_backup_audit),

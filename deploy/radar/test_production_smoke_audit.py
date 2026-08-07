@@ -24,14 +24,21 @@ smoke_audit = load_script("radar_production_smoke_audit", "production_smoke_audi
 
 
 SHA_A = "sha256:" + "a" * 64
+SHA_B = "sha256:" + "b" * 64
 HEX_A = "1" * 64
 
 
 def smoke_document(**overrides: Any) -> dict[str, Any]:
     document: dict[str, Any] = {
         "schema_version": smoke_audit.INPUT_SCHEMA_VERSION,
-        "accepted_candidate_digest": SHA_A,
-        "active_image_digest": SHA_A,
+        "accepted_candidate": {
+            "control_plane_digest": SHA_A,
+            "worker_digest": SHA_B,
+        },
+        "active": {
+            "control_plane_digest": SHA_A,
+            "worker_digest": SHA_B,
+        },
         "app_health": "healthy",
         "health_http_status": 200,
         "api_smoke_ok": True,
@@ -61,15 +68,22 @@ class ProductionSmokeAuditTests(unittest.TestCase):
             min_api_success_count=1,
         )
 
+        self.assertEqual("radar-production-smoke-audit-v2", result["schema_version"])
         self.assertTrue(result["ok"], result)
         self.assertEqual([], result["blockers"])
-        self.assertEqual(SHA_A, result["summary"]["active_image_digest"])
+        self.assertEqual(
+            {"control_plane_digest": SHA_A, "worker_digest": SHA_B},
+            result["summary"]["active"],
+        )
         self.assertEqual("local", result["summary"]["pricing_source"])
 
     def test_active_digest_and_health_must_match_release_candidate(self) -> None:
         result = smoke_audit.audit_smoke(
             smoke_document(
-                active_image_digest="sha256:" + "b" * 64,
+                active={
+                    "control_plane_digest": "sha256:" + "c" * 64,
+                    "worker_digest": SHA_B,
+                },
                 app_health="unhealthy",
                 health_http_status=503,
             ),
@@ -77,9 +91,23 @@ class ProductionSmokeAuditTests(unittest.TestCase):
         )
 
         self.assertFalse(result["ok"], result)
-        self.assertIn("active_image_digest_matches_candidate", result["blockers"])
+        self.assertIn("active_control_plane_digest_matches_candidate", result["blockers"])
         self.assertIn("app_health", result["blockers"])
         self.assertIn("health_http_status", result["blockers"])
+
+    def test_worker_active_digest_must_match_candidate(self) -> None:
+        result = smoke_audit.audit_smoke(
+            smoke_document(
+                active={
+                    "control_plane_digest": SHA_A,
+                    "worker_digest": "sha256:" + "c" * 64,
+                }
+            ),
+            min_api_success_count=1,
+        )
+
+        self.assertFalse(result["ok"], result)
+        self.assertIn("active_worker_digest_matches_candidate", result["blockers"])
 
     def test_api_smoke_latency_and_runtime_errors_are_blocking(self) -> None:
         result = smoke_audit.audit_smoke(

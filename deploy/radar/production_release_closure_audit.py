@@ -12,8 +12,8 @@ from pathlib import Path
 from typing import Any
 
 
-INPUT_SCHEMA_VERSION = "radar-production-release-closure-input-v1"
-OUTPUT_SCHEMA_VERSION = "radar-production-release-closure-audit-v1"
+INPUT_SCHEMA_VERSION = "radar-production-release-closure-input-v2"
+OUTPUT_SCHEMA_VERSION = "radar-production-release-closure-audit-v2"
 
 IMAGE_DIGEST_RE = re.compile(r"^sha256:[0-9a-f]{64}$")
 SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
@@ -27,7 +27,7 @@ def audit_closure(document: dict[str, Any]) -> dict[str, Any]:
     checks: list[dict[str, Any]] = []
     blockers: list[str] = []
 
-    accepted_digest = str(document.get("accepted_candidate_digest") or "")
+    accepted_candidate = _identity(document.get("accepted_candidate"))
     authorization = _mapping(document.get("production_authorization_audit"))
     preflight = _mapping(document.get("production_target_preflight"))
     backup = _mapping(document.get("production_backup_audit"))
@@ -40,28 +40,23 @@ def audit_closure(document: dict[str, Any]) -> dict[str, Any]:
     rollback_summary = _mapping(rollback.get("summary"))
     backup_summary = _mapping(backup.get("summary"))
 
-    promotion_candidate_digest = str(
-        promotion_summary.get("accepted_staging_image_digest") or ""
+    authorization_candidate = _identity(
+        _mapping(authorization.get("summary")).get("accepted_candidate")
     )
-    smoke_candidate_digest = str(smoke_summary.get("accepted_candidate_digest") or "")
-    smoke_active_digest = str(smoke_summary.get("active_image_digest") or "")
-    rollback_candidate_digest = str(rollback_summary.get("accepted_candidate_digest") or "")
-    rollback_previous_digest = str(rollback_summary.get("previous_image_digest") or "")
-    rollback_final_digest = str(rollback_summary.get("final_active_digest") or "")
+    promotion_candidate = {
+        "control_plane_digest": str(
+            promotion_summary.get("candidate_control_plane_digest") or ""
+        ),
+        "worker_digest": str(promotion_summary.get("candidate_worker_digest") or ""),
+    }
+    smoke_candidate = _identity(smoke_summary.get("accepted_candidate"))
+    smoke_active = _identity(smoke_summary.get("active"))
+    rollback_candidate = _identity(rollback_summary.get("accepted_candidate"))
+    rollback_previous = _identity(rollback_summary.get("previous"))
+    rollback_final = _identity(rollback_summary.get("final_active"))
     backup_sha256 = str(backup_summary.get("sha256") or "")
-    authorization_summary = _mapping(authorization.get("summary"))
-    authorization_candidate_digest = str(
-        authorization_summary.get("accepted_candidate_digest") or ""
-    )
 
-    _add_check(
-        checks,
-        blockers,
-        "accepted_candidate_digest",
-        _valid_image_digest(accepted_digest),
-        "accepted candidate digest must be sha256:<64 lowercase hex>",
-        value=accepted_digest or None,
-    )
+    _add_identity_valid(checks, blockers, "accepted_candidate", accepted_candidate)
 
     _add_check(
         checks,
@@ -72,18 +67,12 @@ def audit_closure(document: dict[str, Any]) -> dict[str, Any]:
         evidence_blockers=_list_of_strings(authorization.get("blockers")),
     )
 
-    _add_check(
+    _add_identity_matches(
         checks,
         blockers,
-        "authorization_candidate_digest_matches_candidate",
-        bool(
-            accepted_digest
-            and authorization_candidate_digest
-            and authorization_candidate_digest == accepted_digest
-        ),
-        "authorization candidate digest must match accepted candidate digest",
-        authorization_candidate_digest=authorization_candidate_digest or None,
-        accepted_candidate_digest=accepted_digest or None,
+        "authorization_candidate",
+        authorization_candidate,
+        accepted_candidate,
     )
 
     _add_check(
@@ -133,18 +122,12 @@ def audit_closure(document: dict[str, Any]) -> dict[str, Any]:
 
     _add_bool_check(checks, blockers, document, "production_promotion_executed")
 
-    _add_check(
+    _add_identity_matches(
         checks,
         blockers,
-        "promotion_candidate_digest_matches_candidate",
-        bool(
-            accepted_digest
-            and promotion_candidate_digest
-            and promotion_candidate_digest == accepted_digest
-        ),
-        "promotion candidate digest must match accepted candidate digest",
-        promotion_candidate_digest=promotion_candidate_digest or None,
-        accepted_candidate_digest=accepted_digest or None,
+        "promotion_candidate",
+        promotion_candidate,
+        accepted_candidate,
     )
 
     _add_check(
@@ -156,24 +139,19 @@ def audit_closure(document: dict[str, Any]) -> dict[str, Any]:
         evidence_blockers=_list_of_strings(smoke.get("blockers")),
     )
 
-    _add_check(
+    _add_identity_matches(
         checks,
         blockers,
-        "smoke_candidate_digest_matches_candidate",
-        bool(accepted_digest and smoke_candidate_digest and smoke_candidate_digest == accepted_digest),
-        "smoke candidate digest must match accepted candidate digest",
-        smoke_candidate_digest=smoke_candidate_digest or None,
-        accepted_candidate_digest=accepted_digest or None,
+        "smoke_candidate",
+        smoke_candidate,
+        accepted_candidate,
     )
-
-    _add_check(
+    _add_identity_matches(
         checks,
         blockers,
-        "smoke_active_digest_matches_candidate",
-        bool(accepted_digest and smoke_active_digest and smoke_active_digest == accepted_digest),
-        "smoke active digest must match accepted candidate digest",
-        smoke_active_digest=smoke_active_digest or None,
-        accepted_candidate_digest=accepted_digest or None,
+        "smoke_active",
+        smoke_active,
+        accepted_candidate,
     )
 
     _add_bool_check(checks, blockers, document, "rollback_drill_executed")
@@ -187,42 +165,26 @@ def audit_closure(document: dict[str, Any]) -> dict[str, Any]:
         evidence_blockers=_list_of_strings(rollback.get("blockers")),
     )
 
-    _add_check(
+    _add_identity_matches(
         checks,
         blockers,
-        "rollback_candidate_digest_matches_candidate",
-        bool(
-            accepted_digest
-            and rollback_candidate_digest
-            and rollback_candidate_digest == accepted_digest
-        ),
-        "rollback candidate digest must match accepted candidate digest",
-        rollback_candidate_digest=rollback_candidate_digest or None,
-        accepted_candidate_digest=accepted_digest or None,
+        "rollback_candidate",
+        rollback_candidate,
+        accepted_candidate,
     )
-
-    _add_check(
+    _add_identity_matches(
         checks,
         blockers,
-        "rollback_final_digest_matches_candidate",
-        bool(accepted_digest and rollback_final_digest and rollback_final_digest == accepted_digest),
-        "rollback final digest must match accepted candidate digest",
-        rollback_final_digest=rollback_final_digest or None,
-        accepted_candidate_digest=accepted_digest or None,
+        "rollback_final",
+        rollback_final,
+        accepted_candidate,
     )
-
-    _add_check(
+    _add_identity_distinct(
         checks,
         blockers,
-        "rollback_previous_digest_distinct_from_candidate",
-        bool(
-            accepted_digest
-            and rollback_previous_digest
-            and rollback_previous_digest != accepted_digest
-        ),
-        "rollback previous digest must be distinct from accepted candidate digest",
-        rollback_previous_digest=rollback_previous_digest or None,
-        accepted_candidate_digest=accepted_digest or None,
+        "rollback_previous",
+        rollback_previous,
+        accepted_candidate,
     )
 
     return {
@@ -232,15 +194,77 @@ def audit_closure(document: dict[str, Any]) -> dict[str, Any]:
         "checks": checks,
         "blockers": blockers,
         "summary": {
-            "accepted_candidate_digest": accepted_digest,
-            "authorization_candidate_digest": authorization_candidate_digest,
-            "promotion_candidate_digest": promotion_candidate_digest,
+            "accepted_candidate": accepted_candidate,
+            "authorization_candidate": authorization_candidate,
+            "promotion_candidate": promotion_candidate,
             "production_backup_sha256": backup_sha256,
-            "smoke_active_digest": smoke_active_digest,
-            "rollback_previous_digest": rollback_previous_digest,
-            "final_active_digest": rollback_final_digest,
+            "smoke_active": smoke_active,
+            "rollback_previous": rollback_previous,
+            "final_active": rollback_final,
         },
     }
+
+
+def _identity(value: object) -> dict[str, str]:
+    mapping = _mapping(value)
+    return {
+        "control_plane_digest": str(mapping.get("control_plane_digest") or ""),
+        "worker_digest": str(mapping.get("worker_digest") or ""),
+    }
+
+
+def _add_identity_valid(
+    checks: list[dict[str, Any]],
+    blockers: list[str],
+    prefix: str,
+    identity: dict[str, str],
+) -> None:
+    for artifact in ("control_plane", "worker"):
+        digest = identity[f"{artifact}_digest"]
+        _add_check(
+            checks,
+            blockers,
+            f"{prefix}_{artifact}_digest",
+            _valid_image_digest(digest),
+            f"{prefix} {artifact} digest must be sha256:<64 lowercase hex>",
+            value=digest or None,
+        )
+
+
+def _add_identity_matches(
+    checks: list[dict[str, Any]],
+    blockers: list[str],
+    prefix: str,
+    actual: dict[str, str],
+    expected: dict[str, str],
+) -> None:
+    for artifact in ("control_plane", "worker"):
+        key = f"{artifact}_digest"
+        _add_check(
+            checks,
+            blockers,
+            f"{prefix}_{artifact}_digest_matches_candidate",
+            bool(actual[key] and expected[key] and actual[key] == expected[key]),
+            f"{prefix} {artifact} digest must match the accepted candidate",
+        )
+
+
+def _add_identity_distinct(
+    checks: list[dict[str, Any]],
+    blockers: list[str],
+    prefix: str,
+    actual: dict[str, str],
+    candidate: dict[str, str],
+) -> None:
+    for artifact in ("control_plane", "worker"):
+        key = f"{artifact}_digest"
+        _add_check(
+            checks,
+            blockers,
+            f"{prefix}_{artifact}_digest_distinct_from_candidate",
+            bool(actual[key] and candidate[key] and actual[key] != candidate[key]),
+            f"{prefix} {artifact} digest must differ from the accepted candidate",
+        )
 
 
 def _add_bool_check(

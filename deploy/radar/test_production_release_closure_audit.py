@@ -28,17 +28,22 @@ closure_audit = load_script(
 
 SHA_A = "sha256:" + "a" * 64
 SHA_B = "sha256:" + "b" * 64
+SHA_C = "sha256:" + "c" * 64
+SHA_D = "sha256:" + "d" * 64
 HEX_A = "1" * 64
 
 
 def authorization_audit() -> dict[str, Any]:
     return {
-        "schema_version": "radar-production-authorization-audit-v1",
+        "schema_version": "radar-production-authorization-audit-v2",
         "ok": True,
         "summary": {
             "target_dir": "/opt/sub2api",
             "operator": "release-owner",
-            "accepted_candidate_digest": SHA_A,
+            "accepted_candidate": {
+                "control_plane_digest": SHA_A,
+                "worker_digest": SHA_B,
+            },
         },
         "blockers": [],
     }
@@ -47,7 +52,10 @@ def authorization_audit() -> dict[str, Any]:
 def closure_document(**overrides: Any) -> dict[str, Any]:
     document: dict[str, Any] = {
         "schema_version": closure_audit.INPUT_SCHEMA_VERSION,
-        "accepted_candidate_digest": SHA_A,
+        "accepted_candidate": {
+            "control_plane_digest": SHA_A,
+            "worker_digest": SHA_B,
+        },
         "production_authorization_audit": authorization_audit(),
         "production_target_preflight": {
             "schema_version": "radar-production-target-preflight-v1",
@@ -67,34 +75,52 @@ def closure_document(**overrides: Any) -> dict[str, Any]:
             "blockers": [],
         },
         "production_promotion_audit": {
-            "schema_version": "radar-production-promotion-audit-v1",
+            "schema_version": "radar-production-promotion-audit-v2",
             "ok": True,
             "promotion_ready": True,
             "summary": {
-                "accepted_staging_image_digest": SHA_A,
-                "previous_image_digest": SHA_B,
-                "production_active_image_digest": SHA_B,
+                "candidate_control_plane_digest": SHA_A,
+                "candidate_worker_digest": SHA_B,
+                "rollback_control_plane_digest": SHA_C,
+                "rollback_worker_digest": SHA_D,
+                "production_active_control_plane_digest": SHA_C,
+                "production_active_worker_digest": SHA_D,
             },
             "blockers": [],
         },
         "production_promotion_executed": True,
         "production_smoke_audit": {
-            "schema_version": "radar-production-smoke-audit-v1",
+            "schema_version": "radar-production-smoke-audit-v2",
             "ok": True,
             "summary": {
-                "accepted_candidate_digest": SHA_A,
-                "active_image_digest": SHA_A,
+                "accepted_candidate": {
+                    "control_plane_digest": SHA_A,
+                    "worker_digest": SHA_B,
+                },
+                "active": {
+                    "control_plane_digest": SHA_A,
+                    "worker_digest": SHA_B,
+                },
             },
             "blockers": [],
         },
         "rollback_drill_executed": True,
         "production_rollback_audit": {
-            "schema_version": "radar-production-rollback-audit-v1",
+            "schema_version": "radar-production-rollback-audit-v2",
             "ok": True,
             "summary": {
-                "accepted_candidate_digest": SHA_A,
-                "previous_image_digest": SHA_B,
-                "final_active_digest": SHA_A,
+                "accepted_candidate": {
+                    "control_plane_digest": SHA_A,
+                    "worker_digest": SHA_B,
+                },
+                "previous": {
+                    "control_plane_digest": SHA_C,
+                    "worker_digest": SHA_D,
+                },
+                "final_active": {
+                    "control_plane_digest": SHA_A,
+                    "worker_digest": SHA_B,
+                },
                 "accepted_candidate_restored": True,
             },
             "blockers": [],
@@ -108,10 +134,17 @@ class ProductionReleaseClosureAuditTests(unittest.TestCase):
     def test_complete_production_closure_evidence_passes(self) -> None:
         result = closure_audit.audit_closure(closure_document())
 
+        self.assertEqual("radar-production-release-closure-audit-v2", result["schema_version"])
         self.assertTrue(result["ok"], result)
         self.assertEqual([], result["blockers"])
-        self.assertEqual(SHA_A, result["summary"]["accepted_candidate_digest"])
-        self.assertEqual(SHA_A, result["summary"]["final_active_digest"])
+        self.assertEqual(
+            {"control_plane_digest": SHA_A, "worker_digest": SHA_B},
+            result["summary"]["accepted_candidate"],
+        )
+        self.assertEqual(
+            {"control_plane_digest": SHA_A, "worker_digest": SHA_B},
+            result["summary"]["final_active"],
+        )
 
     def test_target_preflight_and_backup_audit_must_pass(self) -> None:
         result = closure_audit.audit_closure(
@@ -171,17 +204,32 @@ class ProductionReleaseClosureAuditTests(unittest.TestCase):
                 production_smoke_audit={
                     "ok": True,
                     "summary": {
-                        "accepted_candidate_digest": SHA_A,
-                        "active_image_digest": SHA_B,
+                        "accepted_candidate": {
+                            "control_plane_digest": SHA_A,
+                            "worker_digest": SHA_B,
+                        },
+                        "active": {
+                            "control_plane_digest": SHA_C,
+                            "worker_digest": SHA_D,
+                        },
                     },
                     "blockers": [],
                 },
                 production_rollback_audit={
                     "ok": True,
                     "summary": {
-                        "accepted_candidate_digest": SHA_B,
-                        "previous_image_digest": SHA_A,
-                        "final_active_digest": SHA_B,
+                        "accepted_candidate": {
+                            "control_plane_digest": SHA_C,
+                            "worker_digest": SHA_D,
+                        },
+                        "previous": {
+                            "control_plane_digest": SHA_A,
+                            "worker_digest": SHA_B,
+                        },
+                        "final_active": {
+                            "control_plane_digest": SHA_C,
+                            "worker_digest": SHA_D,
+                        },
                     },
                     "blockers": [],
                 },
@@ -189,9 +237,14 @@ class ProductionReleaseClosureAuditTests(unittest.TestCase):
         )
 
         self.assertFalse(result["ok"], result)
-        self.assertIn("smoke_active_digest_matches_candidate", result["blockers"])
-        self.assertIn("rollback_candidate_digest_matches_candidate", result["blockers"])
-        self.assertIn("rollback_final_digest_matches_candidate", result["blockers"])
+        self.assertIn("smoke_active_control_plane_digest_matches_candidate", result["blockers"])
+        self.assertIn("smoke_active_worker_digest_matches_candidate", result["blockers"])
+        self.assertIn(
+            "rollback_candidate_control_plane_digest_matches_candidate", result["blockers"]
+        )
+        self.assertIn("rollback_candidate_worker_digest_matches_candidate", result["blockers"])
+        self.assertIn("rollback_final_control_plane_digest_matches_candidate", result["blockers"])
+        self.assertIn("rollback_final_worker_digest_matches_candidate", result["blockers"])
 
 
 if __name__ == "__main__":

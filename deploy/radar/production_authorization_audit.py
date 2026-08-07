@@ -12,8 +12,8 @@ from pathlib import Path
 from typing import Any
 
 
-INPUT_SCHEMA_VERSION = "radar-production-authorization-evidence-v1"
-OUTPUT_SCHEMA_VERSION = "radar-production-authorization-audit-v1"
+INPUT_SCHEMA_VERSION = "radar-production-authorization-evidence-v2"
+OUTPUT_SCHEMA_VERSION = "radar-production-authorization-audit-v2"
 IMAGE_DIGEST_RE = re.compile(r"^sha256:[0-9a-f]{64}$")
 
 REQUIRED_AUTHORIZATIONS = (
@@ -43,7 +43,9 @@ def audit_authorization(
     effective_checked_at = checked_at or str(document.get("checked_at") or utc_now())
     target_dir = str(document.get("target_dir") or "")
     operator = str(document.get("operator") or "").strip()
-    candidate_digest = str(document.get("accepted_candidate_digest") or "")
+    accepted_candidate = _mapping(document.get("accepted_candidate"))
+    candidate_control_plane_digest = str(accepted_candidate.get("control_plane_digest") or "")
+    candidate_worker_digest = str(accepted_candidate.get("worker_digest") or "")
     authorized_at = str(document.get("authorized_at") or "")
 
     _add_check(
@@ -59,10 +61,18 @@ def audit_authorization(
     _add_check(
         checks,
         blockers,
-        "accepted_candidate_digest",
-        bool(IMAGE_DIGEST_RE.fullmatch(candidate_digest)),
-        "accepted candidate digest must be sha256:<64 lowercase hex>",
-        value=candidate_digest or None,
+        "accepted_candidate_control_plane_digest",
+        bool(IMAGE_DIGEST_RE.fullmatch(candidate_control_plane_digest)),
+        "accepted candidate control-plane digest must be sha256:<64 lowercase hex>",
+        value=candidate_control_plane_digest or None,
+    )
+    _add_check(
+        checks,
+        blockers,
+        "accepted_candidate_worker_digest",
+        bool(IMAGE_DIGEST_RE.fullmatch(candidate_worker_digest)),
+        "accepted candidate Worker digest must be sha256:<64 lowercase hex>",
+        value=candidate_worker_digest or None,
     )
 
     _add_check(
@@ -124,7 +134,10 @@ def audit_authorization(
         "summary": {
             "target_dir": target_dir,
             "operator": operator,
-            "accepted_candidate_digest": candidate_digest,
+            "accepted_candidate": {
+                "control_plane_digest": candidate_control_plane_digest,
+                "worker_digest": candidate_worker_digest,
+            },
             "authorized_at": authorized_at,
             "checked_at": effective_checked_at,
             "age_seconds": age_seconds,
@@ -144,6 +157,10 @@ def _parse_timestamp(value: str) -> datetime | None:
     if parsed.tzinfo is None:
         return None
     return parsed.astimezone(UTC)
+
+
+def _mapping(value: object) -> dict[str, Any]:
+    return value if isinstance(value, dict) else {}
 
 
 def _add_check(

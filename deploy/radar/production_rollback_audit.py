@@ -13,8 +13,8 @@ from pathlib import Path
 from typing import Any
 
 
-INPUT_SCHEMA_VERSION = "radar-production-rollback-evidence-v1"
-OUTPUT_SCHEMA_VERSION = "radar-production-rollback-audit-v1"
+INPUT_SCHEMA_VERSION = "radar-production-rollback-evidence-v2"
+OUTPUT_SCHEMA_VERSION = "radar-production-rollback-audit-v2"
 
 IMAGE_DIGEST_RE = re.compile(r"^sha256:[0-9a-f]{64}$")
 
@@ -31,38 +31,85 @@ def audit_rollback(
     checks: list[dict[str, Any]] = []
     blockers: list[str] = []
 
-    accepted_digest = str(document.get("accepted_candidate_digest") or "")
-    previous_digest = str(document.get("previous_image_digest") or "")
-    final_active_digest = str(document.get("final_active_digest") or "")
+    accepted_candidate = _mapping(document.get("accepted_candidate"))
+    previous = _mapping(document.get("previous"))
+    final_active = _mapping(document.get("final_active"))
+    accepted_control_plane_digest = str(accepted_candidate.get("control_plane_digest") or "")
+    accepted_worker_digest = str(accepted_candidate.get("worker_digest") or "")
+    previous_control_plane_digest = str(previous.get("control_plane_digest") or "")
+    previous_worker_digest = str(previous.get("worker_digest") or "")
+    final_control_plane_digest = str(final_active.get("control_plane_digest") or "")
+    final_worker_digest = str(final_active.get("worker_digest") or "")
     rollback_schema_migrations = _int_value(document.get("rollback_schema_migrations"))
 
     _add_check(
         checks,
         blockers,
-        "accepted_candidate_digest",
-        _valid_image_digest(accepted_digest),
-        "accepted candidate digest must be sha256:<64 lowercase hex>",
-        value=accepted_digest or None,
+        "accepted_candidate_control_plane_digest",
+        _valid_image_digest(accepted_control_plane_digest),
+        "accepted candidate control-plane digest must be sha256:<64 lowercase hex>",
+        value=accepted_control_plane_digest or None,
     )
-
     _add_check(
         checks,
         blockers,
-        "previous_image_digest",
-        _valid_image_digest(previous_digest),
-        "previous image digest must be sha256:<64 lowercase hex>",
-        value=previous_digest or None,
+        "accepted_candidate_worker_digest",
+        _valid_image_digest(accepted_worker_digest),
+        "accepted candidate Worker digest must be sha256:<64 lowercase hex>",
+        value=accepted_worker_digest or None,
     )
-
     _add_check(
         checks,
         blockers,
-        "rollback_digest_distinct_from_candidate",
-        bool(previous_digest and accepted_digest and previous_digest != accepted_digest),
-        "rollback digest must be distinct from accepted candidate digest",
+        "previous_control_plane_digest",
+        _valid_image_digest(previous_control_plane_digest),
+        "previous control-plane digest must be sha256:<64 lowercase hex>",
+        value=previous_control_plane_digest or None,
     )
-
-    _add_bool_check(checks, blockers, document, "rollback_image_available")
+    _add_check(
+        checks,
+        blockers,
+        "previous_worker_digest",
+        _valid_image_digest(previous_worker_digest),
+        "previous Worker digest must be sha256:<64 lowercase hex>",
+        value=previous_worker_digest or None,
+    )
+    _add_check(
+        checks,
+        blockers,
+        "previous_control_plane_digest_distinct_from_candidate",
+        bool(
+            previous_control_plane_digest
+            and accepted_control_plane_digest
+            and previous_control_plane_digest != accepted_control_plane_digest
+        ),
+        "previous control-plane digest must differ from the accepted candidate",
+    )
+    _add_check(
+        checks,
+        blockers,
+        "previous_worker_digest_distinct_from_candidate",
+        bool(
+            previous_worker_digest
+            and accepted_worker_digest
+            and previous_worker_digest != accepted_worker_digest
+        ),
+        "previous Worker digest must differ from the accepted candidate",
+    )
+    _add_bool_check(
+        checks,
+        blockers,
+        previous,
+        "previous_control_plane_available",
+        source_key="control_plane_available",
+    )
+    _add_bool_check(
+        checks,
+        blockers,
+        previous,
+        "previous_worker_available",
+        source_key="worker_available",
+    )
     _add_bool_check(checks, blockers, document, "rollback_executed")
     _add_bool_check(checks, blockers, document, "rollback_smoke_ok")
 
@@ -96,20 +143,40 @@ def audit_rollback(
     _add_check(
         checks,
         blockers,
-        "final_active_digest",
-        _valid_image_digest(final_active_digest),
-        "final active digest must be sha256:<64 lowercase hex>",
-        value=final_active_digest or None,
+        "final_active_control_plane_digest",
+        _valid_image_digest(final_control_plane_digest),
+        "final active control-plane digest must be sha256:<64 lowercase hex>",
+        value=final_control_plane_digest or None,
     )
-
     _add_check(
         checks,
         blockers,
-        "final_active_digest_matches_candidate",
-        bool(final_active_digest and accepted_digest and final_active_digest == accepted_digest),
-        "final active digest must match the accepted candidate digest",
-        final_active_digest=final_active_digest or None,
-        accepted_candidate_digest=accepted_digest or None,
+        "final_active_worker_digest",
+        _valid_image_digest(final_worker_digest),
+        "final active Worker digest must be sha256:<64 lowercase hex>",
+        value=final_worker_digest or None,
+    )
+    _add_check(
+        checks,
+        blockers,
+        "final_active_control_plane_digest_matches_candidate",
+        bool(
+            final_control_plane_digest
+            and accepted_control_plane_digest
+            and final_control_plane_digest == accepted_control_plane_digest
+        ),
+        "final active control-plane digest must match the accepted candidate",
+    )
+    _add_check(
+        checks,
+        blockers,
+        "final_active_worker_digest_matches_candidate",
+        bool(
+            final_worker_digest
+            and accepted_worker_digest
+            and final_worker_digest == accepted_worker_digest
+        ),
+        "final active Worker digest must match the accepted candidate",
     )
 
     return {
@@ -119,13 +186,22 @@ def audit_rollback(
         "checks": checks,
         "blockers": blockers,
         "summary": {
-            "accepted_candidate_digest": accepted_digest,
-            "previous_image_digest": previous_digest,
+            "accepted_candidate": {
+                "control_plane_digest": accepted_control_plane_digest,
+                "worker_digest": accepted_worker_digest,
+            },
+            "previous": {
+                "control_plane_digest": previous_control_plane_digest,
+                "worker_digest": previous_worker_digest,
+            },
             "rollback_schema_migrations": rollback_schema_migrations,
             "rollback_smoke_ok": document.get("rollback_smoke_ok") is True,
             "accepted_candidate_restored": document.get("accepted_candidate_restored") is True,
             "post_restore_smoke_ok": document.get("post_restore_smoke_ok") is True,
-            "final_active_digest": final_active_digest,
+            "final_active": {
+                "control_plane_digest": final_control_plane_digest,
+                "worker_digest": final_worker_digest,
+            },
         },
     }
 
@@ -135,14 +211,17 @@ def _add_bool_check(
     blockers: list[str],
     mapping: dict[str, Any],
     name: str,
+    *,
+    source_key: str | None = None,
 ) -> None:
+    key = source_key or name
     _add_check(
         checks,
         blockers,
         name,
-        mapping.get(name) is True,
-        f"{name} must be true",
-        value=mapping.get(name),
+        mapping.get(key) is True,
+        f"{key} must be true",
+        value=mapping.get(key),
     )
 
 
@@ -175,6 +254,10 @@ def _int_value(value: object) -> int:
         except ValueError:
             return 0
     return 0
+
+
+def _mapping(value: object) -> dict[str, Any]:
+    return value if isinstance(value, dict) else {}
 
 
 def _ledger_totals_unchanged(before: object, after: object) -> dict[str, Any]:

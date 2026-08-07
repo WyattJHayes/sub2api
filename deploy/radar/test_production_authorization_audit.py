@@ -27,13 +27,17 @@ authorization_audit = load_script(
 
 
 SHA_A = "sha256:" + "a" * 64
+SHA_B = "sha256:" + "b" * 64
 
 
 def authorization_document(**overrides: Any) -> dict[str, Any]:
     document: dict[str, Any] = {
         "schema_version": authorization_audit.INPUT_SCHEMA_VERSION,
         "target_dir": "/opt/sub2api",
-        "accepted_candidate_digest": SHA_A,
+        "accepted_candidate": {
+            "control_plane_digest": SHA_A,
+            "worker_digest": SHA_B,
+        },
         "operator": "release-owner",
         "authorized_at": "2026-08-02T21:00:00Z",
         "checked_at": "2026-08-02T21:30:00Z",
@@ -57,10 +61,14 @@ class ProductionAuthorizationAuditTests(unittest.TestCase):
             max_age_seconds=3600,
         )
 
+        self.assertEqual("radar-production-authorization-audit-v2", result["schema_version"])
         self.assertTrue(result["ok"], result)
         self.assertEqual([], result["blockers"])
         self.assertEqual("release-owner", result["summary"]["operator"])
-        self.assertEqual(SHA_A, result["summary"]["accepted_candidate_digest"])
+        self.assertEqual(
+            {"control_plane_digest": SHA_A, "worker_digest": SHA_B},
+            result["summary"]["accepted_candidate"],
+        )
 
     def test_missing_authorization_flags_fail_closed(self) -> None:
         result = authorization_audit.audit_authorization(
@@ -77,11 +85,14 @@ class ProductionAuthorizationAuditTests(unittest.TestCase):
         self.assertIn("authorize_fresh_backup", result["blockers"])
         self.assertIn("authorize_rollback_drill", result["blockers"])
 
-    def test_target_and_candidate_digest_must_match_scope(self) -> None:
+    def test_target_and_candidate_digests_must_match_scope(self) -> None:
         result = authorization_audit.audit_authorization(
             authorization_document(
                 target_dir="/opt/other",
-                accepted_candidate_digest="bad",
+                accepted_candidate={
+                    "control_plane_digest": "bad",
+                    "worker_digest": "also-bad",
+                },
             ),
             expected_target_dir="/opt/sub2api",
             checked_at="2026-08-02T21:30:00Z",
@@ -90,7 +101,21 @@ class ProductionAuthorizationAuditTests(unittest.TestCase):
 
         self.assertFalse(result["ok"], result)
         self.assertIn("target_dir", result["blockers"])
-        self.assertIn("accepted_candidate_digest", result["blockers"])
+        self.assertIn("accepted_candidate_control_plane_digest", result["blockers"])
+        self.assertIn("accepted_candidate_worker_digest", result["blockers"])
+
+    def test_missing_worker_candidate_digest_fails_closed(self) -> None:
+        result = authorization_audit.audit_authorization(
+            authorization_document(
+                accepted_candidate={"control_plane_digest": SHA_A},
+            ),
+            expected_target_dir="/opt/sub2api",
+            checked_at="2026-08-02T21:30:00Z",
+            max_age_seconds=3600,
+        )
+
+        self.assertFalse(result["ok"], result)
+        self.assertIn("accepted_candidate_worker_digest", result["blockers"])
 
     def test_operator_and_timestamp_are_required(self) -> None:
         result = authorization_audit.audit_authorization(
