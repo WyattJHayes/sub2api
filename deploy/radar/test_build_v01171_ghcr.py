@@ -51,7 +51,9 @@ class BuildV01171GhcrTests(unittest.TestCase):
         control = build_tool.control_plane_command(inputs, Path("control-metadata.json"))
         worker = build_tool.worker_command(inputs, Path("worker-metadata.json"))
 
-        self.assertEqual("deploy/Dockerfile.radar-control-staging", control[control.index("-f") + 1])
+        self.assertEqual(
+            "deploy/Dockerfile.radar-control-staging", control[control.index("-f") + 1]
+        )
         self.assertIn("linux/amd64", control)
         self.assertIn("--push", control)
         for argument in ("VERSION", "COMMIT", "DATE", "NODE_IMAGE", "GOLANG_IMAGE", "ALPINE_IMAGE"):
