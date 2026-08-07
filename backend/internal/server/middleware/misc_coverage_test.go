@@ -96,13 +96,19 @@ func TestForcePlatform_SetsContextAndGinValue(t *testing.T) {
 
 func TestAuthSubjectHelpers_RoundTrip(t *testing.T) {
 	c := &gin.Context{}
-	c.Set(string(ContextKeyUser), AuthSubject{UserID: 1, Concurrency: 2})
+	c.Set(string(ContextKeyUser), AuthSubject{UserID: 1, TenantID: 42, Concurrency: 2})
 	c.Set(string(ContextKeyUserRole), "admin")
 
 	sub, ok := GetAuthSubjectFromContext(c)
 	require.True(t, ok)
 	require.Equal(t, int64(1), sub.UserID)
+	require.Equal(t, int64(42), sub.TenantID)
 	require.Equal(t, 2, sub.Concurrency)
+
+	ctx := WithRadarTenant(context.Background(), sub.TenantID)
+	tenantID, ok := RadarTenantID(ctx)
+	require.True(t, ok)
+	require.Equal(t, int64(42), tenantID)
 
 	role, ok := GetUserRoleFromContext(c)
 	require.True(t, ok)

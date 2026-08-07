@@ -3,6 +3,7 @@ package repository
 import (
 	"context"
 	"crypto/sha256"
+	"database/sql"
 	"encoding/hex"
 	"errors"
 	"io/fs"
@@ -12,6 +13,7 @@ import (
 	"time"
 
 	sqlmock "github.com/DATA-DOG/go-sqlmock"
+	"github.com/Wei-Shaw/sub2api/migrations"
 	"github.com/stretchr/testify/require"
 )
 
@@ -33,6 +35,80 @@ func TestApplyMigrations_DelegatesToApplyMigrationsFS(t *testing.T) {
 	err = ApplyMigrations(context.Background(), db)
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "acquire migrations lock")
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestEmbeddedMigrationsKeepOfficialAndRadarSamePrefixes(t *testing.T) {
+	names := []string{
+		"191_add_radar_control_plane.sql",
+		"191_passkey_credentials.sql",
+		"192_add_evaluation_sample_execution_identity.sql",
+		"192_group_profit_control.sql",
+		"193_add_radar_grading_statistics.sql",
+		"193_group_profit_control_auth_cache_invalidation.sql",
+	}
+
+	for _, name := range names {
+		_, err := migrations.FS.ReadFile(name)
+		require.NoErrorf(t, err, "missing embedded migration %s", name)
+	}
+}
+
+func TestApplyMigrationsFS_UsesCompleteFilenameForSameNumericPrefix(t *testing.T) {
+	const (
+		officialName = "191_official.sql"
+		officialSQL  = "CREATE TABLE official_migration(id int);"
+		radarName    = "191_radar.sql"
+		radarSQL     = "CREATE TABLE radar_migration(id int);"
+	)
+
+	db, mock, err := sqlmock.New()
+	require.NoError(t, err)
+	defer func() { _ = db.Close() }()
+
+	fsys := fstest.MapFS{
+		officialName: &fstest.MapFile{Data: []byte(officialSQL)},
+		radarName:    &fstest.MapFile{Data: []byte(radarSQL)},
+	}
+	migrationsToApply := []struct {
+		name    string
+		content string
+		table   string
+	}{
+		{name: officialName, content: officialSQL, table: "official_migration"},
+		{name: radarName, content: radarSQL, table: "radar_migration"},
+	}
+
+	prepareMigrationsBootstrapExpectations(mock)
+	for _, migration := range migrationsToApply {
+		mock.ExpectQuery("SELECT checksum FROM schema_migrations WHERE filename = \\$1").
+			WithArgs(migration.name).
+			WillReturnError(sql.ErrNoRows)
+		mock.ExpectBegin()
+		mock.ExpectExec("CREATE TABLE " + migration.table).
+			WillReturnResult(sqlmock.NewResult(0, 0))
+		mock.ExpectExec("INSERT INTO schema_migrations \\(filename, checksum\\) VALUES \\(\\$1, \\$2\\)").
+			WithArgs(migration.name, sqlmock.AnyArg()).
+			WillReturnResult(sqlmock.NewResult(1, 1))
+		mock.ExpectCommit()
+	}
+	mock.ExpectExec("SELECT pg_advisory_unlock\\(\\$1\\)").
+		WithArgs(migrationsAdvisoryLockID).
+		WillReturnResult(sqlmock.NewResult(0, 1))
+
+	require.NoError(t, applyMigrationsFS(context.Background(), db, fsys))
+
+	prepareMigrationsBootstrapExpectations(mock)
+	for _, migration := range migrationsToApply {
+		mock.ExpectQuery("SELECT checksum FROM schema_migrations WHERE filename = \\$1").
+			WithArgs(migration.name).
+			WillReturnRows(sqlmock.NewRows([]string{"checksum"}).AddRow(migrationChecksum(migration.content)))
+	}
+	mock.ExpectExec("SELECT pg_advisory_unlock\\(\\$1\\)").
+		WithArgs(migrationsAdvisoryLockID).
+		WillReturnResult(sqlmock.NewResult(0, 1))
+
+	require.NoError(t, applyMigrationsFS(context.Background(), db, fsys))
 	require.NoError(t, mock.ExpectationsWereMet())
 }
 
@@ -256,6 +332,31 @@ func TestApplyMigrationsFS_ChecksumMismatchRejected(t *testing.T) {
 	err = applyMigrationsFS(context.Background(), db, fsys)
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "checksum mismatch")
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestApplyMigrationsFS_AcceptsPublishedMigration198Checksum(t *testing.T) {
+	const migrationName = "198_add_radar_trusted_governance.sql"
+	const publishedChecksum = "91eaf1b6f78d5a6f33907a6c3a401f4bdbbd1d1cf30617321304b037163312ed"
+
+	content, err := migrations.FS.ReadFile(migrationName)
+	require.NoError(t, err)
+	db, mock, err := sqlmock.New()
+	require.NoError(t, err)
+	defer func() { _ = db.Close() }()
+
+	prepareMigrationsBootstrapExpectations(mock)
+	mock.ExpectQuery("SELECT checksum FROM schema_migrations WHERE filename = \\$1").
+		WithArgs(migrationName).
+		WillReturnRows(sqlmock.NewRows([]string{"checksum"}).AddRow(publishedChecksum))
+	mock.ExpectExec("SELECT pg_advisory_unlock\\(\\$1\\)").
+		WithArgs(migrationsAdvisoryLockID).
+		WillReturnResult(sqlmock.NewResult(0, 1))
+
+	err = applyMigrationsFS(context.Background(), db, fstest.MapFS{
+		migrationName: &fstest.MapFile{Data: content},
+	})
+	require.NoError(t, err)
 	require.NoError(t, mock.ExpectationsWereMet())
 }
 

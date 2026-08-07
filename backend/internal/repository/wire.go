@@ -1,8 +1,12 @@
 package repository
 
 import (
+	"context"
 	"database/sql"
 	"errors"
+	"fmt"
+	"strings"
+	"time"
 
 	entsql "entgo.io/ent/dialect/sql"
 	"github.com/Wei-Shaw/sub2api/ent"
@@ -62,12 +66,51 @@ func ProvideSchedulerCache(rdb *redis.Client, cfg *config.Config) service.Schedu
 	return newSchedulerCacheWithChunkSizes(rdb, mgetChunkSize, writeChunkSize)
 }
 
+func ProvideEvaluationArtifactObjectStore(cfg *config.Config) (service.EvaluationArtifactObjectStore, error) {
+	if cfg == nil || !cfg.RadarArtifactStorage.Active() {
+		return nil, nil
+	}
+	return NewS3EvaluationArtifactObjectStore(context.Background(), &cfg.RadarArtifactStorage)
+}
+
+func ProvideEvaluationArtifactScanner(store service.EvaluationArtifactObjectStore, cfg *config.Config) (service.ArtifactScanner, error) {
+	if cfg == nil || !cfg.RadarArtifactStorage.Active() {
+		return nil, nil
+	}
+	if store == nil {
+		return nil, service.ErrArtifactObjectStoreUnavailable
+	}
+	if strings.TrimSpace(cfg.RadarArtifactStorage.ScanMode) != "clamav" {
+		return nil, fmt.Errorf("unsupported Radar artifact scan mode %q", cfg.RadarArtifactStorage.ScanMode)
+	}
+	return NewClamAVArtifactScanner(store, cfg.RadarArtifactStorage.ClamAVAddress, time.Duration(cfg.RadarArtifactStorage.ScanTimeout)*time.Second)
+}
+
+// ProvideEvaluationGradingRepository wires an artifact store whenever Radar
+// is enabled. A Radar-enabled server without durable artifact storage fails at
+// startup instead of accepting evidence that cannot be verified later.
+func ProvideEvaluationGradingRepository(db *sql.DB, cfg *config.Config, store service.EvaluationArtifactObjectStore, scanner service.ArtifactScanner) (service.EvaluationGradingRepository, error) {
+	if cfg == nil || (!cfg.Radar.Enabled && !cfg.RadarArtifactStorage.Active()) {
+		return NewEvaluationGradingRepository(db), nil
+	}
+	if !cfg.RadarArtifactStorage.Active() || store == nil {
+		return nil, service.ErrArtifactObjectStoreUnavailable
+	}
+	if scanner == nil {
+		return nil, service.ErrArtifactScannerUnavailable
+	}
+	return NewEvaluationGradingRepositoryWithArtifactDependencies(db, store, scanner), nil
+}
+
 // ProviderSet is the Wire provider set for all repositories
 var ProviderSet = wire.NewSet(
 	NewUserRepository,
 	NewAPIKeyRepository,
 	NewGroupRepository,
+	NewAdminGroupRepository,
+	NewCompositeModelRouteRepository,
 	NewAccountRepository,
+	NewAdminAccountRepository,
 	NewScheduledTestPlanRepository,   // 定时测试计划仓储
 	NewScheduledTestResultRepository, // 定时测试结果仓储
 	NewProxyRepository,
@@ -77,12 +120,22 @@ var ProviderSet = wire.NewSet(
 	NewAnnouncementReadRepository,
 	NewUsageLogRepository,
 	NewUsageBillingRepository,
+	ProvideEvaluationRouteEvidenceRepository,
+	ProvideEvaluationArtifactObjectStore,
+	ProvideEvaluationArtifactScanner,
+	ProvideEvaluationGradingRepository,
+	NewEvaluationArtifactCleanupRepository,
+	NewRadarGovernanceRepository,
+	NewRadarReliabilityRepository,
 	NewBatchImageRepository,
 	NewIdempotencyRepository,
 	NewUsageCleanupRepository,
 	NewDashboardAggregationRepository,
 	NewSettingRepository,
 	NewOpsRepository,
+	NewAuditLogRepository,
+	NewPasskeyRepository,
+	NewPasskeySessionStore,
 	NewUserSubscriptionRepository,
 	NewUserAttributeDefinitionRepository,
 	NewUserAttributeValueRepository,
@@ -116,11 +169,13 @@ var ProviderSet = wire.NewSet(
 	NewRedeemCache,
 	NewUpdateCache,
 	NewGeminiTokenCache,
+	NewImageTaskStore,
 	NewBatchImageQueue,
 	NewBatchImageDownloadLimiter,
 	NewLeaderLockCache,
 	ProvideSchedulerCache,
 	NewSchedulerOutboxRepository,
+	NewAuthCacheInvalidationOutboxRepository,
 	NewProxyLatencyCache,
 	NewTotpCache,
 	NewRefreshTokenCache,
@@ -135,8 +190,13 @@ var ProviderSet = wire.NewSet(
 	NewPgDumper,
 	NewS3BackupStoreFactory,
 
+	// Image storage (async image task result offload)
+	ProvideImageStorageFactory,
+
 	// HTTP service ports (DI Strategy A: return interface directly)
 	NewTurnstileVerifier,
+	NewTencentCaptchaVerifier,
+	NewAliyunCaptchaVerifier,
 	ProvidePricingRemoteClient,
 	ProvideGitHubReleaseClient,
 	NewProxyExitInfoProber,
@@ -164,6 +224,16 @@ var ProviderSet = wire.NewSet(
 func ProvideEnt(cfg *config.Config) (*ent.Client, error) {
 	client, _, err := InitEnt(cfg)
 	return client, err
+}
+
+// ProvideImageStorageFactory 提供按需构造对象存储客户端的工厂。
+//
+// 这里返回工厂而不是实例：异步生图的开关与凭证可以在后台随时改动，客户端必须能在
+// 设置保存后重建，而不是在启动时定死一份。
+func ProvideImageStorageFactory() service.ImageStorageFactory {
+	return func(ctx context.Context, cfg *config.ImageStorageConfig) (service.ImageStorage, error) {
+		return NewS3ImageStorage(ctx, cfg)
+	}
 }
 
 // ProvideSQLDB 从 Ent 客户端提取底层的 *sql.DB 连接。

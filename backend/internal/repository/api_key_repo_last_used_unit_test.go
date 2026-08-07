@@ -3,6 +3,7 @@ package repository
 import (
 	"context"
 	"database/sql"
+	"strings"
 	"testing"
 	"time"
 
@@ -125,6 +126,20 @@ func TestAPIKeyRepositoryListByUserIDAttachesLastUsedIP(t *testing.T) {
 	require.Nil(t, byID[noLogs.ID].LastUsedIP)
 }
 
+func TestLatestUsageLogIPsQueryPostgresUsesPerKeyLateralLookup(t *testing.T) {
+	query, args := latestUsageLogIPsQuery([]int64{11, 22}, dialect.Postgres)
+	normalizedQuery := strings.Join(strings.Fields(query), " ")
+
+	require.Contains(t, normalizedQuery, "FROM unnest($1::bigint[]) AS requested(api_key_id)")
+	require.Contains(t, normalizedQuery, "CROSS JOIN LATERAL")
+	require.Contains(t, normalizedQuery, "WHERE ul.api_key_id = requested.api_key_id")
+	require.Contains(t, normalizedQuery, "AND ul.ip_address IS NOT NULL")
+	require.Contains(t, normalizedQuery, "AND ul.ip_address <> ''")
+	require.Contains(t, normalizedQuery, "ORDER BY ul.created_at DESC, ul.id DESC LIMIT 1")
+	require.NotContains(t, normalizedQuery, "ROW_NUMBER")
+	require.Len(t, args, 1)
+}
+
 func TestAPIKeyRepository_CreateWithLastUsedAt(t *testing.T) {
 	repo, client := newAPIKeyRepoSQLite(t)
 	ctx := context.Background()
@@ -147,6 +162,44 @@ func TestAPIKeyRepository_CreateWithLastUsedAt(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, got.LastUsedAt)
 	require.WithinDuration(t, lastUsed, *got.LastUsedAt, time.Second)
+}
+
+func TestAPIKeyRepository_UpdatePersistsEvaluationFlag(t *testing.T) {
+	repo, client := newAPIKeyRepoSQLite(t)
+	ctx := context.Background()
+	user := mustCreateAPIKeyRepoUser(t, ctx, client, "update-evaluation-unit@test.com")
+	key := &service.APIKey{
+		UserID: user.ID,
+		Key:    "sk-update-evaluation-unit",
+		Name:   "Evaluation Toggle",
+		Status: service.StatusActive,
+	}
+	require.NoError(t, repo.Create(ctx, key))
+
+	key.IsEvaluation = true
+	require.NoError(t, repo.Update(ctx, key, service.APIKeyUpdateFields{IsEvaluation: true}))
+
+	got, err := repo.GetByID(ctx, key.ID)
+	require.NoError(t, err)
+	require.True(t, got.IsEvaluation)
+}
+
+func TestAPIKeyRepository_GetByKeyForAuthPreservesEvaluationFlag(t *testing.T) {
+	repo, client := newAPIKeyRepoSQLite(t)
+	ctx := context.Background()
+	user := mustCreateAPIKeyRepoUser(t, ctx, client, "auth-evaluation-unit@test.com")
+	key := &service.APIKey{
+		UserID:       user.ID,
+		Key:          "sk-auth-evaluation-unit",
+		Name:         "Evaluation Auth",
+		Status:       service.StatusActive,
+		IsEvaluation: true,
+	}
+	require.NoError(t, repo.Create(ctx, key))
+
+	got, err := repo.GetByKeyForAuth(ctx, key.Key)
+	require.NoError(t, err)
+	require.True(t, got.IsEvaluation)
 }
 
 func TestAPIKeyRepository_UpdateLastUsed(t *testing.T) {

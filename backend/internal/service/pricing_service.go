@@ -12,6 +12,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/Wei-Shaw/sub2api/internal/config"
@@ -53,14 +54,14 @@ var (
 		SupportsPromptCaching:               true,
 	}
 	openAIGPT56TerraFallbackPricing = &LiteLLMModelPricing{
-		InputCostPerToken:                   2.5e-06,
-		InputCostPerTokenPriority:           5e-06,
-		OutputCostPerToken:                  1.5e-05,
-		OutputCostPerTokenPriority:          3e-05,
-		CacheCreationInputTokenCost:         3.125e-06,
-		CacheCreationInputTokenCostPriority: 6.25e-06,
-		CacheReadInputTokenCost:             2.5e-07,
-		CacheReadInputTokenCostPriority:     5e-07,
+		InputCostPerToken:                   2e-06,
+		InputCostPerTokenPriority:           4e-06,
+		OutputCostPerToken:                  1.2e-05,
+		OutputCostPerTokenPriority:          2.4e-05,
+		CacheCreationInputTokenCost:         2.5e-06,
+		CacheCreationInputTokenCostPriority: 5e-06,
+		CacheReadInputTokenCost:             2e-07,
+		CacheReadInputTokenCostPriority:     4e-07,
 		LongContextInputTokenThreshold:      openAIGPT54LongContextInputThreshold,
 		LongContextInputCostMultiplier:      openAIGPT54LongContextInputMultiplier,
 		LongContextOutputCostMultiplier:     openAIGPT54LongContextOutputMultiplier,
@@ -70,14 +71,14 @@ var (
 		SupportsPromptCaching:               true,
 	}
 	openAIGPT56LunaFallbackPricing = &LiteLLMModelPricing{
-		InputCostPerToken:                   1e-06,
-		InputCostPerTokenPriority:           2e-06,
-		OutputCostPerToken:                  6e-06,
-		OutputCostPerTokenPriority:          1.2e-05,
-		CacheCreationInputTokenCost:         1.25e-06,
-		CacheCreationInputTokenCostPriority: 2.5e-06,
-		CacheReadInputTokenCost:             1e-07,
-		CacheReadInputTokenCostPriority:     2e-07,
+		InputCostPerToken:                   2e-07,
+		InputCostPerTokenPriority:           4e-07,
+		OutputCostPerToken:                  1.2e-06,
+		OutputCostPerTokenPriority:          2.4e-06,
+		CacheCreationInputTokenCost:         2.5e-07,
+		CacheCreationInputTokenCostPriority: 5e-07,
+		CacheReadInputTokenCost:             2e-08,
+		CacheReadInputTokenCostPriority:     4e-08,
 		LongContextInputTokenThreshold:      openAIGPT54LongContextInputThreshold,
 		LongContextInputCostMultiplier:      openAIGPT54LongContextInputMultiplier,
 		LongContextOutputCostMultiplier:     openAIGPT54LongContextOutputMultiplier,
@@ -125,6 +126,7 @@ type LiteLLMModelPricing struct {
 	SupportsPromptCaching               bool    `json:"supports_prompt_caching"`
 	OutputCostPerImage                  float64 `json:"output_cost_per_image"`       // 图片生成模型每张图片价格
 	OutputCostPerImageToken             float64 `json:"output_cost_per_image_token"` // 图片输出 token 价格
+	InputCostPerImageToken              float64 `json:"input_cost_per_image_token"`  // 图片输入 token 价格（如 gpt-image-2 图片编辑）
 
 	// TokenPricingAbsent 表示源数据中 input/output token 价格均缺失（仅有图片价）。
 	// 此类条目只可用于图片计费，token 计费必须回退到 fallback 或 fail-closed，
@@ -158,6 +160,7 @@ type LiteLLMRawEntry struct {
 	SupportsPromptCaching               bool     `json:"supports_prompt_caching"`
 	OutputCostPerImage                  *float64 `json:"output_cost_per_image"`
 	OutputCostPerImageToken             *float64 `json:"output_cost_per_image_token"`
+	InputCostPerImageToken              *float64 `json:"input_cost_per_image_token"`
 }
 
 // PricingService 动态价格服务
@@ -168,6 +171,13 @@ type PricingService struct {
 	pricingData  map[string]*LiteLLMModelPricing
 	lastUpdated  time.Time
 	localHash    string
+	source       string
+	remoteHash   string
+
+	lastRefreshAt    time.Time
+	lastRefreshOK    bool
+	lastRefreshError string
+	fallbackTotal    atomic.Uint64
 
 	// 停止信号
 	stopCh chan struct{}
@@ -216,6 +226,11 @@ func (s *PricingService) Stop() {
 
 // startUpdateScheduler 启动定时更新调度器
 func (s *PricingService) startUpdateScheduler() {
+	if s == nil || s.cfg == nil || strings.TrimSpace(s.cfg.Pricing.RemoteURL) == "" {
+		logger.LegacyPrintf("service.pricing", "%s", "[Pricing] Remote sync disabled: pricing remote URL is empty")
+		return
+	}
+
 	// 定期检查哈希更新
 	hashInterval := time.Duration(s.cfg.Pricing.HashCheckIntervalMinutes) * time.Minute
 	if hashInterval < time.Minute {
@@ -264,8 +279,10 @@ func (s *PricingService) checkAndUpdatePricing() error {
 		remoteHash, err := s.fetchRemoteHash()
 		if err != nil {
 			logger.LegacyPrintf("service.pricing", "[Pricing] Failed to fetch remote hash on startup: %v", err)
+			s.recordPricingFallback("local", err)
 			return nil // 已加载本地文件，哈希获取失败不影响启动
 		}
+		s.recordPricingRefresh("local", remoteHash, true, nil)
 
 		s.mu.RLock()
 		localHash := s.localHash
@@ -276,6 +293,7 @@ func (s *PricingService) checkAndUpdatePricing() error {
 				localHash[:min(8, len(localHash))], remoteHash[:min(8, len(remoteHash))])
 			if err := s.downloadPricingData(); err != nil {
 				logger.LegacyPrintf("service.pricing", "[Pricing] Download failed, using existing file: %v", err)
+				s.recordPricingFallback("local", err)
 			}
 		}
 		return nil
@@ -294,6 +312,7 @@ func (s *PricingService) checkAndUpdatePricing() error {
 		logger.LegacyPrintf("service.pricing", "[Pricing] Local file is %v old, updating...", fileAge.Round(time.Hour))
 		if err := s.downloadPricingData(); err != nil {
 			logger.LegacyPrintf("service.pricing", "[Pricing] Download failed, using existing file: %v", err)
+			s.recordPricingFallback("local", err)
 		}
 	}
 
@@ -307,8 +326,10 @@ func (s *PricingService) syncWithRemote() error {
 		remoteHash, err := s.fetchRemoteHash()
 		if err != nil {
 			logger.LegacyPrintf("service.pricing", "[Pricing] Failed to fetch remote hash: %v", err)
+			s.recordPricingFallback("local", err)
 			return nil // 哈希获取失败不影响正常使用
 		}
+		s.recordPricingRefresh("local", remoteHash, true, nil)
 
 		s.mu.RLock()
 		localHash := s.localHash
@@ -335,7 +356,11 @@ func (s *PricingService) syncWithRemote() error {
 
 	if fileAge > maxAge {
 		logger.LegacyPrintf("service.pricing", "[Pricing] File is %v old, downloading...", fileAge.Round(time.Hour))
-		return s.downloadPricingData()
+		if err := s.downloadPricingData(); err != nil {
+			s.recordPricingFallback("local", err)
+			return err
+		}
+		return nil
 	}
 
 	return nil
@@ -404,6 +429,11 @@ func (s *PricingService) downloadPricingData() error {
 	s.pricingData = data
 	s.lastUpdated = time.Now()
 	s.localHash = syncHash
+	s.source = pricingSourceRemote
+	s.remoteHash = remoteHash
+	s.lastRefreshAt = s.lastUpdated
+	s.lastRefreshOK = true
+	s.lastRefreshError = ""
 	s.mu.Unlock()
 
 	logger.LegacyPrintf("service.pricing", "[Pricing] Downloaded %d models successfully", len(data))
@@ -435,7 +465,7 @@ func (s *PricingService) parsePricingData(body []byte) (map[string]*LiteLLMModel
 		}
 
 		// 只保留有有效价格的条目
-		if entry.InputCostPerToken == nil && entry.OutputCostPerToken == nil && entry.OutputCostPerImage == nil && entry.OutputCostPerImageToken == nil {
+		if entry.InputCostPerToken == nil && entry.OutputCostPerToken == nil && entry.OutputCostPerImage == nil && entry.OutputCostPerImageToken == nil && entry.InputCostPerImageToken == nil {
 			continue
 		}
 
@@ -489,6 +519,9 @@ func (s *PricingService) parsePricingData(body []byte) (map[string]*LiteLLMModel
 		if entry.OutputCostPerImageToken != nil {
 			pricing.OutputCostPerImageToken = *entry.OutputCostPerImageToken
 		}
+		if entry.InputCostPerImageToken != nil {
+			pricing.InputCostPerImageToken = *entry.InputCostPerImageToken
+		}
 
 		result[modelName] = pricing
 	}
@@ -525,12 +558,18 @@ func (s *PricingService) loadPricingData(filePath string) error {
 	s.mu.Lock()
 	s.pricingData = pricingData
 	s.localHash = hashStr
+	s.source = pricingSourceLocal
 
 	info, _ := os.Stat(filePath)
 	if info != nil {
 		s.lastUpdated = info.ModTime()
 	} else {
 		s.lastUpdated = time.Now()
+	}
+	if s.lastRefreshAt.IsZero() {
+		s.lastRefreshAt = time.Now()
+		s.lastRefreshOK = true
+		s.lastRefreshError = ""
 	}
 	s.mu.Unlock()
 
@@ -578,6 +617,7 @@ func (s *PricingService) useFallbackPricing() error {
 	}
 
 	logger.LegacyPrintf("service.pricing", "[Pricing] Using fallback file: %s", fallbackFile)
+	s.fallbackTotal.Add(1)
 
 	// 复制到数据目录
 	data, err := os.ReadFile(fallbackFile)
@@ -590,7 +630,16 @@ func (s *PricingService) useFallbackPricing() error {
 		logger.LegacyPrintf("service.pricing", "[Pricing] Failed to copy fallback: %v", err)
 	}
 
-	return s.loadPricingData(fallbackFile)
+	if err := s.loadPricingData(fallbackFile); err != nil {
+		return err
+	}
+	s.mu.Lock()
+	s.source = pricingSourceEmbedded
+	s.lastRefreshAt = time.Now()
+	s.lastRefreshOK = false
+	s.lastRefreshError = "using fallback pricing file"
+	s.mu.Unlock()
+	return nil
 }
 
 // fetchRemoteHash 从远程获取哈希值
@@ -685,16 +734,24 @@ func (s *PricingService) GetModelPricing(modelName string) *LiteLLMModelPricing 
 }
 
 func (s *PricingService) buildModelLookupCandidates(modelLower string) []string {
-	// Prefer canonical model name first (this also improves billing compatibility with "models/xxx").
-	candidates := []string{
-		normalizeModelNameForPricing(modelLower),
+	rawCandidates := []string{
 		modelLower,
-	}
-	candidates = append(candidates,
 		strings.TrimPrefix(modelLower, "models/"),
 		lastSegment(modelLower),
 		lastSegment(strings.TrimPrefix(modelLower, "models/")),
-	)
+	}
+	normalized := normalizeModelNameForPricing(modelLower)
+
+	// A tier-specific entry should take precedence when the pricing catalog gains
+	// one later. Today Antigravity's Gemini 3.6 Flash tiers share the base rate,
+	// so the normalized base remains the fallback after the exact aliases.
+	candidates := rawCandidates
+	if normalizeGeminiThinkingTierAlias(lastSegment(modelLower)) != lastSegment(modelLower) {
+		candidates = append(candidates, normalized)
+	} else {
+		// Prefer canonical model names for all other aliases (including models/xxx).
+		candidates = append([]string{normalized}, candidates...)
+	}
 
 	seen := make(map[string]struct{}, len(candidates))
 	out := make([]string, 0, len(candidates))
@@ -742,6 +799,20 @@ func normalizeModelNameForPricing(model string) string {
 		}
 		return canonical
 	}
+	return normalizeGeminiThinkingTierAlias(model)
+}
+
+// normalizeGeminiThinkingTierAlias maps Antigravity's Gemini 3.6 Flash
+// thinking-tier model IDs to the public base model. The tier controls reasoning
+// behavior, not the published token rate, so this keeps -high/-low/-medium and
+// -tiered requests on the same price card as gemini-3.6-flash.
+func normalizeGeminiThinkingTierAlias(model string) string {
+	const baseModel = "gemini-3.6-flash"
+	for _, tier := range []string{"-high", "-low", "-medium", "-tiered"} {
+		if model == baseModel+tier {
+			return baseModel
+		}
+	}
 	return model
 }
 
@@ -784,6 +855,10 @@ func (s *PricingService) matchByModelFamily(model string) *LiteLLMModelPricing {
 	// 因子串关系误匹配 "claude-opus-4-7"（opus-4.7 系列）。
 	// 注意：原 map 实现存在 Go map 迭代随机性导致的同类 bug，此处改为有序切片修复。
 	families := []modelFamily{
+		// Opus 5 与 Opus 4.8 同价（$5/$25 per MTok）。定价数据缺失 claude-opus-5 时
+		// 必须回退到 4.8，否则会掉进 "opus-4" 系列按 $15/$75 计费（3 倍超收）。
+		{name: "opus-5", match: []string{"claude-opus-5"}, pricing: []string{"claude-opus-5", "claude-opus-4-8"}},
+		{name: "opus-4.8", match: []string{"claude-opus-4-8", "claude-opus-4.8"}, pricing: []string{"claude-opus-4-8", "claude-opus-4.8", "claude-opus-4-7"}},
 		{name: "opus-4.7", match: []string{"claude-opus-4-7", "claude-opus-4.7"}, pricing: []string{"claude-opus-4-7", "claude-opus-4.7", "claude-opus-4-6"}},
 		{name: "opus-4.6", match: []string{"claude-opus-4-6", "claude-opus-4.6"}},
 		{name: "opus-4.5", match: []string{"claude-opus-4-5", "claude-opus-4.5"}},
@@ -816,6 +891,11 @@ func (s *PricingService) matchByModelFamily(model string) *LiteLLMModelPricing {
 		switch {
 		case strings.Contains(model, "opus"):
 			switch {
+			// "opus-5" 必须先判：不能用裸 "5" 匹配，否则 claude-opus-4-5 会被误判。
+			case strings.Contains(model, "opus-5") || strings.Contains(model, "opus5"):
+				fallbackName = "opus-5"
+			case strings.Contains(model, "4.8") || strings.Contains(model, "4-8"):
+				fallbackName = "opus-4.8"
 			case strings.Contains(model, "4.7") || strings.Contains(model, "4-7"):
 				fallbackName = "opus-4.7"
 			case strings.Contains(model, "4.6") || strings.Contains(model, "4-6"):

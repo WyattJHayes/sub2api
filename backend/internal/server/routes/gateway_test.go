@@ -1,10 +1,13 @@
 package routes
 
 import (
+	"context"
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/Wei-Shaw/sub2api/internal/config"
 	"github.com/Wei-Shaw/sub2api/internal/handler"
@@ -15,6 +18,15 @@ import (
 )
 
 func newGatewayRoutesTestRouter(platform ...string) *gin.Engine {
+	return newGatewayRoutesTestRouterWithConfig(&config.Config{
+		Gateway: config.GatewayConfig{
+			MaxBodySize:     1024 * 1024,
+			TextMaxBodySize: 1024 * 1024,
+		},
+	}, platform...)
+}
+
+func newGatewayRoutesTestRouterWithConfig(cfg *config.Config, platform ...string) *gin.Engine {
 	gin.SetMode(gin.TestMode)
 	router := gin.New()
 
@@ -22,12 +34,12 @@ func newGatewayRoutesTestRouter(platform ...string) *gin.Engine {
 	if len(platform) > 0 && platform[0] != "" {
 		groupPlatform = platform[0]
 	}
-
 	RegisterGatewayRoutes(
 		router,
 		&handler.Handlers{
 			Gateway:       &handler.GatewayHandler{},
 			OpenAIGateway: &handler.OpenAIGatewayHandler{},
+			AsyncImage:    handler.NewAsyncImageHandler(nil, nil),
 		},
 		servermiddleware.APIKeyAuthMiddleware(func(c *gin.Context) {
 			groupID := int64(1)
@@ -37,14 +49,159 @@ func newGatewayRoutesTestRouter(platform ...string) *gin.Engine {
 			})
 			c.Next()
 		}),
+		servermiddleware.EvaluationEvidenceMiddleware(func(c *gin.Context) {
+			c.Next()
+		}),
 		nil,
 		nil,
 		nil,
 		nil,
-		&config.Config{},
+		nil,
+		cfg,
 	)
 
 	return router
+}
+
+type gatewayRouteOrderAPIKeyRepo struct {
+	service.APIKeyRepository
+	apiKey *service.APIKey
+}
+
+func (r *gatewayRouteOrderAPIKeyRepo) GetByKeyForAuth(_ context.Context, key string) (*service.APIKey, error) {
+	if r.apiKey == nil || key != r.apiKey.Key {
+		return nil, service.ErrAPIKeyNotFound
+	}
+	clone := *r.apiKey
+	return &clone, nil
+}
+
+func (r *gatewayRouteOrderAPIKeyRepo) UpdateLastUsed(context.Context, int64, time.Time) error {
+	return nil
+}
+
+func TestGatewayRoutesRunEvaluationEvidenceAfterAuthenticationForEveryGatewayFamily(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	const apiKeyValue = "sk-route-order-evaluation"
+	const apiKeyID int64 = 601
+	groupID := int64(41)
+	secret := strings.Repeat("s", 32)
+	cfg := &config.Config{
+		RunMode: config.RunModeSimple,
+		Gateway: config.GatewayConfig{
+			MaxBodySize:     1024 * 1024,
+			TextMaxBodySize: 1024 * 1024,
+		},
+		Radar: config.RadarConfig{
+			Enabled:              true,
+			SigningSecret:        secret,
+			HashingSecret:        strings.Repeat("h", 32),
+			MaxContextTTLSeconds: 300,
+			Region:               "cn-east",
+			RouteProfileVersion:  "route-v42",
+		},
+	}
+	apiKey := &service.APIKey{
+		ID: apiKeyID, UserID: 71, Key: apiKeyValue, GroupID: &groupID,
+		Status: service.StatusActive, IsEvaluation: true,
+		User: &service.User{
+			ID: 71, Role: service.RoleUser, Status: service.StatusActive,
+			Balance: 10, Concurrency: 1,
+		},
+		Group: &service.Group{
+			ID: groupID, Platform: service.PlatformOpenAI, Status: service.StatusActive,
+		},
+	}
+	apiKeyService := service.NewAPIKeyService(
+		&gatewayRouteOrderAPIKeyRepo{apiKey: apiKey}, nil, nil, nil, nil, nil, cfg,
+	)
+	auth := servermiddleware.NewAPIKeyAuthMiddleware(apiKeyService, nil, cfg)
+
+	signer, err := service.NewEvaluationContextSigner([]byte(secret), 5*time.Minute)
+	require.NoError(t, err)
+	now := time.Now().UTC()
+	token, err := signer.Sign(service.EvaluationContext{
+		RunID:                 "018f4f20-3d12-7e50-9000-000000000601",
+		SampleID:              "018f4f20-3d12-7e50-9000-000000000602",
+		DatasetVersionID:      "018f4f20-3d12-7e50-9000-000000000603",
+		DatasetKey:            "gateway-route-order",
+		DatasetVersion:        "dataset-v1",
+		DatasetManifestSHA256: strings.Repeat("d", 64),
+		ExpectedModelAlias:    "public-coder",
+		ExpectedRouteProfile:  "route-v42",
+		APIKeyID:              apiKeyID,
+		IssuedAt:              now.Add(-time.Second),
+		ExpiresAt:             now.Add(2 * time.Minute),
+	})
+	require.NoError(t, err)
+
+	var evidenceCalls int
+	evidence := servermiddleware.EvaluationEvidenceMiddleware(func(c *gin.Context) {
+		evaluation, hasEvaluation := service.EvaluationContextFromContext(c.Request.Context())
+		trace, hasTrace := service.RouteTraceFromContext(c.Request.Context())
+		require.True(t, hasEvaluation, "evidence middleware must run after signed evaluation auth")
+		require.Equal(t, apiKeyID, evaluation.APIKeyID)
+		require.True(t, hasTrace)
+		require.NotNil(t, trace)
+		evidenceCalls++
+		c.AbortWithStatus(http.StatusNoContent)
+	})
+
+	router := gin.New()
+	RegisterGatewayRoutes(
+		router,
+		&handler.Handlers{
+			Gateway:       &handler.GatewayHandler{},
+			OpenAIGateway: &handler.OpenAIGatewayHandler{},
+			AsyncImage:    handler.NewAsyncImageHandler(nil, nil),
+		},
+		auth,
+		evidence,
+		apiKeyService,
+		nil,
+		nil,
+		nil,
+		nil,
+		cfg,
+	)
+
+	tests := []struct {
+		name   string
+		method string
+		path   string
+		google bool
+	}{
+		{name: "versioned gateway", method: http.MethodPost, path: "/v1/messages"},
+		{name: "versioned responses", method: http.MethodPost, path: "/v1/responses"},
+		{name: "versioned responses subpath", method: http.MethodPost, path: "/v1/responses/compact"},
+		{name: "versioned alpha search", method: http.MethodPost, path: "/v1/alpha/search"},
+		{name: "google compatible", method: http.MethodPost, path: "/v1beta/models/gemini-public:generateContent", google: true},
+		{name: "root alias", method: http.MethodPost, path: "/responses"},
+		{name: "root alias responses subpath", method: http.MethodPost, path: "/responses/compact"},
+		{name: "codex direct", method: http.MethodPost, path: "/backend-api/codex/responses"},
+		{name: "codex direct responses subpath", method: http.MethodPost, path: "/backend-api/codex/responses/compact"},
+		{name: "chat alias", method: http.MethodPost, path: "/chat/completions"},
+		{name: "antigravity versioned", method: http.MethodPost, path: "/antigravity/v1/messages"},
+		{name: "antigravity google", method: http.MethodPost, path: "/antigravity/v1beta/models/gemini-public:generateContent", google: true},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			req := httptest.NewRequest(test.method, test.path, strings.NewReader(`{"model":"public-coder"}`))
+			req.Header.Set("Content-Type", "application/json")
+			req.Header.Set("X-Sub2API-Evaluation-Token", token)
+			if test.google {
+				req.Header.Set("x-goog-api-key", apiKeyValue)
+			} else {
+				req.Header.Set("Authorization", "Bearer "+apiKeyValue)
+			}
+			response := httptest.NewRecorder()
+
+			router.ServeHTTP(response, req)
+
+			require.Equal(t, http.StatusNoContent, response.Code)
+		})
+	}
+	require.Equal(t, len(tests), evidenceCalls)
 }
 
 func TestGatewayRoutesOpenAIResponsesCompactPathIsRegistered(t *testing.T) {
@@ -65,6 +222,36 @@ func TestGatewayRoutesOpenAIResponsesCompactPathIsRegistered(t *testing.T) {
 	}
 }
 
+func TestGatewayRoutesOpenAIAlphaSearchPathsAreRegistered(t *testing.T) {
+	router := newGatewayRoutesTestRouter()
+	registered := make(map[string]bool)
+	for _, route := range router.Routes() {
+		if route.Method == http.MethodPost {
+			registered[route.Path] = true
+		}
+	}
+
+	for _, path := range []string{
+		"/v1/alpha/search",
+		"/alpha/search",
+		"/backend-api/codex/alpha/search",
+	} {
+		require.True(t, registered[path], "POST %s should be registered", path)
+	}
+}
+
+func TestGatewayRoutesAlphaSearchRejectsNonOpenAIGroup(t *testing.T) {
+	router := newGatewayRoutesTestRouter(service.PlatformGrok)
+	req := httptest.NewRequest(http.MethodPost, "/v1/alpha/search", strings.NewReader(`{"model":"gpt-5.6-sol"}`))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+
+	router.ServeHTTP(w, req)
+
+	require.Equal(t, http.StatusNotFound, w.Code)
+	require.Contains(t, w.Body.String(), "only available for OpenAI groups")
+}
+
 func TestGatewayRoutesOpenAIImagesPathsAreRegistered(t *testing.T) {
 	router := newGatewayRoutesTestRouter()
 
@@ -83,6 +270,25 @@ func TestGatewayRoutesOpenAIImagesPathsAreRegistered(t *testing.T) {
 	}
 }
 
+func TestGatewayRoutesAsyncImagesPathsAreRegistered(t *testing.T) {
+	router := newGatewayRoutesTestRouter()
+	registered := make(map[string]bool)
+	for _, route := range router.Routes() {
+		registered[route.Method+" "+route.Path] = true
+	}
+
+	for _, route := range []string{
+		"POST /v1/images/generations/async",
+		"POST /v1/images/edits/async",
+		"GET /v1/images/tasks/:task_id",
+		"POST /images/generations/async",
+		"POST /images/edits/async",
+		"GET /images/tasks/:task_id",
+	} {
+		require.True(t, registered[route], "%s should be registered", route)
+	}
+}
+
 func TestGatewayRoutesGrokImagesAndVideosPathsAreRegistered(t *testing.T) {
 	router := newGatewayRoutesTestRouter(service.PlatformGrok)
 
@@ -93,6 +299,10 @@ func TestGatewayRoutesGrokImagesAndVideosPathsAreRegistered(t *testing.T) {
 		"/images/edits",
 		"/v1/videos/generations",
 		"/videos/generations",
+		"/v1/videos/edits",
+		"/videos/edits",
+		"/v1/videos/extensions",
+		"/videos/extensions",
 	} {
 		req := httptest.NewRequest(http.MethodPost, path, strings.NewReader(`{"model":"grok-imagine","prompt":"draw a cat"}`))
 		req.Header.Set("Content-Type", "application/json")
@@ -106,6 +316,8 @@ func TestGatewayRoutesGrokImagesAndVideosPathsAreRegistered(t *testing.T) {
 	for _, path := range []string{
 		"/v1/videos/request-123",
 		"/videos/request-123",
+		"/v1/videos/request-123/content",
+		"/videos/request-123/content",
 	} {
 		req := httptest.NewRequest(http.MethodGet, path, nil)
 		w := httptest.NewRecorder()
@@ -113,6 +325,56 @@ func TestGatewayRoutesGrokImagesAndVideosPathsAreRegistered(t *testing.T) {
 		router.ServeHTTP(w, req)
 		require.NotEqual(t, http.StatusNotFound, w.Code, "path=%s should hit Grok video handler", path)
 		require.NotContains(t, w.Body.String(), "not supported for this platform")
+	}
+}
+
+func TestGatewayRoutesCompositeVideoLookupsUseGrokHandler(t *testing.T) {
+	router := newGatewayRoutesTestRouter(service.PlatformComposite)
+
+	for _, path := range []string{
+		"/v1/videos/request-123",
+		"/videos/request-123",
+		"/v1/videos/request-123/content",
+		"/videos/request-123/content",
+	} {
+		req := httptest.NewRequest(http.MethodGet, path, nil)
+		w := httptest.NewRecorder()
+
+		router.ServeHTTP(w, req)
+		require.NotEqual(t, http.StatusNotFound, w.Code, "path=%s should hit Grok video lookup handler", path)
+		require.NotContains(t, w.Body.String(), "not supported for this platform")
+	}
+}
+
+func TestGatewayRoutesCompositeMessagesWithGrokModelUsesOpenAIGateway(t *testing.T) {
+	router := newGatewayRoutesTestRouter(service.PlatformComposite)
+
+	req := httptest.NewRequest(http.MethodPost, "/v1/messages", strings.NewReader(`{"model":"grok-4.3","messages":[{"role":"user","content":"hi"}]}`))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+
+	router.ServeHTTP(w, req)
+
+	require.NotEqual(t, http.StatusNotFound, w.Code)
+	require.NotContains(t, w.Body.String(), "not supported")
+	require.NotContains(t, w.Body.String(), "OpenAI-compatible endpoint")
+	require.NotContains(t, w.Body.String(), "composite groups")
+}
+
+func TestGatewayRoutesCompositeChatCompletionsWithGrokModelUsesOpenAIGateway(t *testing.T) {
+	router := newGatewayRoutesTestRouter(service.PlatformComposite)
+
+	for _, path := range []string{"/v1/chat/completions", "/chat/completions"} {
+		req := httptest.NewRequest(http.MethodPost, path, strings.NewReader(`{"model":"grok-4.3","messages":[{"role":"user","content":"hi"}]}`))
+		req.Header.Set("Content-Type", "application/json")
+		w := httptest.NewRecorder()
+
+		router.ServeHTTP(w, req)
+
+		require.NotEqual(t, http.StatusNotFound, w.Code, "path=%s", path)
+		require.NotContains(t, w.Body.String(), "not supported")
+		require.NotContains(t, w.Body.String(), "OpenAI-compatible endpoint")
+		require.NotContains(t, w.Body.String(), "composite groups")
 	}
 }
 
@@ -126,8 +388,14 @@ func TestGatewayRoutesNonGrokVideosAreRejectedAtPlatformGate(t *testing.T) {
 	}{
 		{http.MethodPost, "/v1/videos/generations", `{"model":"grok-imagine-video-1.5","prompt":"waves"}`},
 		{http.MethodPost, "/videos/generations", `{"model":"grok-imagine-video-1.5","prompt":"waves"}`},
+		{http.MethodPost, "/v1/videos/edits", `{"model":"grok-imagine-video","prompt":"waves","video":{"url":"https://example.com/in.mp4"}}`},
+		{http.MethodPost, "/videos/edits", `{"model":"grok-imagine-video","prompt":"waves","video":{"url":"https://example.com/in.mp4"}}`},
+		{http.MethodPost, "/v1/videos/extensions", `{"model":"grok-imagine-video","prompt":"waves","video":{"url":"https://example.com/in.mp4"}}`},
+		{http.MethodPost, "/videos/extensions", `{"model":"grok-imagine-video","prompt":"waves","video":{"url":"https://example.com/in.mp4"}}`},
 		{http.MethodGet, "/v1/videos/request-123", ""},
 		{http.MethodGet, "/videos/request-123", ""},
+		{http.MethodGet, "/v1/videos/request-123/content", ""},
+		{http.MethodGet, "/videos/request-123/content", ""},
 	} {
 		req := httptest.NewRequest(tc.method, tc.path, strings.NewReader(tc.body))
 		req.Header.Set("Content-Type", "application/json")
@@ -137,6 +405,24 @@ func TestGatewayRoutesNonGrokVideosAreRejectedAtPlatformGate(t *testing.T) {
 		require.Equal(t, http.StatusNotFound, w.Code, "method=%s path=%s", tc.method, tc.path)
 		require.Contains(t, w.Body.String(), "Videos API is not supported for this platform")
 	}
+}
+
+func TestGatewayRoutesCompositeOpenAIOnlyEndpointsRequireOpenAITarget(t *testing.T) {
+	router := newGatewayRoutesTestRouter(service.PlatformComposite)
+
+	req := httptest.NewRequest(http.MethodPost, "/v1/embeddings", strings.NewReader(`{"model":"gemini-2.5-pro","input":"hello"}`))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+
+	router.ServeHTTP(w, req)
+	require.Equal(t, http.StatusNotFound, w.Code)
+
+	req = httptest.NewRequest(http.MethodPost, "/v1/embeddings", strings.NewReader(`{"model":"text-embedding-3-small","input":"hello"}`))
+	req.Header.Set("Content-Type", "application/json")
+	w = httptest.NewRecorder()
+
+	router.ServeHTTP(w, req)
+	require.NotEqual(t, http.StatusNotFound, w.Code)
 }
 
 func TestGatewayRoutesGrokAllowsCLICompatibilityEntrypoints(t *testing.T) {
@@ -162,13 +448,22 @@ func TestGatewayRoutesGrokAllowsCLICompatibilityEntrypoints(t *testing.T) {
 		require.NotContains(t, w.Body.String(), "not supported for Grok groups")
 	}
 
-	req := httptest.NewRequest(http.MethodPost, "/v1/messages/count_tokens", strings.NewReader(`{"model":"grok","messages":[{"role":"user","content":"hi"}]}`))
-	req.Header.Set("Content-Type", "application/json")
-	w := httptest.NewRecorder()
+	countTokensRouter := newGatewayRoutesTestRouterWithConfig(&config.Config{
+		Gateway: config.GatewayConfig{MaxBodySize: 1024 * 1024},
+	}, service.PlatformGrok)
+	for _, path := range []string{"/v1/messages/count_tokens", "/messages/count_tokens"} {
+		req := httptest.NewRequest(http.MethodPost, path, strings.NewReader(`{"model":"grok","messages":[{"role":"user","content":"hi"}]}`))
+		req.Header.Set("Content-Type", "application/json")
+		w := httptest.NewRecorder()
 
-	router.ServeHTTP(w, req)
-	require.Equal(t, http.StatusNotFound, w.Code)
-	require.Contains(t, w.Body.String(), "Token counting is not supported for this platform")
+		countTokensRouter.ServeHTTP(w, req)
+		require.Equal(t, http.StatusOK, w.Code, "path=%s", path)
+		var response struct {
+			InputTokens int `json:"input_tokens"`
+		}
+		require.NoError(t, json.Unmarshal(w.Body.Bytes(), &response), "path=%s", path)
+		require.Positive(t, response.InputTokens, "path=%s", path)
+	}
 
 	for _, path := range []string{
 		"/v1/responses",
@@ -181,6 +476,33 @@ func TestGatewayRoutesGrokAllowsCLICompatibilityEntrypoints(t *testing.T) {
 
 		router.ServeHTTP(w, req)
 		require.NotEqual(t, http.StatusNotFound, w.Code, "path=%s should still reach Responses handler", path)
+	}
+}
+
+// TestGatewayRoutesResponsesSubpathRejectsNonConformingSubpaths 端到端锁定不变式：
+// /responses/*subpath 的子路径会被转发到上游同名端点之后，因此不合规的子路径必须
+// 在入口就被拒绝，不得进入调度与转发流程。
+func TestGatewayRoutesResponsesSubpathRejectsNonConformingSubpaths(t *testing.T) {
+	router := newGatewayRoutesTestRouter()
+
+	for _, path := range []string{
+		"/v1/responses/../../x/y",
+		"/v1/responses/..%2f..%2fx/y",
+		"/v1/responses/%2e%2e/%2e%2e/x",
+		"/responses/%2e%2e%2fx",
+		"/backend-api/codex/responses/..%2f..%2fx",
+		`/v1/responses/..\..\x`,
+		"/v1/responses/%3fa=b",
+		"/v1/responses/x%23frag",
+		"/v1/responses/compact%2f..",
+	} {
+		req := httptest.NewRequest(http.MethodPost, path, strings.NewReader(`{"model":"gpt-5"}`))
+		req.Header.Set("Content-Type", "application/json")
+		w := httptest.NewRecorder()
+
+		router.ServeHTTP(w, req)
+		require.Equal(t, http.StatusNotFound, w.Code, "path=%s must be rejected at the edge", path)
+		require.Contains(t, w.Body.String(), "Unsupported responses subpath", "path=%s", path)
 	}
 }
 

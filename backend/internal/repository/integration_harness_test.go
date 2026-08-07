@@ -25,8 +25,10 @@ import (
 	entsql "entgo.io/ent/dialect/sql"
 	_ "github.com/lib/pq"
 	redisclient "github.com/redis/go-redis/v9"
+	"github.com/testcontainers/testcontainers-go"
 	tcpostgres "github.com/testcontainers/testcontainers-go/modules/postgres"
 	tcredis "github.com/testcontainers/testcontainers-go/modules/redis"
+	"github.com/testcontainers/testcontainers-go/wait"
 )
 
 const (
@@ -43,21 +45,29 @@ var (
 )
 
 func TestMain(m *testing.M) {
+	os.Exit(runRepositoryIntegrationTests(m))
+}
+
+func runRepositoryIntegrationTests(m *testing.M) int {
 	ctx := context.Background()
 
 	if err := timezone.Init("UTC"); err != nil {
 		log.Printf("failed to init timezone: %v", err)
-		os.Exit(1)
+		return 1
+	}
+	if err := configureTestcontainersDockerEnvironment(ctx, detectCurrentDockerContextHost); err != nil {
+		log.Printf("failed to configure Testcontainers Docker environment: %v", err)
+		return 1
 	}
 
 	if !dockerIsAvailable(ctx) {
 		// In CI we expect Docker to be available so integration tests should fail loudly.
 		if os.Getenv("CI") != "" {
 			log.Printf("docker is not available (CI=true); failing integration tests")
-			os.Exit(1)
+			return 1
 		}
 		log.Printf("docker is not available; skipping integration tests (start Docker to enable)")
-		os.Exit(0)
+		return 0
 	}
 
 	postgresImage := selectDockerImage(ctx, postgresImageTag)
@@ -67,38 +77,67 @@ func TestMain(m *testing.M) {
 		tcpostgres.WithDatabase("sub2api_test"),
 		tcpostgres.WithUsername("postgres"),
 		tcpostgres.WithPassword("postgres"),
-		tcpostgres.BasicWaitStrategies(),
+		testcontainers.WithWaitStrategy(
+			wait.ForLog("database system is ready to accept connections").WithOccurrence(2),
+			wait.ForMappedPort("5432/tcp"),
+		),
 	)
 	if err != nil {
 		log.Printf("failed to start postgres container: %v", err)
-		os.Exit(1)
+		return 1
 	}
 	defer func() { _ = pgContainer.Terminate(ctx) }()
+	postgresPort, err := pgContainer.MappedPort(ctx, "5432/tcp")
+	if err != nil {
+		log.Printf("failed to get postgres port: %v", err)
+		return 1
+	}
+	stopPostgresTunnel, err := ensureTestcontainersPortReachable(ctx, postgresPort.Int(), nil, nil)
+	if err != nil {
+		log.Printf("failed to expose postgres port: %v", err)
+		return 1
+	}
+	defer stopPostgresTunnel()
 
 	redisContainer, err := tcredis.Run(
 		ctx,
 		redisImageTag,
+		testcontainers.WithWaitStrategy(
+			wait.ForLog("* Ready to accept connections"),
+			wait.ForMappedPort("6379/tcp"),
+		),
 	)
 	if err != nil {
 		log.Printf("failed to start redis container: %v", err)
-		os.Exit(1)
+		return 1
 	}
 	defer func() { _ = redisContainer.Terminate(ctx) }()
+	redisPort, err := redisContainer.MappedPort(ctx, "6379/tcp")
+	if err != nil {
+		log.Printf("failed to get redis port: %v", err)
+		return 1
+	}
+	stopRedisTunnel, err := ensureTestcontainersPortReachable(ctx, redisPort.Int(), nil, nil)
+	if err != nil {
+		log.Printf("failed to expose redis port: %v", err)
+		return 1
+	}
+	defer stopRedisTunnel()
 
 	dsn, err := pgContainer.ConnectionString(ctx, "sslmode=disable", "TimeZone=UTC")
 	if err != nil {
 		log.Printf("failed to get postgres dsn: %v", err)
-		os.Exit(1)
+		return 1
 	}
 
 	integrationDB, err = openSQLWithRetry(ctx, dsn, 30*time.Second)
 	if err != nil {
 		log.Printf("failed to open sql db: %v", err)
-		os.Exit(1)
+		return 1
 	}
 	if err := ApplyMigrations(ctx, integrationDB); err != nil {
 		log.Printf("failed to apply db migrations: %v", err)
-		os.Exit(1)
+		return 1
 	}
 
 	// 创建 ent client 用于集成测试
@@ -108,21 +147,15 @@ func TestMain(m *testing.M) {
 	redisHost, err := redisContainer.Host(ctx)
 	if err != nil {
 		log.Printf("failed to get redis host: %v", err)
-		os.Exit(1)
+		return 1
 	}
-	redisPort, err := redisContainer.MappedPort(ctx, "6379/tcp")
-	if err != nil {
-		log.Printf("failed to get redis port: %v", err)
-		os.Exit(1)
-	}
-
 	integrationRedis = redisclient.NewClient(&redisclient.Options{
 		Addr: fmt.Sprintf("%s:%d", redisHost, redisPort.Int()),
 		DB:   0,
 	})
 	if err := integrationRedis.Ping(ctx).Err(); err != nil {
 		log.Printf("failed to ping redis: %v", err)
-		os.Exit(1)
+		return 1
 	}
 
 	code := m.Run()
@@ -131,7 +164,21 @@ func TestMain(m *testing.M) {
 	_ = integrationRedis.Close()
 	_ = integrationDB.Close()
 
-	os.Exit(code)
+	return code
+}
+
+func detectCurrentDockerContextHost(ctx context.Context) (string, error) {
+	cmd := exec.CommandContext(ctx, "docker", "context", "inspect", "--format", "{{.Endpoints.docker.Host}}")
+	cmd.Env = os.Environ()
+	output, err := cmd.Output()
+	if err != nil {
+		return "", fmt.Errorf("inspect current Docker context: %w", err)
+	}
+	host := strings.TrimSpace(string(output))
+	if host == "" {
+		return "", fmt.Errorf("current Docker context has no host")
+	}
+	return host, nil
 }
 
 func dockerIsAvailable(ctx context.Context) bool {
@@ -140,7 +187,20 @@ func dockerIsAvailable(ctx context.Context) bool {
 	return cmd.Run() == nil
 }
 
+// selectDockerImage resolves the container image for the harness.
+//
+// SUB2API_TEST_POSTGRES_IMAGE overrides the PostgreSQL image so the suite can be
+// run against the oldest documented-supported server, not just the newest. That
+// matters for SQL that behaves differently across major versions: jsonpath
+// .datetime() only accepts the ISO-8601 "Z" designator from PostgreSQL 17 on, so
+// a suite pinned to 18 cannot observe breakage on 14-16.
+//
+//	SUB2API_TEST_POSTGRES_IMAGE=postgres:15-alpine go test -tags integration ./internal/repository/
 func selectDockerImage(ctx context.Context, preferred string) string {
+	if override := strings.TrimSpace(os.Getenv("SUB2API_TEST_POSTGRES_IMAGE")); override != "" &&
+		strings.HasPrefix(preferred, "postgres:") {
+		return override
+	}
 	if dockerImageExists(ctx, preferred) {
 		return preferred
 	}
@@ -196,6 +256,12 @@ func testTx(t *testing.T) *sql.Tx {
 		_ = tx.Rollback()
 	})
 	return tx
+}
+
+func resetUserAndGroupFixtures(t *testing.T) {
+	t.Helper()
+	_, err := integrationDB.ExecContext(context.Background(), `TRUNCATE TABLE users, groups RESTART IDENTITY CASCADE`)
+	require.NoError(t, err, "reset user and group integration fixtures")
 }
 
 // testEntClient 返回全局的 ent client，用于测试需要内部管理事务的代码（如 Create/Update 方法）。
