@@ -682,45 +682,10 @@ func (h *RadarGovernanceHandler) ActivateGatePolicy(c *gin.Context) {
 	response.Success(c, head)
 }
 
-type radarGateDecisionRequest struct {
-	RunID        uuid.UUID                       `json:"run_id" binding:"required"`
-	BaselineID   *uuid.UUID                      `json:"baseline_id"`
-	PolicyID     uuid.UUID                       `json:"policy_id" binding:"required"`
-	Status       service.RadarGateDecisionStatus `json:"status" binding:"required"`
-	RuleIDs      []string                        `json:"rule_ids"`
-	Evidence     json.RawMessage                 `json:"evidence"`
-	EvidenceHash string                          `json:"evidence_hash" binding:"required,len=64"`
-}
-
 type radarGateEvaluationRequest struct {
 	RunID      uuid.UUID  `json:"run_id" binding:"required"`
 	BaselineID *uuid.UUID `json:"baseline_id"`
 	PolicyID   uuid.UUID  `json:"policy_id" binding:"required"`
-}
-
-type radarGateEvaluationPolicy struct {
-	Version               int       `json:"version" binding:"required,gt=0"`
-	ObservationDays       int       `json:"observation_days" binding:"required,gte=0"`
-	EnforcementStartsAt   time.Time `json:"enforcement_starts_at" binding:"required"`
-	CriticalDomainDeltaPP float64   `json:"critical_domain_delta_pp"`
-	AggregateDeltaPP      float64   `json:"aggregate_delta_pp"`
-	ConfidenceLevel       float64   `json:"confidence_level"`
-	RequireCIExcludeZero  bool      `json:"require_ci_exclude_zero"`
-}
-
-type radarGateEvaluationInput struct {
-	EvidenceSufficient     bool      `json:"evidence_sufficient"`
-	RouteEvidencePresent   bool      `json:"route_evidence_present"`
-	RouteMatch             bool      `json:"route_match"`
-	ObservedAt             time.Time `json:"observed_at" binding:"required"`
-	ObservationDays        int       `json:"observation_days" binding:"gte=0"`
-	NewP0Failure           bool      `json:"new_p0_failure"`
-	CriticalDeltaPP        float64   `json:"critical_delta_pp"`
-	CriticalCIHighPP       float64   `json:"critical_ci_high_pp"`
-	AggregateDeltaPP       float64   `json:"aggregate_delta_pp"`
-	AggregateCIHighPP      float64   `json:"aggregate_ci_high_pp"`
-	ReliabilitySLOBreached bool      `json:"reliability_slo_breached"`
-	JudgeDisagreement      bool      `json:"judge_disagreement"`
 }
 
 func (h *RadarGovernanceHandler) EvaluateGate(c *gin.Context) {
@@ -1359,11 +1324,4 @@ func (h *RadarGovernanceHandler) projectionList(c *gin.Context, load func(servic
 		return
 	}
 	response.Success(c, items)
-}
-
-func (h *RadarGovernanceHandler) emptyList(c *gin.Context, permission service.RadarPermission) {
-	if _, ok := h.require(c, permission); !ok {
-		return
-	}
-	response.Success(c, []any{})
 }

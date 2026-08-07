@@ -221,11 +221,12 @@ func (r *EvaluationOutboxConsumerRuntime) ProcessPending(ctx context.Context) Ev
 	semaphore := make(chan struct{}, r.options.MaxConcurrency)
 	var handlers sync.WaitGroup
 	var counters runtimeCounters
+eventLoop:
 	for _, event := range events {
 		select {
 		case semaphore <- struct{}{}:
 		case <-ctx.Done():
-			break
+			break eventLoop
 		}
 		if ctx.Err() != nil {
 			break

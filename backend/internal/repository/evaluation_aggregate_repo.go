@@ -184,7 +184,7 @@ func loadCurrentGlobalInputs(ctx context.Context, tx *sql.Tx, request service.Gl
 	for rows.Next() {
 		var key cellKey
 		if err := rows.Scan(&key.domain, &key.route); err != nil {
-			rows.Close()
+			_ = rows.Close()
 			return nil, false, fmt.Errorf("scan expected global cell: %w", err)
 		}
 		key.route = service.CanonicalModelRoute(key.route)
@@ -379,7 +379,7 @@ func loadEligibleCellPairInputs(ctx context.Context, tx *sql.Tx, request service
 	if err != nil {
 		return nil, fmt.Errorf("load eligible cell pairs: %w", err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 	inputs := make([]service.CellPairInput, 0)
 	for rows.Next() {
 		var input service.CellPairInput
@@ -759,6 +759,26 @@ func enqueueAggregateHeadProgress(
 	sourceType := "score_head_event"
 	sourceIDs := append([]string(nil), sourceHeadEventIDs...)
 	attachHeadEvent := true
+	if scope == "cell" {
+		var expectedCells int
+		if err := tx.QueryRowContext(ctx, `
+			SELECT COUNT(*) FROM (
+				SELECT DISTINCT case_spec.capability_domain, baseline_sample.model_route
+				FROM evaluation_pair_specs pair_spec
+				JOIN evaluation_cases case_spec ON case_spec.id=pair_spec.case_id
+				JOIN evaluation_pair_bindings binding ON binding.pair_spec_id=pair_spec.id
+				JOIN evaluation_side_specs baseline_side
+				  ON baseline_side.id=binding.baseline_side_spec_id AND baseline_side.side='baseline'
+				JOIN evaluation_samples baseline_sample ON baseline_sample.id=baseline_side.sample_id
+				WHERE pair_spec.run_id=$1
+			) expected`, runID).Scan(&expectedCells); err != nil {
+			return fmt.Errorf("count aggregate progress cells: %w", err)
+		}
+		if expectedCells == 1 {
+			eventType = "gate_reevaluation"
+			scopeKey = "global/global"
+		}
+	}
 	if scope == "global" {
 		eventType = "gate_reevaluation"
 		scopeKey = "global/global"
@@ -816,7 +836,7 @@ func loadAggregateProgressCauses(
 	if err != nil {
 		return nil, fmt.Errorf("load aggregate progress causes: %w", err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 	bySource := make(map[string]service.EvaluationOutboxCause, len(sourceIDs))
 	for rows.Next() {
 		var cause service.EvaluationOutboxCause
@@ -879,7 +899,7 @@ func loadFrozenAnalysisPairs(ctx context.Context, tx *sql.Tx, jobID uuid.UUID, c
 	if err != nil {
 		return nil, fmt.Errorf("load frozen analysis pairs: %w", err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 	type side struct {
 		ordinal     int
 		ref         service.ScoreRef

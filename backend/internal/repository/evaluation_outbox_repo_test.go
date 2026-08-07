@@ -38,7 +38,7 @@ func TestEvaluationOutboxRepositoryRejectsNilParameters(t *testing.T) {
 func TestEvaluationOutboxConsumerHeartbeatUsesWriterProtocol(t *testing.T) {
 	db, mock, err := sqlmock.New()
 	require.NoError(t, err)
-	defer db.Close()
+	defer func() { _ = db.Close() }()
 
 	identity := defaultEvaluationWriterIdentity("worker")
 	expectWriterSetup(mock, identity)
@@ -56,7 +56,7 @@ func TestEvaluationOutboxConsumerHeartbeatUsesWriterProtocol(t *testing.T) {
 func TestEvaluationOutboxEnsureConsumerWorkerUsesTenantScopedConflictKey(t *testing.T) {
 	db, mock, err := sqlmock.New()
 	require.NoError(t, err)
-	defer db.Close()
+	defer func() { _ = db.Close() }()
 
 	identity := defaultEvaluationWriterIdentity("api")
 	expectWriterSetup(mock, identity)

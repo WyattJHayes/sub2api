@@ -155,7 +155,8 @@ func proveRadarRevisionPipeline(t *testing.T, db *sql.DB) {
 	require.NoError(t, db.QueryRowContext(ctx, `SELECT status FROM evaluation_runs WHERE id=$1`, fixture.runID).Scan(&runStatus))
 	require.Equal(t, "completed", runStatus)
 
-	batchRepo := repository.NewRadarGovernanceRepository(db).(service.RevisionBatchRepository)
+	batchRepo, ok := repository.NewRadarGovernanceRepository(db).(service.RevisionBatchRepository)
+	require.True(t, ok)
 	batch, err := batchRepo.CreateRevisionBatch(ctx, service.CreateRevisionBatchInput{
 		RunID: fixture.runID, Reason: "e2e model quality regression", RequestedBy: fixture.userID,
 		IdempotencyKey: radarRevisionHash("batch:" + fixture.runID.String()),
@@ -324,13 +325,13 @@ func sealRadarRevisionEvidence(t *testing.T, db *sql.DB, fixture radarRevisionFi
 		for rows.Next() {
 			var item assignment
 			if err := rows.Scan(&item.id, &item.sampleID, &item.modelRoute, &item.manifestID, &item.manifestHash); err != nil {
-				rows.Close()
+				_ = rows.Close()
 				return err
 			}
 			assignments = append(assignments, item)
 		}
 		if err := rows.Err(); err != nil {
-			rows.Close()
+			_ = rows.Close()
 			return err
 		}
 		if err := rows.Close(); err != nil {

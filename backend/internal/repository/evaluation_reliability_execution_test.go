@@ -18,7 +18,7 @@ import (
 func TestPublishRecoveryEvidenceRejectsMalformedSourceWatermarkBeforeTransaction(t *testing.T) {
 	db, _, err := sqlmock.New()
 	require.NoError(t, err)
-	defer db.Close()
+	defer func() { _ = db.Close() }()
 
 	canonical := []byte(`{"status":"rejected"}`)
 	digest := sha256.Sum256(canonical)
@@ -34,7 +34,7 @@ func TestPublishRecoveryEvidenceRejectsMalformedSourceWatermarkBeforeTransaction
 func TestPublishRecoveryEvidenceRequiresVerifiedTimestamp(t *testing.T) {
 	db, _, err := sqlmock.New()
 	require.NoError(t, err)
-	defer db.Close()
+	defer func() { _ = db.Close() }()
 
 	canonical := []byte(`{"status":"verified"}`)
 	digest := sha256.Sum256(canonical)
@@ -72,7 +72,7 @@ func TestRadarFaultEventHashMatchesWorkerCanonicalVector(t *testing.T) {
 func TestGetApprovedFaultExperimentRejectsCrossTenantWorker(t *testing.T) {
 	db, mock, err := sqlmock.New()
 	require.NoError(t, err)
-	defer db.Close()
+	defer func() { _ = db.Close() }()
 
 	experimentID := uuid.New()
 	runID := uuid.New()
@@ -95,7 +95,7 @@ func TestGetApprovedFaultExperimentRejectsCrossTenantWorker(t *testing.T) {
 func TestGetRecoveryObservationRejectsCrossTenantWorker(t *testing.T) {
 	db, mock, err := sqlmock.New()
 	require.NoError(t, err)
-	defer db.Close()
+	defer func() { _ = db.Close() }()
 
 	observationID := uuid.New()
 	runID := uuid.New()

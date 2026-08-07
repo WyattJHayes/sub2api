@@ -197,13 +197,13 @@ func (r *radarGovernanceRepository) controlRun(ctx context.Context, runID uuid.U
 		for rows.Next() {
 			var item fencedAssignment
 			if err := rows.Scan(&item.assignmentID, &item.sampleID, &item.caseID, &item.modelRoute, &item.sampleIndex, &item.attempt, &item.workOrigin); err != nil {
-				rows.Close()
+				_ = rows.Close()
 				return nil, err
 			}
 			fenced = append(fenced, item)
 		}
 		if err := rows.Err(); err != nil {
-			rows.Close()
+			_ = rows.Close()
 			return nil, fmt.Errorf("iterate retryable runner work: %w", err)
 		}
 		if err := rows.Close(); err != nil {

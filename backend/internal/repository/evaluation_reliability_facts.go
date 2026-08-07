@@ -98,7 +98,7 @@ func (r *radarGovernanceRepository) GetReliabilityFacts(
 	if err != nil {
 		return nil, fmt.Errorf("load reliability facts snapshots: %w", err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 	for rows.Next() {
 		var snapshot service.RadarReliabilityFactSnapshot
 		var loadPlanID uuid.NullUUID
@@ -172,13 +172,13 @@ func (r *radarGovernanceRepository) GetReliabilityFacts(
 	for artifactRows.Next() {
 		var hash string
 		if err := artifactRows.Scan(&hash); err != nil {
-			artifactRows.Close()
+			_ = artifactRows.Close()
 			return nil, fmt.Errorf("scan reliability facts artifact manifest: %w", err)
 		}
 		facts.ArtifactManifestHashes = append(facts.ArtifactManifestHashes, strings.TrimSpace(hash))
 	}
 	if err := artifactRows.Err(); err != nil {
-		artifactRows.Close()
+		_ = artifactRows.Close()
 		return nil, fmt.Errorf("iterate reliability facts artifact manifests: %w", err)
 	}
 	if err := artifactRows.Close(); err != nil {

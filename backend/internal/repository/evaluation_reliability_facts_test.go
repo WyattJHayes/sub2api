@@ -16,7 +16,7 @@ import (
 func TestGetReliabilityFactsBindsAllImmutableReferences(t *testing.T) {
 	db, mock, err := sqlmock.New()
 	require.NoError(t, err)
-	defer db.Close()
+	defer func() { _ = db.Close() }()
 
 	runID, policyID := uuid.New(), uuid.New()
 	loadPlanID, subjectID := uuid.New(), uuid.New()
@@ -69,7 +69,7 @@ func TestGetReliabilityFactsBindsAllImmutableReferences(t *testing.T) {
 func TestGetReliabilityFactsRejectsCrossTenantRun(t *testing.T) {
 	db, mock, err := sqlmock.New()
 	require.NoError(t, err)
-	defer db.Close()
+	defer func() { _ = db.Close() }()
 	runID, policyID := uuid.New(), uuid.New()
 	mock.ExpectBegin()
 	mock.ExpectQuery(`SELECT tenant_id FROM evaluation_runs WHERE id=\$1`).WithArgs(runID).

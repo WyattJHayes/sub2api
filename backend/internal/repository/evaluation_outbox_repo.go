@@ -213,7 +213,7 @@ func validateEvaluationOutboxCauseIdentity(ctx context.Context, tx *sql.Tx, even
 	if err != nil {
 		return fmt.Errorf("load evaluation outbox cause identity: %w", err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 	actual := make(map[uuid.UUID]uuid.UUID, len(expected))
 	for rows.Next() {
 		var causeID uuid.UUID
@@ -312,7 +312,7 @@ func (r *evaluationOutboxRepository) Claim(ctx context.Context, workerID uuid.UU
 	for rows.Next() {
 		var item candidate
 		if err := rows.Scan(&item.id, &item.runID, &item.batchID); err != nil {
-			rows.Close()
+			_ = rows.Close()
 			return nil, fmt.Errorf("scan evaluation outbox claim: %w", err)
 		}
 		candidates = append(candidates, item)

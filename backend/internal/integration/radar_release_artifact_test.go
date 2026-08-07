@@ -157,9 +157,9 @@ func dockerInstructions(dockerfile string) []string {
 			continue
 		}
 		if instruction.Len() > 0 {
-			instruction.WriteByte(' ')
+			_ = instruction.WriteByte(' ')
 		}
-		instruction.WriteString(strings.TrimSuffix(trimmed, "\\"))
+		_, _ = instruction.WriteString(strings.TrimSuffix(trimmed, "\\"))
 		if strings.HasSuffix(trimmed, "\\") {
 			continue
 		}

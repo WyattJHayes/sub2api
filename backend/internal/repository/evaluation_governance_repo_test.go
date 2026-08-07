@@ -29,7 +29,7 @@ func expectRadarWorkerWriter(t *testing.T, mock sqlmock.Sqlmock) {
 func TestValidateGateReliabilityWatermarkUsesTransactionTimestampForFreshness(t *testing.T) {
 	db, mock, err := sqlmock.New()
 	require.NoError(t, err)
-	defer db.Close()
+	defer func() { _ = db.Close() }()
 	mock.ExpectBegin()
 	tx, err := db.Begin()
 	require.NoError(t, err)
@@ -74,7 +74,7 @@ func TestValidateGateReliabilityWatermarkUsesTransactionTimestampForFreshness(t 
 func TestRecordGateDecisionRejectsWhenPolicyHeadChangedAfterEvidenceLoad(t *testing.T) {
 	db, mock, err := sqlmock.New()
 	require.NoError(t, err)
-	defer db.Close()
+	defer func() { _ = db.Close() }()
 
 	runID, policyID := uuid.New(), uuid.New()
 	policyHash := strings.Repeat("a", 64)
@@ -130,7 +130,7 @@ func TestRegisterRadarWorkerIsIdentityIdempotent(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer db.Close()
+	defer func() { _ = db.Close() }()
 	repo := &radarGovernanceRepository{db: db}
 	input := service.RadarWorkerRegistrationInput{Name: "runner-a", WorkerKind: "runner", Region: "cn-north", ImageDigest: "sha256:runner", Capabilities: []string{"chat", "chat"}, MaxConcurrency: 2, Token: "worker-token"}
 	workerID := uuid.New()
@@ -158,7 +158,7 @@ func TestRotateRadarWorkerTokenInvalidatesOldBearer(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer db.Close()
+	defer func() { _ = db.Close() }()
 	repo := &radarGovernanceRepository{db: db}
 	workerID := uuid.New()
 	expectRadarWorkerWriter(t, mock)
@@ -180,7 +180,7 @@ func TestPauseWorkerClaimsKeepsInflightLeaseValid(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer db.Close()
+	defer func() { _ = db.Close() }()
 	repo := &radarGovernanceRepository{db: db}
 	workerID := uuid.New()
 	expectRadarWorkerWriter(t, mock)
@@ -201,7 +201,7 @@ func TestDrainWorkerCompletesAfterActiveLeaseCountZero(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer db.Close()
+	defer func() { _ = db.Close() }()
 	repo := &radarGovernanceRepository{db: db}
 	workerID := uuid.New()
 	expectRadarWorkerWriter(t, mock)
@@ -229,7 +229,7 @@ func TestDisableWorkerRejectsHeartbeatImmediately(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer db.Close()
+	defer func() { _ = db.Close() }()
 	workerID := uuid.New()
 	mock.ExpectQuery("SELECT id FROM evaluation_workers").WithArgs(hashToken("worker-token"), "runner").WillReturnError(sqlmock.ErrCancelled)
 	grader := &evaluationGradingRepository{db: db}
@@ -247,7 +247,7 @@ func TestRotateRadarWorkerTokenIdempotencyKeyDoesNotMutate(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer db.Close()
+	defer func() { _ = db.Close() }()
 	repo := &radarGovernanceRepository{db: db}
 	workerID := uuid.New()
 	expectRadarWorkerWriter(t, mock)
@@ -267,7 +267,7 @@ func TestRotateRadarWorkerTokenRejectsExistingHash(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer db.Close()
+	defer func() { _ = db.Close() }()
 	repo := &radarGovernanceRepository{db: db}
 	workerID := uuid.New()
 	otherID := uuid.New()
@@ -287,7 +287,7 @@ func TestDrainCountsAllUnexpiredWorkerLeases(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer db.Close()
+	defer func() { _ = db.Close() }()
 	repo := &radarGovernanceRepository{db: db}
 	workerID := uuid.New()
 	expectRadarWorkerWriter(t, mock)
@@ -314,7 +314,7 @@ func TestDrainCompletionCheckIsReusableForLeaseRelease(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer db.Close()
+	defer func() { _ = db.Close() }()
 	mock.ExpectBegin()
 	workerID := uuid.New()
 	tx, err := db.BeginTx(context.Background(), nil)
@@ -341,7 +341,7 @@ func TestRadarPermissionsUseOnlyGlobalRoleBindings(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer db.Close()
+	defer func() { _ = db.Close() }()
 	mock.ExpectQuery(`SELECT role FROM evaluation_role_bindings.*scope = '\{\}'::jsonb`).
 		WithArgs(int64(7)).
 		WillReturnRows(sqlmock.NewRows([]string{"role"}).AddRow("viewer"))
@@ -362,7 +362,7 @@ func TestRadarPermissionsUseOnlyGlobalRoleBindings(t *testing.T) {
 func TestRadarTestOperatorCanControlRuns(t *testing.T) {
 	db, mock, err := sqlmock.New(sqlmock.QueryMatcherOption(sqlmock.QueryMatcherRegexp))
 	require.NoError(t, err)
-	defer db.Close()
+	defer func() { _ = db.Close() }()
 	mock.ExpectQuery(`SELECT role FROM evaluation_role_bindings.*scope = '\{\}'::jsonb`).
 		WithArgs(int64(7)).
 		WillReturnRows(sqlmock.NewRows([]string{"role"}).AddRow("test_operator"))
@@ -375,7 +375,7 @@ func TestRadarTestOperatorCanControlRuns(t *testing.T) {
 func TestRadarPermissionsAreTenantScoped(t *testing.T) {
 	db, mock, err := sqlmock.New()
 	require.NoError(t, err)
-	defer db.Close()
+	defer func() { _ = db.Close() }()
 	mock.ExpectQuery(`SELECT role FROM evaluation_role_bindings.*tenant_id = \$2`).
 		WithArgs(int64(7), int64(41)).
 		WillReturnRows(sqlmock.NewRows([]string{"role"}).AddRow("quality_admin"))
@@ -389,7 +389,7 @@ func TestRadarPermissionsAreTenantScoped(t *testing.T) {
 func TestRadarRoleBindingsListUsesTenantScope(t *testing.T) {
 	db, mock, err := sqlmock.New()
 	require.NoError(t, err)
-	defer db.Close()
+	defer func() { _ = db.Close() }()
 	bindingID := uuid.New()
 	createdAt := time.Date(2026, 7, 31, 2, 0, 0, 0, time.UTC)
 	mock.ExpectQuery(`SELECT id, actor_id, role, scope, enabled, created_by, created_at, disabled_at FROM evaluation_role_bindings WHERE tenant_id = \$1`).
@@ -407,7 +407,7 @@ func TestRadarRoleBindingsListUsesTenantScope(t *testing.T) {
 func TestProposeBaselinePersistsTenantScope(t *testing.T) {
 	db, mock, err := sqlmock.New()
 	require.NoError(t, err)
-	defer db.Close()
+	defer func() { _ = db.Close() }()
 
 	runID := uuid.New()
 	baselineID := uuid.New()
@@ -441,7 +441,7 @@ func TestProposeBaselinePersistsTenantScope(t *testing.T) {
 func TestGetBaselineUsesResourceTenantScope(t *testing.T) {
 	db, mock, err := sqlmock.New()
 	require.NoError(t, err)
-	defer db.Close()
+	defer func() { _ = db.Close() }()
 
 	baselineID := uuid.New()
 	createdAt := time.Date(2026, 7, 31, 3, 0, 0, 0, time.UTC)
@@ -466,7 +466,7 @@ func TestGetBaselineUsesResourceTenantScope(t *testing.T) {
 func TestApproveBaselineRejectsResourceFromAnotherTenant(t *testing.T) {
 	db, mock, err := sqlmock.New()
 	require.NoError(t, err)
-	defer db.Close()
+	defer func() { _ = db.Close() }()
 
 	baselineID := uuid.New()
 	now := time.Now().UTC()
@@ -490,7 +490,7 @@ func TestApproveBaselineRejectsResourceFromAnotherTenant(t *testing.T) {
 func TestActivateBaselineRejectsResourceFromAnotherTenant(t *testing.T) {
 	db, mock, err := sqlmock.New()
 	require.NoError(t, err)
-	defer db.Close()
+	defer func() { _ = db.Close() }()
 
 	baselineID := uuid.New()
 	expectRadarWorkerWriter(t, mock)
@@ -514,7 +514,7 @@ func TestActivateBaselineRejectsResourceFromAnotherTenant(t *testing.T) {
 func TestActivateGatePolicyRejectsResourceFromAnotherTenant(t *testing.T) {
 	db, mock, err := sqlmock.New()
 	require.NoError(t, err)
-	defer db.Close()
+	defer func() { _ = db.Close() }()
 
 	policyID := uuid.New()
 	expectRadarWorkerWriter(t, mock)
@@ -538,7 +538,7 @@ func TestActivateGatePolicyRejectsResourceFromAnotherTenant(t *testing.T) {
 func TestActivateReleaseSubjectRejectsResourceFromAnotherTenant(t *testing.T) {
 	db, mock, err := sqlmock.New()
 	require.NoError(t, err)
-	defer db.Close()
+	defer func() { _ = db.Close() }()
 
 	subjectID := uuid.New()
 	now := time.Now().UTC()
@@ -561,7 +561,7 @@ func TestActivateReleaseSubjectRejectsResourceFromAnotherTenant(t *testing.T) {
 func TestRecordGateDecisionRejectsPolicyFromAnotherTenant(t *testing.T) {
 	db, mock, err := sqlmock.New()
 	require.NoError(t, err)
-	defer db.Close()
+	defer func() { _ = db.Close() }()
 
 	runID, policyID := uuid.New(), uuid.New()
 	expectRadarWorkerWriter(t, mock)
@@ -589,7 +589,7 @@ func TestRadarPermissionsAllowAdminBootstrapOnlyWhenNoBindingsExist(t *testing.T
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer db.Close()
+	defer func() { _ = db.Close() }()
 	mock.ExpectQuery("SELECT role FROM evaluation_role_bindings").
 		WithArgs(int64(1)).
 		WillReturnRows(sqlmock.NewRows([]string{"role"}))
@@ -620,7 +620,7 @@ func TestRadarPermissionsAllowAdminBootstrapOnlyWhenNoBindingsExist(t *testing.T
 func TestRadarPermissionsAllowTenantScopedAdminBootstrap(t *testing.T) {
 	db, mock, err := sqlmock.New(sqlmock.QueryMatcherOption(sqlmock.QueryMatcherRegexp))
 	require.NoError(t, err)
-	defer db.Close()
+	defer func() { _ = db.Close() }()
 
 	mock.ExpectQuery(`SELECT role FROM evaluation_role_bindings.*tenant_id = \$2`).
 		WithArgs(int64(1), int64(41)).
@@ -642,7 +642,7 @@ func TestCreateRadarRoleBindingRejectsUnsupportedScope(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer db.Close()
+	defer func() { _ = db.Close() }()
 	repo := &radarGovernanceRepository{db: db}
 
 	_, err = repo.CreateRoleBinding(context.Background(), service.RadarRoleBindingInput{
@@ -659,7 +659,7 @@ func TestCreateRadarRoleBindingRejectsUnsupportedScope(t *testing.T) {
 func TestCreateRadarRoleBindingRejectsTargetOutsideTenant(t *testing.T) {
 	db, mock, err := sqlmock.New()
 	require.NoError(t, err)
-	defer db.Close()
+	defer func() { _ = db.Close() }()
 
 	_, err = (&radarGovernanceRepository{db: db}).CreateRoleBinding(
 		service.WithRadarTenant(context.Background(), 41),
@@ -672,7 +672,7 @@ func TestCreateRadarRoleBindingRejectsTargetOutsideTenant(t *testing.T) {
 func TestCreateRadarRoleBindingAllowsTargetWithAuthenticatedActor(t *testing.T) {
 	db, mock, err := sqlmock.New()
 	require.NoError(t, err)
-	defer db.Close()
+	defer func() { _ = db.Close() }()
 
 	createdAt := time.Date(2026, 7, 31, 3, 0, 0, 0, time.UTC)
 	bindingID := uuid.New()
@@ -698,7 +698,7 @@ func TestCreateRadarRoleBindingAllowsTargetWithAuthenticatedActor(t *testing.T) 
 func TestDisableRadarRoleBindingUsesTenantScopeForTargetActor(t *testing.T) {
 	db, mock, err := sqlmock.New()
 	require.NoError(t, err)
-	defer db.Close()
+	defer func() { _ = db.Close() }()
 
 	bindingID := uuid.New()
 	expectRadarWorkerWriter(t, mock)
@@ -716,7 +716,7 @@ func TestDisableRadarRoleBindingUsesTenantScopeForTargetActor(t *testing.T) {
 func TestGetReleaseSubjectUsesCurrentEffectiveEventAndTenantScope(t *testing.T) {
 	db, mock, err := sqlmock.New()
 	require.NoError(t, err)
-	defer db.Close()
+	defer func() { _ = db.Close() }()
 
 	subjectID := uuid.New()
 	runID := uuid.New()
@@ -746,7 +746,7 @@ func TestGetReleaseSubjectUsesCurrentEffectiveEventAndTenantScope(t *testing.T) 
 func TestActivatePolicyAdvancesScopedHeadWithEvent(t *testing.T) {
 	db, mock, err := sqlmock.New()
 	require.NoError(t, err)
-	defer db.Close()
+	defer func() { _ = db.Close() }()
 	repo := &radarGovernanceRepository{db: db}
 	policyID := uuid.New()
 	eventTime := time.Now().UTC()
@@ -779,7 +779,7 @@ func TestActivatePolicyAdvancesScopedHeadWithEvent(t *testing.T) {
 func TestActivatePolicyRejectsWrongExpectedIDWhenRequestedPolicyIsAlreadyHead(t *testing.T) {
 	db, mock, err := sqlmock.New()
 	require.NoError(t, err)
-	defer db.Close()
+	defer func() { _ = db.Close() }()
 	repo := &radarGovernanceRepository{db: db}
 	policyID := uuid.New()
 	wrongExpectedID := uuid.New()
@@ -807,7 +807,7 @@ func TestActivatePolicyRejectsWrongExpectedIDWhenRequestedPolicyIsAlreadyHead(t 
 func TestActivateBaselineAdvancesRouteEnvironmentScopeHead(t *testing.T) {
 	db, mock, err := sqlmock.New()
 	require.NoError(t, err)
-	defer db.Close()
+	defer func() { _ = db.Close() }()
 	repo := &radarGovernanceRepository{db: db}
 	baselineID := uuid.New()
 	eventTime := time.Now().UTC()
@@ -840,7 +840,7 @@ func TestActivateBaselineAdvancesRouteEnvironmentScopeHead(t *testing.T) {
 func TestActivatePolicyRejectsExpiredOrUnboundApproval(t *testing.T) {
 	db, mock, err := sqlmock.New()
 	require.NoError(t, err)
-	defer db.Close()
+	defer func() { _ = db.Close() }()
 	repo := &radarGovernanceRepository{db: db}
 	policyID := uuid.New()
 	expectRadarWorkerWriter(t, mock)
@@ -863,7 +863,7 @@ func TestActivatePolicyRejectsExpiredOrUnboundApproval(t *testing.T) {
 func TestActivateBaselineRejectsExpiredOrUnboundApprovals(t *testing.T) {
 	db, mock, err := sqlmock.New()
 	require.NoError(t, err)
-	defer db.Close()
+	defer func() { _ = db.Close() }()
 	repo := &radarGovernanceRepository{db: db}
 	baselineID := uuid.New()
 	expectRadarWorkerWriter(t, mock)
@@ -883,7 +883,7 @@ func TestActivateBaselineRejectsExpiredOrUnboundApprovals(t *testing.T) {
 func TestCreateReleaseSubjectValidatesFrozenRunBindingAndStoresCanonicalBytes(t *testing.T) {
 	db, mock, err := sqlmock.New()
 	require.NoError(t, err)
-	defer db.Close()
+	defer func() { _ = db.Close() }()
 	repo := &radarGovernanceRepository{db: db}
 	runID := uuid.New()
 	subject := releaseSubjectFixture()
@@ -911,7 +911,7 @@ func TestCreateReleaseSubjectValidatesFrozenRunBindingAndStoresCanonicalBytes(t 
 func TestCreateReleaseSubjectRejectsFrozenRunBindingMismatch(t *testing.T) {
 	db, mock, err := sqlmock.New()
 	require.NoError(t, err)
-	defer db.Close()
+	defer func() { _ = db.Close() }()
 	repo := &radarGovernanceRepository{db: db}
 	runID := uuid.New()
 	subject := releaseSubjectFixture()
@@ -936,7 +936,7 @@ func TestCreateReleaseSubjectRejectsFrozenRunBindingMismatch(t *testing.T) {
 func TestGovernanceReevaluationSelectsOnlyActiveReleaseAndMatchingBaselineRoute(t *testing.T) {
 	db, mock, err := sqlmock.New()
 	require.NoError(t, err)
-	defer db.Close()
+	defer func() { _ = db.Close() }()
 	mock.ExpectBegin()
 	tx, err := db.Begin()
 	require.NoError(t, err)
@@ -955,7 +955,7 @@ func TestGovernanceReevaluationSelectsOnlyActiveReleaseAndMatchingBaselineRoute(
 func TestRotateEvidenceSigningKeyKeepsPreviousKeyVerifyOnlyAndAdvancesEpoch(t *testing.T) {
 	db, mock, err := sqlmock.New()
 	require.NoError(t, err)
-	defer db.Close()
+	defer func() { _ = db.Close() }()
 	repo := &radarGovernanceRepository{db: db}
 	oldKeyID := uuid.New()
 	newKeyID := uuid.New()
@@ -992,7 +992,7 @@ func TestRotateEvidenceSigningKeyKeepsPreviousKeyVerifyOnlyAndAdvancesEpoch(t *t
 func TestRevokedSigningKeyEnqueuesReevaluationAndIntegrityAlerts(t *testing.T) {
 	db, mock, err := sqlmock.New()
 	require.NoError(t, err)
-	defer db.Close()
+	defer func() { _ = db.Close() }()
 	repo := &radarGovernanceRepository{db: db}
 	keyID := uuid.New()
 	createdAt := time.Date(2026, 7, 28, 2, 0, 0, 0, time.UTC)

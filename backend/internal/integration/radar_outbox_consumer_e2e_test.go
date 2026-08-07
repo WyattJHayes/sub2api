@@ -113,7 +113,8 @@ func TestRadarOutboxConsumerRevisionBatchEpochFencing(t *testing.T) {
 	waitRadarRunStatus(t, database.db, fixture.runID, "completed")
 	initialRuntime.Stop()
 
-	governance := repository.NewRadarGovernanceRepository(database.db).(service.RevisionBatchRepository)
+	governance, ok := repository.NewRadarGovernanceRepository(database.db).(service.RevisionBatchRepository)
+	require.True(t, ok)
 	batch, err := governance.CreateRevisionBatch(context.Background(), service.CreateRevisionBatchInput{
 		RunID: fixture.runID, Reason: "consumer epoch fencing",
 		RequestedBy: fixture.userID, IdempotencyKey: radarRevisionHash("epoch-batch:" + fixture.runID.String()),
@@ -650,7 +651,7 @@ func radarOutboxCounts(t *testing.T, db *sql.DB, runID uuid.UUID) string {
 		FROM evaluation_outbox_events WHERE run_id=$1
 		GROUP BY event_type,status ORDER BY event_type,status`, runID)
 	require.NoError(t, err)
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 	var result string
 	for rows.Next() {
 		var eventType, status string

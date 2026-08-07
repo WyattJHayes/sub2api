@@ -330,7 +330,7 @@ func loadRadarGateAuthoritativeInput(
 	if err != nil {
 		return service.RadarGateInput{}, "", fmt.Errorf("load gate aggregate heads: %w", err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 	var facts []radarGateAggregateFact
 	for rows.Next() {
 		var fact radarGateAggregateFact

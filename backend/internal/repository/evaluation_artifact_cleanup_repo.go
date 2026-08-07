@@ -47,7 +47,7 @@ func (r *evaluationArtifactCleanupRepository) ListExpiredArtifacts(ctx context.C
 	if err != nil {
 		return nil, fmt.Errorf("list expired evaluation artifacts: %w", err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 	candidates := make([]service.ArtifactCleanupCandidate, 0)
 	for rows.Next() {
 		var candidate service.ArtifactCleanupCandidate

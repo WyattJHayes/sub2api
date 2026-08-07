@@ -20,17 +20,17 @@ type runtimeRetryCall struct {
 }
 
 type outboxRuntimeRepositoryStub struct {
-	mu             sync.Mutex
-	workerID       uuid.UUID
-	events         []EvaluationOutboxEvent
-	claimCalls     int
-	heartbeatCalls int
+	mu                     sync.Mutex
+	workerID               uuid.UUID
+	events                 []EvaluationOutboxEvent
+	claimCalls             int
+	heartbeatCalls         int
 	consumerHeartbeatCalls int
-	completeIDs    []uuid.UUID
-	deadLetters    []string
-	retries        []runtimeRetryCall
-	heartbeatFn    func(int) error
-	claimFn        func(context.Context) ([]EvaluationOutboxEvent, error)
+	completeIDs            []uuid.UUID
+	deadLetters            []string
+	retries                []runtimeRetryCall
+	heartbeatFn            func(int) error
+	claimFn                func(context.Context) ([]EvaluationOutboxEvent, error)
 }
 
 func (s *outboxRuntimeRepositoryStub) Enqueue(context.Context, EnqueueEvaluationOutboxInput) (*EvaluationOutboxEvent, error) {

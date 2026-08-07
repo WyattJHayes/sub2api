@@ -181,7 +181,7 @@ func digestEvaluationGatewayExecutable(path string) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("open evaluation gateway executable: %w", err)
 	}
-	defer file.Close()
+	defer func() { _ = file.Close() }()
 	digest := sha256.New()
 	written, err := io.Copy(digest, file)
 	if err != nil {

@@ -522,8 +522,6 @@ func reliabilitySnapshotHash(input ReliabilitySnapshotInput, metricsJSON []byte)
 	return digestReliabilityBytes(encoded), nil
 }
 
-func digestReliabilityText(value string) string { return digestReliabilityBytes([]byte(value)) }
-
 func digestReliabilityBytes(value []byte) string {
 	sum := sha256.Sum256(value)
 	return hex.EncodeToString(sum[:])

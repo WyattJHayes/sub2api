@@ -125,7 +125,7 @@ func loadFrozenGradingRequirements(ctx context.Context, tx *sql.Tx, runID uuid.U
 	if err != nil {
 		return nil, fmt.Errorf("load revision grading requirements: %w", err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 	requirements := make([]frozenGradingRequirement, 0)
 	for rows.Next() {
 		var requirement frozenGradingRequirement
@@ -376,17 +376,17 @@ func repairFailedRevisionGradingRequirements(ctx context.Context, tx *sql.Tx, ba
 			&item.frozen.sampleID, &item.frozen.routeEvidenceSetHash,
 			&item.frozen.artifactManifestHash, &item.frozen.headEventID,
 			&item.frozen.assignmentAttempt); err != nil {
-			rows.Close()
+			_ = rows.Close()
 			return 0, fmt.Errorf("scan failed revision requirement: %w", err)
 		}
 		if item.runID != batch.RunID {
-			rows.Close()
+			_ = rows.Close()
 			return 0, service.ErrRevisionBatchInvalid
 		}
 		repairs = append(repairs, item)
 	}
 	if err := rows.Err(); err != nil {
-		rows.Close()
+		_ = rows.Close()
 		return 0, fmt.Errorf("iterate failed revision requirements: %w", err)
 	}
 	if err := rows.Close(); err != nil {

@@ -17,10 +17,10 @@ import (
 
 type radarReliabilityHandlerRepoStub struct {
 	*service.StaticRadarAuthorizer
-	createdInput *service.RadarLoadPlanInput
-	createdActor int64
+	createdInput  *service.RadarLoadPlanInput
+	createdActor  int64
 	createdTenant int64
-	publishedID  uuid.UUID
+	publishedID   uuid.UUID
 }
 
 func (s *radarReliabilityHandlerRepoStub) CreateLoadPlan(ctx context.Context, input service.RadarLoadPlanInput, actorID int64) (*service.RadarLoadPlanRecord, error) {

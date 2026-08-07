@@ -100,7 +100,7 @@ func (r *evaluationOutboxDomainRepository) ResolveRadarGateTarget(ctx context.Co
 	if err != nil {
 		return nil, fmt.Errorf("load Radar Gate target: %w", err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 	type candidate struct {
 		subjectID                uuid.UUID
 		policyID                 uuid.NullUUID
@@ -389,13 +389,13 @@ func projectAutomatedRadarGateAlert(
 		for rows.Next() {
 			var alertID uuid.UUID
 			if err := rows.Scan(&alertID); err != nil {
-				rows.Close()
+				_ = rows.Close()
 				return fmt.Errorf("scan resolved automated Radar Gate alert: %w", err)
 			}
 			alertIDs = append(alertIDs, alertID)
 		}
 		if err := rows.Err(); err != nil {
-			rows.Close()
+			_ = rows.Close()
 			return fmt.Errorf("iterate resolved automated Radar Gate alerts: %w", err)
 		}
 		if err := rows.Close(); err != nil {

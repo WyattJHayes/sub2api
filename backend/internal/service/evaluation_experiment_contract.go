@@ -113,7 +113,7 @@ func CanonicalizeRequestManifest(manifest RequestManifest) (CanonicalRequestMani
 	if err != nil {
 		return CanonicalRequestManifest{}, fmt.Errorf("canonicalize request manifest: %w", err)
 	}
-	return CanonicalRequestManifest{Bytes: contract.Bytes, SHA256: contract.SHA256}, nil
+	return CanonicalRequestManifest(contract), nil
 }
 
 // DigestCanonicalJSON computes the RFC 8785 digest of JSON data without
@@ -221,15 +221,16 @@ func validateRequestSlot(slot RequestSlot) error {
 	if strings.TrimSpace(slot.SlotID) == "" || strings.TrimSpace(slot.Phase) == "" || slot.OrdinalMin < 0 || slot.OrdinalMax < slot.OrdinalMin || slot.MaxOccurrences < 1 {
 		return errors.New("invalid slot identity or bounds")
 	}
-	if slot.SemanticsMode == "exact" {
+	switch slot.SemanticsMode {
+	case "exact":
 		if !validSHA256(slot.ExpectedRequestSemanticsSHA256) || slot.RequestSemanticsPolicySHA256 != "" {
 			return errors.New("exact request slot requires only expected semantics hash")
 		}
-	} else if slot.SemanticsMode == "adapter_policy" {
+	case "adapter_policy":
 		if !validSHA256(slot.RequestSemanticsPolicySHA256) || slot.ExpectedRequestSemanticsSHA256 != "" {
 			return errors.New("adapter policy request slot requires only policy semantics hash")
 		}
-	} else {
+	default:
 		return fmt.Errorf("invalid semantics mode %q", slot.SemanticsMode)
 	}
 	if !validSHA256(slot.ToolSchemaSHA256) || !validSHA256(slot.AllowedToolSetSHA256) {

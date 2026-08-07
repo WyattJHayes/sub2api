@@ -259,7 +259,7 @@ func observeRevisionInsufficientEvidence(ctx context.Context, tx *sql.Tx, batchI
 	if err != nil {
 		return fmt.Errorf("load blocked revision scopes: %w", err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 	type scope struct{ domain, route string }
 	var scopes []scope
 	for rows.Next() {
@@ -337,13 +337,13 @@ func repairFailedRevisionPropagationRequirements(ctx context.Context, tx *sql.Tx
 	for rows.Next() {
 		var item failedRequirement
 		if err := rows.Scan(&item.id, &item.requirementType, &item.targetKey, &item.sourceHash, &item.causeSetHash, &item.recoveryGeneration); err != nil {
-			rows.Close()
+			_ = rows.Close()
 			return 0, fmt.Errorf("scan failed revision propagation requirement: %w", err)
 		}
 		failed = append(failed, item)
 	}
 	if err := rows.Err(); err != nil {
-		rows.Close()
+		_ = rows.Close()
 		return 0, fmt.Errorf("iterate failed revision propagation requirements: %w", err)
 	}
 	if err := rows.Close(); err != nil {
@@ -462,7 +462,7 @@ func propagateAssignmentReplacement(
 	if err != nil {
 		return fmt.Errorf("load replaced assignment heads: %w", err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 	type replacedHead struct {
 		headEventID, causeEventID uuid.UUID
 		modelRoute, domain        string

@@ -17,7 +17,7 @@ import (
 func TestLoadRadarGateReliabilityRejectsPolicyFromAnotherTenant(t *testing.T) {
 	db, mock, err := sqlmock.New()
 	require.NoError(t, err)
-	defer db.Close()
+	defer func() { _ = db.Close() }()
 
 	runID, policyID := uuid.New(), uuid.New()
 	mock.ExpectBegin()
@@ -39,7 +39,7 @@ func TestLoadRadarGateReliabilityRejectsPolicyFromAnotherTenant(t *testing.T) {
 func TestNormalizeReliabilityGateRequirementsRejectsDuplicateSliceKeys(t *testing.T) {
 	db, mock, err := sqlmock.New()
 	require.NoError(t, err)
-	defer db.Close()
+	defer func() { _ = db.Close() }()
 	mock.ExpectBegin()
 	runID, policyID := uuid.New(), uuid.New()
 	mock.ExpectQuery(`SELECT transaction_timestamp\(\)`).
@@ -64,7 +64,7 @@ func TestNormalizeReliabilityGateRequirementsRejectsDuplicateSliceKeys(t *testin
 func TestLoadReliabilityGateSnapshotKeepsHistogramInvalidWhenCostHasNoSuccesses(t *testing.T) {
 	db, mock, err := sqlmock.New()
 	require.NoError(t, err)
-	defer db.Close()
+	defer func() { _ = db.Close() }()
 
 	mock.ExpectBegin()
 	tx, err := db.BeginTx(context.Background(), nil)
@@ -124,7 +124,7 @@ func TestLoadReliabilityGateSnapshotKeepsHistogramInvalidWhenCostHasNoSuccesses(
 func TestLoadReliabilityGateSnapshotRejectsUnreconciledBillingLedger(t *testing.T) {
 	db, mock, err := sqlmock.New()
 	require.NoError(t, err)
-	defer db.Close()
+	defer func() { _ = db.Close() }()
 
 	mock.ExpectBegin()
 	tx, err := db.BeginTx(context.Background(), nil)
@@ -189,7 +189,7 @@ func TestNormalizeReliabilityGateRequirementsPreservesUniqueSlices(t *testing.T)
 func TestLoadRadarGateAuthoritativeInputUsesDurableFacts(t *testing.T) {
 	db, mock, err := sqlmock.New()
 	require.NoError(t, err)
-	defer db.Close()
+	defer func() { _ = db.Close() }()
 
 	runID := uuid.New()
 	startedAt := time.Date(2026, 7, 1, 0, 0, 0, 0, time.UTC)

@@ -340,11 +340,11 @@ type RadarGatePolicyActivationInput struct {
 }
 
 type RadarGatePolicyHead struct {
-	Scope     RadarGovernanceScope `json:"scope"`
-	PolicyID  uuid.UUID            `json:"policy_id"`
-	PolicyHash string              `json:"policy_hash"`
-	EventID   uuid.UUID            `json:"event_id"`
-	UpdatedAt time.Time            `json:"updated_at"`
+	Scope      RadarGovernanceScope `json:"scope"`
+	PolicyID   uuid.UUID            `json:"policy_id"`
+	PolicyHash string               `json:"policy_hash"`
+	EventID    uuid.UUID            `json:"event_id"`
+	UpdatedAt  time.Time            `json:"updated_at"`
 }
 
 type RadarBaselineActivationInput struct {

@@ -49,7 +49,7 @@ func TestClamAVArtifactScannerStreamsObjectAndAcceptsCleanResult(t *testing.T) {
 			serverErr <- acceptErr
 			return
 		}
-		defer conn.Close()
+		defer func() { _ = conn.Close() }()
 		buffer := make([]byte, len("zINSTREAM\x00"))
 		if _, err := io.ReadFull(conn, buffer); err != nil {
 			serverErr <- err
@@ -75,13 +75,13 @@ func TestClamAVArtifactScannerStreamsObjectAndAcceptsCleanResult(t *testing.T) {
 				serverErr <- err
 				return
 			}
-			received.Write(chunk)
+			_, _ = received.Write(chunk)
 		}
 		if received.String() != "trusted evidence" {
 			serverErr <- fmt.Errorf("unexpected object body %q", received.String())
 			return
 		}
-			_, _ = io.WriteString(conn, "stream: OK\x00")
+		_, _ = io.WriteString(conn, "stream: OK\x00")
 		serverErr <- nil
 	}()
 
@@ -111,7 +111,7 @@ func TestClamAVArtifactScannerRejectsBodyHashMismatchAfterCleanScan(t *testing.T
 		if acceptErr != nil {
 			return
 		}
-		defer conn.Close()
+		defer func() { _ = conn.Close() }()
 		command := make([]byte, len(clamAVCommand))
 		if _, err := io.ReadFull(conn, command); err != nil {
 			return
@@ -155,7 +155,7 @@ func TestClamAVArtifactScannerRejectsInfectedResult(t *testing.T) {
 		if acceptErr != nil {
 			return
 		}
-		defer conn.Close()
+		defer func() { _ = conn.Close() }()
 		command := make([]byte, len("zINSTREAM\x00"))
 		if _, err := io.ReadFull(conn, command); err != nil {
 			return
@@ -174,7 +174,7 @@ func TestClamAVArtifactScannerRejectsInfectedResult(t *testing.T) {
 				return
 			}
 		}
-			_, _ = io.WriteString(conn, "stream: Eicar-Test-Signature FOUND\x00")
+		_, _ = io.WriteString(conn, "stream: Eicar-Test-Signature FOUND\x00")
 	}()
 
 	store := &scannerArtifactStoreStub{body: []byte("infected")}

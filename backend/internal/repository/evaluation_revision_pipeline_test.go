@@ -224,7 +224,7 @@ func TestHeadAdvanceAppendsCellGlobalAndGateRequirements(t *testing.T) {
 		SELECT requirement_type, status FROM evaluation_revision_batch_requirements
 		WHERE revision_batch_id=$1 AND requirement_type<>'grading' ORDER BY created_at`, batch.ID)
 	require.NoError(t, err)
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 	got := make([]string, 0, 3)
 	for rows.Next() {
 		var requirementType, status string

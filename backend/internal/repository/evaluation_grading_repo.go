@@ -124,7 +124,7 @@ func (r *evaluationGradingRepository) SubmitEvidence(ctx context.Context, input 
 				&artifact.ID, &artifact.ObjectKey, &artifact.SHA256, &artifact.Bytes, &artifact.MIMEType, &artifact.ScanStatus,
 				&scanReason, &scanner, &scannedAt, &confirmedAt, &deletedAt,
 			); err != nil {
-				rows.Close()
+				_ = rows.Close()
 				return nil, fmt.Errorf("scan evidence manifest artifact: %w", err)
 			}
 			artifact.ScanReason = scanReason.String
@@ -141,10 +141,10 @@ func (r *evaluationGradingRepository) SubmitEvidence(ctx context.Context, input 
 			artifacts = append(artifacts, artifact)
 		}
 		if err := rows.Err(); err != nil {
-			rows.Close()
+			_ = rows.Close()
 			return nil, fmt.Errorf("iterate evidence manifest artifacts: %w", err)
 		}
-		rows.Close()
+		_ = rows.Close()
 		var artifactID uuid.UUID
 		digestHex, artifactID, err = bindEvidenceManifestArtifact(input.Evidence, artifacts)
 		if err != nil {
@@ -779,7 +779,7 @@ func (r *evaluationGradingRepository) ClaimGradingLease(ctx context.Context, wor
 			&receipt.ID, &receipt.ObjectKey, &receipt.SHA256, &receipt.Bytes, &receipt.MIMEType, &receipt.ScanStatus,
 			&scanReason, &scanner, &scannedAt, &confirmedAt, &deletedAt,
 		); err != nil {
-			artifactRows.Close()
+			_ = artifactRows.Close()
 			return nil, fmt.Errorf("scan grading evidence artifact: %w", err)
 		}
 		receipt.ScanReason = scanReason.String
@@ -796,10 +796,10 @@ func (r *evaluationGradingRepository) ClaimGradingLease(ctx context.Context, wor
 		lease.Evidence = append(lease.Evidence, receipt)
 	}
 	if err := artifactRows.Err(); err != nil {
-		artifactRows.Close()
+		_ = artifactRows.Close()
 		return nil, fmt.Errorf("iterate grading evidence artifacts: %w", err)
 	}
-	artifactRows.Close()
+	_ = artifactRows.Close()
 	lease.Token, _, err = newLeaseToken()
 	if err != nil {
 		return nil, err
@@ -1225,7 +1225,7 @@ func loadSealedScoreSource(ctx context.Context, tx *sql.Tx, runID, sampleID, ass
 	if err != nil {
 		return service.ScoreSource{}, nil, fmt.Errorf("load score route evidence: %w", err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 	refs := make([]service.RouteEvidenceRef, 0, manifest.MaxRequests)
 	ordinals := make(map[int]struct{}, manifest.MaxRequests)
 	slotCounts := make([]int, len(manifest.RequestSlots))
@@ -1277,7 +1277,7 @@ func loadSealedScoreSource(ctx context.Context, tx *sql.Tx, runID, sampleID, ass
 	if err != nil {
 		return service.ScoreSource{}, nil, fmt.Errorf("load score artifacts: %w", err)
 	}
-	defer artifactRows.Close()
+	defer func() { _ = artifactRows.Close() }()
 	artifacts := make([]scoreArtifactRef, 0)
 	evidenceHashes := make([]string, 0)
 	for artifactRows.Next() {
@@ -1611,7 +1611,7 @@ func loadFrozenAnalysisJobRefs(ctx context.Context, tx *sql.Tx, jobID uuid.UUID)
 	for scoreRows.Next() {
 		var ref service.ScoreRef
 		if err := scoreRows.Scan(&ref.ID, &ref.CreatedAt); err != nil {
-			scoreRows.Close()
+			_ = scoreRows.Close()
 			return nil, nil, fmt.Errorf("scan frozen analysis score ref: %w", err)
 		}
 		scoreRefs = append(scoreRefs, ref)
@@ -1630,7 +1630,7 @@ func loadFrozenAnalysisJobRefs(ctx context.Context, tx *sql.Tx, jobID uuid.UUID)
 	for snapshotRows.Next() {
 		var ref service.SnapshotRef
 		if err := snapshotRows.Scan(&ref.ID, &ref.WindowStart); err != nil {
-			snapshotRows.Close()
+			_ = snapshotRows.Close()
 			return nil, nil, fmt.Errorf("scan frozen analysis snapshot ref: %w", err)
 		}
 		snapshotRefs = append(snapshotRefs, ref)
@@ -1677,7 +1677,7 @@ func loadAnalysisInputs(ctx context.Context, tx *sql.Tx, runID uuid.UUID, domain
 	if err != nil {
 		return nil, nil, nil, nil, fmt.Errorf("load analysis paired scores: %w", err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 	pairs := make([]service.PairedScore, 0)
 	scoreIDs := make([]uuid.UUID, 0)
 	for rows.Next() {
@@ -1701,7 +1701,7 @@ func loadAnalysisInputs(ctx context.Context, tx *sql.Tx, runID uuid.UUID, domain
 	if err != nil {
 		return nil, nil, nil, nil, fmt.Errorf("load analysis history: %w", err)
 	}
-	defer historyRows.Close()
+	defer func() { _ = historyRows.Close() }()
 	history := make([]service.AggregateHistoryPoint, 0)
 	for historyRows.Next() {
 		var raw sql.NullString
@@ -1730,7 +1730,7 @@ func loadAnalysisInputs(ctx context.Context, tx *sql.Tx, runID uuid.UUID, domain
 	if err != nil {
 		return nil, nil, nil, nil, fmt.Errorf("load analysis invalid failures: %w", err)
 	}
-	defer failureRows.Close()
+	defer func() { _ = failureRows.Close() }()
 	invalidFailures := make([]service.FailureClass, 0)
 	for failureRows.Next() {
 		var value string

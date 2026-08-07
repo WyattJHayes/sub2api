@@ -128,7 +128,7 @@ func (r *evaluationRouteEvidenceRepository) FinalizeRouteEvidenceFromTerminaliza
 		for assignmentRows.Next() {
 			var ignored uuid.UUID
 			if err := assignmentRows.Scan(&ignored); err != nil {
-				assignmentRows.Close()
+				_ = assignmentRows.Close()
 				return err
 			}
 		}
@@ -143,7 +143,7 @@ func (r *evaluationRouteEvidenceRepository) FinalizeRouteEvidenceFromTerminaliza
 		for traceRows.Next() {
 			var traceID string
 			if err := traceRows.Scan(&traceID); err != nil {
-				traceRows.Close()
+				_ = traceRows.Close()
 				return err
 			}
 			traceIDs = append(traceIDs, traceID)

@@ -16,7 +16,7 @@ import (
 func TestPauseRunPreservesInflightLeaseAndEpoch(t *testing.T) {
 	db, mock, err := sqlmock.New()
 	require.NoError(t, err)
-	defer db.Close()
+	defer func() { _ = db.Close() }()
 	runID := uuid.New()
 	expectRadarWorkerWriter(t, mock)
 	mock.ExpectQuery("SELECT id, run_id, event_type, payload").WithArgs(strings.Repeat("a", 64)).WillReturnError(sql.ErrNoRows)
@@ -39,7 +39,7 @@ func TestPauseRunPreservesInflightLeaseAndEpoch(t *testing.T) {
 func TestFenceRunPreservesStatusAndIncrementsEpoch(t *testing.T) {
 	db, mock, err := sqlmock.New()
 	require.NoError(t, err)
-	defer db.Close()
+	defer func() { _ = db.Close() }()
 	runID := uuid.New()
 	expectRadarWorkerWriter(t, mock)
 	mock.ExpectQuery("SELECT id, run_id, event_type, payload").WithArgs(strings.Repeat("b", 64)).WillReturnError(sql.ErrNoRows)
@@ -62,7 +62,7 @@ func TestFenceRunPreservesStatusAndIncrementsEpoch(t *testing.T) {
 func TestRunControlIdempotencyReturnsOriginalResult(t *testing.T) {
 	db, mock, err := sqlmock.New()
 	require.NoError(t, err)
-	defer db.Close()
+	defer func() { _ = db.Close() }()
 	runID, eventID := uuid.New(), uuid.New()
 	original := service.RunControlResult{RunID: runID, FromStatus: "running", ToStatus: "paused", PreviousEpoch: 4, CurrentEpoch: 4, EventID: eventID}
 	payload, err := json.Marshal(map[string]any{"reason": "operator", "result": original})
@@ -89,7 +89,7 @@ func TestRunControlRejectsInvalidReasonBeforeOpeningTransaction(t *testing.T) {
 func TestRunControlRejectsTerminalStatus(t *testing.T) {
 	db, mock, err := sqlmock.New()
 	require.NoError(t, err)
-	defer db.Close()
+	defer func() { _ = db.Close() }()
 	runID := uuid.New()
 	expectRadarWorkerWriter(t, mock)
 	mock.ExpectQuery("SELECT id, run_id, event_type, payload").WithArgs(strings.Repeat("e", 64)).WillReturnError(sql.ErrNoRows)

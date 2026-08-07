@@ -46,7 +46,7 @@ func (r *radarGovernanceRepository) ListPermissions(ctx context.Context, actorID
 	if err != nil {
 		return nil, fmt.Errorf("list radar roles: %w", err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 	seen := map[service.RadarPermission]bool{}
 	for rows.Next() {
 		var raw string
@@ -284,7 +284,7 @@ func (r *radarGovernanceRepository) ListRoleBindings(ctx context.Context, actorI
 	if err != nil {
 		return nil, fmt.Errorf("list radar role bindings: %w", err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 	var out []service.RadarRoleBinding
 	for rows.Next() {
 		var b service.RadarRoleBinding
@@ -1250,7 +1250,7 @@ func enqueueEvidenceSigningKeyReevaluation(ctx context.Context, tx *sql.Tx, reco
 	for rows.Next() {
 		var runID uuid.UUID
 		if err := rows.Scan(&runID); err != nil {
-			rows.Close()
+			_ = rows.Close()
 			return fmt.Errorf("scan signing key affected run: %w", err)
 		}
 		runIDs = append(runIDs, runID)
@@ -1371,10 +1371,10 @@ func (r *radarGovernanceRepository) RecordGateDecision(ctx context.Context, inpu
 			return nil, service.ErrRadarForbidden
 		}
 	}
-	if err := validateGateReliabilityWatermark(ctx, tx, input.RunID, input.PolicyID, input.SourceWatermark); err != nil {
-		return nil, err
-	}
 	if isRadarGateReliabilityWatermark(input.SourceWatermark) {
+		if err := validateGateReliabilityWatermark(ctx, tx, input.RunID, input.PolicyID, input.SourceWatermark); err != nil {
+			return nil, err
+		}
 		if err := validateCurrentGateAuthority(ctx, tx, input.RunID, input.PolicyID, input.ReleaseSubjectHash); err != nil {
 			return nil, err
 		}
@@ -1542,13 +1542,13 @@ func reconcileRevisionBatchesForGateDecision(ctx context.Context, tx *sql.Tx, de
 	for rows.Next() {
 		var batchID uuid.UUID
 		if err := rows.Scan(&batchID); err != nil {
-			rows.Close()
+			_ = rows.Close()
 			return fmt.Errorf("scan revision batch for Gate decision: %w", err)
 		}
 		batchIDs = append(batchIDs, batchID)
 	}
 	if err := rows.Err(); err != nil {
-		rows.Close()
+		_ = rows.Close()
 		return fmt.Errorf("iterate revision batches for Gate decision: %w", err)
 	}
 	if err := rows.Close(); err != nil {
@@ -1582,7 +1582,7 @@ func (r *radarGovernanceRepository) WaiveGateDecision(ctx context.Context, input
 	if err != nil {
 		return nil, err
 	}
-	defer tx.Rollback()
+	defer func() { _ = tx.Rollback() }()
 	id := uuid.New()
 	var w service.RadarGateWaiverRecord
 	err = tx.QueryRowContext(ctx, `INSERT INTO evaluation_gate_waivers (id,decision_id,business_reason,risk_owner_user_id,mitigation,retest_plan,expires_at,approved_by) VALUES ($1,$2,$3,$4,$5,$6,$7,$8) RETURNING id,decision_id,business_reason,risk_owner_user_id,mitigation,retest_plan,expires_at,approved_by,created_at`, id, input.DecisionID, input.BusinessReason, input.RiskOwnerUserID, input.Mitigation, input.RetestPlan, input.ExpiresAt, input.ApprovedBy).Scan(&w.ID, &w.DecisionID, &w.BusinessReason, &w.RiskOwnerUserID, &w.Mitigation, &w.RetestPlan, &w.ExpiresAt, &w.ApprovedBy, &w.CreatedAt)
@@ -1603,7 +1603,7 @@ func (r *radarGovernanceRepository) ObserveAlert(ctx context.Context, input serv
 	if err != nil {
 		return nil, err
 	}
-	defer tx.Rollback()
+	defer func() { _ = tx.Rollback() }()
 	id := uuid.New()
 	var a service.RadarAlertRecord
 	observed := input.ObservedAt
@@ -1638,7 +1638,7 @@ func (r *radarGovernanceRepository) transitionAlert(ctx context.Context, id uuid
 	if err != nil {
 		return err
 	}
-	defer tx.Rollback()
+	defer func() { _ = tx.Rollback() }()
 	query := `UPDATE evaluation_alerts SET ` + update + ` WHERE id=$1 AND status<>'resolved'`
 	args := []any{id}
 	if tenantID, scoped := radarTenant(ctx); scoped {
@@ -1666,7 +1666,7 @@ func (r *radarGovernanceRepository) RecordAlertRecovery(ctx context.Context, id,
 	if err != nil {
 		return err
 	}
-	defer tx.Rollback()
+	defer func() { _ = tx.Rollback() }()
 	query := `UPDATE evaluation_alerts SET recovery_test_id=$2 WHERE id=$1`
 	args := []any{id, recoveryTestID}
 	if tenantID, scoped := radarTenant(ctx); scoped {
@@ -1788,7 +1788,7 @@ func (r *radarGovernanceRepository) ListModelHealth(ctx context.Context) ([]serv
 	if err != nil {
 		return nil, fmt.Errorf("list radar model health: %w", err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 	var out []service.RadarModelHealthProjection
 	for rows.Next() {
 		var model, domain string
@@ -1841,7 +1841,7 @@ func (r *radarGovernanceRepository) ListRuns(ctx context.Context) ([]service.Rad
 	if err != nil {
 		return nil, fmt.Errorf("list radar runs: %w", err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 	var out []service.RadarRunProjection
 	for rows.Next() {
 		var item service.RadarRunProjection
@@ -1868,7 +1868,7 @@ func (r *radarGovernanceRepository) ListAlerts(ctx context.Context) ([]service.R
 	if err != nil {
 		return nil, fmt.Errorf("list radar alerts: %w", err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 	var out []service.RadarAlertProjection
 	for rows.Next() {
 		var item service.RadarAlertProjection
@@ -1895,7 +1895,7 @@ func (r *radarGovernanceRepository) ListGates(ctx context.Context) ([]service.Ra
 	if err != nil {
 		return nil, fmt.Errorf("list radar gates: %w", err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 	var out []service.RadarGateProjection
 	for rows.Next() {
 		var item service.RadarGateProjection
@@ -1922,7 +1922,7 @@ func (r *radarGovernanceRepository) ListWorkers(ctx context.Context) ([]service.
 	if err != nil {
 		return nil, fmt.Errorf("list radar workers: %w", err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 	var out []service.RadarWorkerProjection
 	for rows.Next() {
 		var item service.RadarWorkerProjection
@@ -2278,7 +2278,7 @@ func (r *radarGovernanceRepository) ListDatasets(ctx context.Context) ([]service
 	if err != nil {
 		return nil, fmt.Errorf("list radar datasets: %w", err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 	var out []service.RadarDatasetProjection
 	for rows.Next() {
 		var item service.RadarDatasetProjection

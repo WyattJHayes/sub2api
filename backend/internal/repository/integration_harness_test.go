@@ -167,6 +167,20 @@ func runRepositoryIntegrationTests(m *testing.M) int {
 	return code
 }
 
+func detectCurrentDockerContextHost(ctx context.Context) (string, error) {
+	cmd := exec.CommandContext(ctx, "docker", "context", "inspect", "--format", "{{.Endpoints.docker.Host}}")
+	cmd.Env = os.Environ()
+	output, err := cmd.Output()
+	if err != nil {
+		return "", fmt.Errorf("inspect current Docker context: %w", err)
+	}
+	host := strings.TrimSpace(string(output))
+	if host == "" {
+		return "", fmt.Errorf("current Docker context has no host")
+	}
+	return host, nil
+}
+
 func dockerIsAvailable(ctx context.Context) bool {
 	cmd := exec.CommandContext(ctx, "docker", "info")
 	cmd.Env = os.Environ()

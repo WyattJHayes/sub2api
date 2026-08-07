@@ -41,7 +41,11 @@ func NewEvaluationRouteEvidenceRepositoryWithVerifiers(db *sql.DB, registry *ser
 }
 
 func ProvideEvaluationRouteEvidenceRepository(db *sql.DB, cfg *config.Config) service.EvaluationEvidenceRepository {
-	repo := NewEvaluationRouteEvidenceRepository(db).(*evaluationRouteEvidenceRepository)
+	base := NewEvaluationRouteEvidenceRepository(db)
+	repo, ok := base.(*evaluationRouteEvidenceRepository)
+	if !ok {
+		return base
+	}
 	if cfg != nil && len([]byte(strings.TrimSpace(cfg.Radar.HashingSecret))) >= 32 {
 		key := []byte(strings.TrimSpace(cfg.Radar.HashingSecret))
 		repo.evidenceKeys = service.EvidenceSigningKeyResolverFunc(func(_ context.Context, reference string) ([]byte, error) {
@@ -658,17 +662,6 @@ func (r *evaluationRouteEvidenceRepository) withWriter(ctx context.Context, fn f
 	return withEvaluationWriterTx(ctx, r.db, identity, func(tx *sql.Tx) error {
 		return fn(tx)
 	})
-}
-
-func (r *evaluationRouteEvidenceRepository) checkIdentityConflict(
-	ctx context.Context,
-	result sql.Result,
-	traceID string,
-	runID string,
-	sampleID string,
-	apiKeyID int64,
-) error {
-	return r.checkIdentityConflictWith(ctx, r.sql, result, traceID, runID, sampleID, apiKeyID)
 }
 
 func (r *evaluationRouteEvidenceRepository) checkIdentityConflictWith(

@@ -29,14 +29,6 @@ type evaluationExperimentPersistResult struct {
 	Pairs    int
 }
 
-type evaluationExperimentCase struct {
-	evaluationCaseForRun
-	promptSHA256 string
-	toolSHA256   string
-	manifest     service.CanonicalRequestManifest
-	manifestID   uuid.UUID
-}
-
 type evaluationExperimentSample struct {
 	id             uuid.UUID
 	modelRoute     string

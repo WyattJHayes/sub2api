@@ -19,7 +19,7 @@ func TestRadarWriterCutover197(t *testing.T) {
 	}
 	db, err := sql.Open("postgres", dsn)
 	require.NoError(t, err)
-	defer db.Close()
+	defer func() { _ = db.Close() }()
 	require.NoError(t, db.PingContext(context.Background()))
 
 	ctx := context.Background()

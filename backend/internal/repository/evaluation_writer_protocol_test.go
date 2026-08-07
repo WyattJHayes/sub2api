@@ -36,7 +36,7 @@ func expectWriterSetup(mock sqlmock.Sqlmock, identity EvaluationWriterIdentity) 
 func TestEvaluationWriterAuditAllowsAndRecordsOldProtocol(t *testing.T) {
 	db, mock, err := sqlmock.New()
 	require.NoError(t, err)
-	defer db.Close()
+	defer func() { _ = db.Close() }()
 
 	identity := writerTestIdentity("worker", 1)
 	expectWriterSetup(mock, identity)
@@ -55,7 +55,7 @@ func TestEvaluationWriterAuditAllowsAndRecordsOldProtocol(t *testing.T) {
 func TestEvaluationWriterEnforceRejectsOldProtocol(t *testing.T) {
 	db, mock, err := sqlmock.New()
 	require.NoError(t, err)
-	defer db.Close()
+	defer func() { _ = db.Close() }()
 
 	identity := writerTestIdentity("worker", 1)
 	expectWriterSetup(mock, identity)
@@ -74,7 +74,7 @@ func TestEvaluationWriterEnforceRejectsOldProtocol(t *testing.T) {
 func TestEvaluationWriterDrainingRejectsNewWrite(t *testing.T) {
 	db, mock, err := sqlmock.New()
 	require.NoError(t, err)
-	defer db.Close()
+	defer func() { _ = db.Close() }()
 
 	identity := writerTestIdentity("worker", 2)
 	expectWriterSetup(mock, identity)
@@ -103,7 +103,7 @@ func TestEvaluationWriterClosedAllowsMigrationOwnerOnly(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			db, mock, err := sqlmock.New()
 			require.NoError(t, err)
-			defer db.Close()
+			defer func() { _ = db.Close() }()
 
 			identity := writerTestIdentity(test.kind, 2)
 			expectWriterSetup(mock, identity)
@@ -132,7 +132,7 @@ func TestEvaluationWriterClosedAllowsMigrationOwnerOnly(t *testing.T) {
 func TestEvaluationWriterProtocolMapsWrappedGuardErrors(t *testing.T) {
 	db, mock, err := sqlmock.New()
 	require.NoError(t, err)
-	defer db.Close()
+	defer func() { _ = db.Close() }()
 	identity := writerTestIdentity("worker", 2)
 	expectWriterSetup(mock, identity)
 	mock.ExpectExec("UPDATE evaluation_scores").WillReturnError(errors.New("pq: radar_cutover_active"))
@@ -149,7 +149,7 @@ func TestEvaluationWriterProtocolMapsWrappedGuardErrors(t *testing.T) {
 func TestEvaluationAssignmentRenewalUsesWriterProtocol(t *testing.T) {
 	db, mock, err := sqlmock.New()
 	require.NoError(t, err)
-	defer db.Close()
+	defer func() { _ = db.Close() }()
 
 	identity := defaultEvaluationWriterIdentity("worker")
 	expectWriterSetup(mock, identity)
@@ -179,7 +179,7 @@ func TestDefaultEvaluationWriterIdentityUsesConfiguredInstanceID(t *testing.T) {
 func TestEvaluationGradingHeartbeatUsesWriterProtocol(t *testing.T) {
 	db, mock, err := sqlmock.New()
 	require.NoError(t, err)
-	defer db.Close()
+	defer func() { _ = db.Close() }()
 
 	identity := defaultEvaluationWriterIdentity("worker")
 	expectWriterSetup(mock, identity)
@@ -199,7 +199,7 @@ func TestEvaluationGradingHeartbeatUsesWriterProtocol(t *testing.T) {
 func TestEvaluationWorkerHeartbeatUsesWriterProtocol(t *testing.T) {
 	db, mock, err := sqlmock.New()
 	require.NoError(t, err)
-	defer db.Close()
+	defer func() { _ = db.Close() }()
 
 	identity := defaultEvaluationWriterIdentity("worker")
 	expectWriterSetup(mock, identity)
