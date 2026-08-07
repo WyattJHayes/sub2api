@@ -67,18 +67,24 @@ export RADAR_MIGRATION_REHEARSAL_DATABASE_HOST=sub2api-radar-v11-rehearsal-postg
 export RADAR_MIGRATION_REHEARSAL_DATABASE_PASSWORD=<secret from the staging secret store>
 export RADAR_CONTROL_PLANE_IMAGE=registry.example/sub2api/radar-control-plane@sha256:<candidate>
 export RADAR_CONTROL_PLANE_IMAGE_DIGEST=sha256:<candidate>
+export RADAR_WORKER_IMAGE=registry.example/sub2api/radar-worker@sha256:<candidate-worker>
+export RADAR_WORKER_IMAGE_DIGEST=sha256:<candidate-worker>
 export RADAR_V10_ROLLBACK_CONTROL_PLANE_IMAGE=registry.example/sub2api/radar-control-plane@sha256:<v10>
 export RADAR_V10_ROLLBACK_CONTROL_PLANE_IMAGE_DIGEST=sha256:<v10>
+export RADAR_V10_ROLLBACK_WORKER_IMAGE=registry.example/sub2api/radar-worker@sha256:<v10-worker>
+export RADAR_V10_ROLLBACK_WORKER_IMAGE_DIGEST=sha256:<v10-worker>
 deploy/radar/rehearse-v01171-migrations.sh
 ```
 
 The helper creates only resources whose names end in `-rehearsal`, restores the
 backup into a fresh PostgreSQL volume, records the migration list before and
 after candidate startup, restarts the candidate to prove idempotency, and boots
-the retained v10 image against the forward schema. The evidence directory
-contains migration listings and a redacted JSON summary. A checksum mismatch,
-missing exact filename, candidate health failure, or v10 health failure stops
-the release.
+the retained v10 control plane against the forward schema. It also runs the
+retained v10 Worker with lifecycle protocol version 2. The evidence directory
+contains migration listings and a redacted v2 JSON summary. Require `status`
+to be `passed` and `rollback_worker_probe_ok` to be `true`. A checksum mismatch,
+missing exact filename, candidate health failure, v10 health failure, or Worker
+probe failure stops the release.
 
 Use `RADAR_MIGRATION_REHEARSAL_DRY_RUN=1` to validate inputs and render the
 Docker command plan without creating containers.

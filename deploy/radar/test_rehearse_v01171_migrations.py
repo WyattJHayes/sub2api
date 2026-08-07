@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import os
 import subprocess
 import tempfile
@@ -29,6 +30,8 @@ class MigrationRehearsalContractTests(unittest.TestCase):
         fake_docker.write_text(
             "#!/bin/sh\n"
             "printf '%s\\n' \"$*\" >> \"$RADAR_FAKE_DOCKER_LOG\"\n"
+            "if [ \"$1 $2 $3\" = \"container inspect ${RADAR_FAKE_EXISTING_CONTAINER:-}\" ]; "
+            "then exit 0; fi\n"
             "if [ \"$1 $2\" = 'container inspect' ] || [ \"$1 $2\" = 'volume inspect' ]; then exit 1; fi\n"
             "if [ \"$1 $2\" = 'network inspect' ] && [ \"${RADAR_FAKE_EXISTING_NETWORK:-0}\" = 1 ]; then exit 0; fi\n"
             "if [ \"$1 $2\" = 'network inspect' ]; then exit 1; fi\n"
@@ -55,8 +58,14 @@ class MigrationRehearsalContractTests(unittest.TestCase):
             "RADAR_MIGRATION_REHEARSAL_DATABASE_HOST": "radar-rehearsal-postgres",
             "RADAR_CONTROL_PLANE_IMAGE": "registry.example.invalid/sub2api/control@sha256:" + "a" * 64,
             "RADAR_CONTROL_PLANE_IMAGE_DIGEST": "sha256:" + "a" * 64,
+            "RADAR_WORKER_IMAGE": "registry.example.invalid/sub2api/worker@sha256:" + "c" * 64,
+            "RADAR_WORKER_IMAGE_DIGEST": "sha256:" + "c" * 64,
             "RADAR_V10_ROLLBACK_CONTROL_PLANE_IMAGE": "registry.example.invalid/sub2api/control@sha256:" + "b" * 64,
             "RADAR_V10_ROLLBACK_CONTROL_PLANE_IMAGE_DIGEST": "sha256:" + "b" * 64,
+            "RADAR_V10_ROLLBACK_WORKER_IMAGE": (
+                "registry.example.invalid/sub2api/worker@sha256:" + "d" * 64
+            ),
+            "RADAR_V10_ROLLBACK_WORKER_IMAGE_DIGEST": "sha256:" + "d" * 64,
         }
 
     def _run(self, **overrides: str) -> subprocess.CompletedProcess[str]:
@@ -95,6 +104,22 @@ class MigrationRehearsalContractTests(unittest.TestCase):
         self.assertIn("rollback control-plane digest", result.stderr)
         self.assertFalse(self.log.exists())
 
+    def test_rollback_worker_digest_is_required(self) -> None:
+        result = self._run(RADAR_V10_ROLLBACK_WORKER_IMAGE_DIGEST="")
+        self.assertNotEqual(0, result.returncode)
+        self.assertIn("rollback Worker digest", result.stderr)
+        self.assertFalse(self.log.exists())
+
+    def test_rollback_worker_image_must_match_digest(self) -> None:
+        result = self._run(
+            RADAR_V10_ROLLBACK_WORKER_IMAGE=(
+                "registry.example.invalid/sub2api/worker@sha256:" + "e" * 64
+            )
+        )
+        self.assertNotEqual(0, result.returncode)
+        self.assertIn("rollback Worker image must end with its digest", result.stderr)
+        self.assertFalse(self.log.exists())
+
     def test_production_project_name_is_rejected(self) -> None:
         result = self._run(RADAR_MIGRATION_REHEARSAL_PROJECT_NAME="sub2api")
         self.assertNotEqual(0, result.returncode)
@@ -118,13 +143,41 @@ class MigrationRehearsalContractTests(unittest.TestCase):
         self.assertIn("network inspect sub2api-radar-v11-rehearsal-network", commands)
         self.assertNotIn("network create", commands)
 
+    def test_existing_rollback_worker_probe_is_rejected_before_create(self) -> None:
+        result = self._run(
+            RADAR_MIGRATION_REHEARSAL_DRY_RUN="0",
+            RADAR_FAKE_EXISTING_CONTAINER="sub2api-radar-v11-rehearsal-rollback-worker",
+        )
+        self.assertNotEqual(0, result.returncode)
+        self.assertIn("rehearsal container already exists", result.stderr)
+        commands = self.log.read_text(encoding="utf-8")
+        self.assertIn(
+            "container inspect sub2api-radar-v11-rehearsal-rollback-worker",
+            commands,
+        )
+        self.assertNotIn("network create", commands)
+
     def test_valid_fixture_renders_disposable_commands(self) -> None:
         result = self._run()
         self.assertEqual(0, result.returncode, result.stderr)
         self.assertIn("migration rehearsal dry-run passed", result.stdout)
         self.assertIn("pg_restore", result.stdout)
         self.assertIn("sub2api-radar-v11-rehearsal", result.stdout)
+        self.assertIn(
+            "rollback_worker_image=registry.example.invalid/sub2api/worker@sha256:" + "d" * 64,
+            result.stdout,
+        )
+        self.assertNotIn("redacted-fixture", result.stdout)
         self.assertTrue(self.log.exists())
+        summary = json.loads(
+            (self.backup.parent / "evidence" / "summary.json").read_text(encoding="utf-8")
+        )
+        self.assertEqual("radar-v01171-migration-rehearsal-v2", summary["schema_version"])
+        self.assertEqual("sha256:" + "a" * 64, summary["candidate_control_plane_digest"])
+        self.assertEqual("sha256:" + "c" * 64, summary["candidate_worker_digest"])
+        self.assertEqual("sha256:" + "b" * 64, summary["rollback_control_plane_digest"])
+        self.assertEqual("sha256:" + "d" * 64, summary["rollback_worker_digest"])
+        self.assertFalse(summary["rollback_worker_probe_ok"])
 
 
 if __name__ == "__main__":

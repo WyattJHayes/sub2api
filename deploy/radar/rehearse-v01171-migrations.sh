@@ -17,8 +17,12 @@ POSTGRES_IMAGE=${RADAR_MIGRATION_REHEARSAL_POSTGRES_IMAGE:-postgres:18-alpine}
 REDIS_IMAGE=${RADAR_MIGRATION_REHEARSAL_REDIS_IMAGE:-redis:8-alpine}
 CANDIDATE_IMAGE=${RADAR_CONTROL_PLANE_IMAGE:-}
 CANDIDATE_DIGEST=${RADAR_CONTROL_PLANE_IMAGE_DIGEST:-}
+CANDIDATE_WORKER_IMAGE=${RADAR_WORKER_IMAGE:-}
+CANDIDATE_WORKER_DIGEST=${RADAR_WORKER_IMAGE_DIGEST:-}
 ROLLBACK_IMAGE=${RADAR_V10_ROLLBACK_CONTROL_PLANE_IMAGE:-}
 ROLLBACK_DIGEST=${RADAR_V10_ROLLBACK_CONTROL_PLANE_IMAGE_DIGEST:-}
+ROLLBACK_WORKER_IMAGE=${RADAR_V10_ROLLBACK_WORKER_IMAGE:-}
+ROLLBACK_WORKER_DIGEST=${RADAR_V10_ROLLBACK_WORKER_IMAGE_DIGEST:-}
 EVIDENCE_DIR=${RADAR_MIGRATION_REHEARSAL_EVIDENCE_DIR:-}
 DRY_RUN=${RADAR_MIGRATION_REHEARSAL_DRY_RUN:-0}
 
@@ -31,6 +35,7 @@ DB_CONTAINER="${RESOURCE_PREFIX}-postgres"
 REDIS_CONTAINER="${RESOURCE_PREFIX}-redis"
 CANDIDATE_CONTAINER="${RESOURCE_PREFIX}-candidate"
 ROLLBACK_CONTAINER="${RESOURCE_PREFIX}-rollback"
+ROLLBACK_WORKER_CONTAINER="${RESOURCE_PREFIX}-rollback-worker"
 NETWORK="${RESOURCE_PREFIX}-network"
 VOLUME="${RESOURCE_PREFIX}-postgres"
 NETWORK_CREATED=0
@@ -107,9 +112,13 @@ validate_inputs() {
         DATABASE_PASSWORD=$(awk -F= '$1 == "DATABASE_PASSWORD" {sub(/^[^=]*=/, ""); print; exit}' "$ENV_FILE")
     fi
     require_digest "candidate control-plane digest" "$CANDIDATE_DIGEST"
+    require_digest "candidate Worker digest" "$CANDIDATE_WORKER_DIGEST"
     require_digest "rollback control-plane digest" "$ROLLBACK_DIGEST"
+    require_digest "rollback Worker digest" "$ROLLBACK_WORKER_DIGEST"
     require_image_binding "candidate control-plane" "$CANDIDATE_IMAGE" "$CANDIDATE_DIGEST"
+    require_image_binding "candidate Worker" "$CANDIDATE_WORKER_IMAGE" "$CANDIDATE_WORKER_DIGEST"
     require_image_binding "rollback control-plane" "$ROLLBACK_IMAGE" "$ROLLBACK_DIGEST"
+    require_image_binding "rollback Worker" "$ROLLBACK_WORKER_IMAGE" "$ROLLBACK_WORKER_DIGEST"
 
     [[ "$PROJECT_NAME" =~ ^[a-z0-9][a-z0-9_-]{2,62}-rehearsal$ ]] || \
         fail "rehearsal project must end with -rehearsal"
@@ -158,7 +167,8 @@ cleanup() {
     [[ "$DRY_RUN" == 1 ]] && return 0
     [[ -n ${DOCKER_READY:-} ]] || return 0
     if [[ "$CONTAINERS_STARTED" == 1 ]]; then
-        docker rm -f "$ROLLBACK_CONTAINER" "$CANDIDATE_CONTAINER" "$REDIS_CONTAINER" "$DB_CONTAINER" >/dev/null 2>&1 || true
+        docker rm -f "$ROLLBACK_WORKER_CONTAINER" "$ROLLBACK_CONTAINER" "$CANDIDATE_CONTAINER" \
+            "$REDIS_CONTAINER" "$DB_CONTAINER" >/dev/null 2>&1 || true
     fi
     if [[ "$NETWORK_CREATED" == 1 ]]; then
         docker network rm "$NETWORK" >/dev/null 2>&1 || true
@@ -170,22 +180,38 @@ cleanup() {
 
 write_summary() {
     local status=$1
+    local rollback_worker_probe_ok=$2
     local summary_path=$EVIDENCE_DIR/summary.json
-    python3 - "$summary_path" "$status" "$BACKUP_SHA256" "$CANDIDATE_DIGEST" "$ROLLBACK_DIGEST" "$PROJECT_NAME" <<'PY'
+    python3 - "$summary_path" "$status" "$BACKUP_SHA256" "$CANDIDATE_DIGEST" \
+        "$CANDIDATE_WORKER_DIGEST" "$ROLLBACK_DIGEST" "$ROLLBACK_WORKER_DIGEST" \
+        "$PROJECT_NAME" "$rollback_worker_probe_ok" <<'PY'
 import json
 import pathlib
 import sys
 from datetime import datetime, timezone
 
-path, status, backup_sha256, candidate_digest, rollback_digest, project = sys.argv[1:]
+(
+    path,
+    status,
+    backup_sha256,
+    candidate_digest,
+    candidate_worker_digest,
+    rollback_digest,
+    rollback_worker_digest,
+    project,
+    rollback_worker_probe_ok,
+) = sys.argv[1:]
 document = {
-    "schema_version": "radar-v01171-migration-rehearsal-v1",
+    "schema_version": "radar-v01171-migration-rehearsal-v2",
     "recorded_at": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
     "status": status,
     "project": project,
     "backup_sha256": backup_sha256,
     "candidate_control_plane_digest": candidate_digest,
+    "candidate_worker_digest": candidate_worker_digest,
     "rollback_control_plane_digest": rollback_digest,
+    "rollback_worker_digest": rollback_worker_digest,
+    "rollback_worker_probe_ok": rollback_worker_probe_ok == "true",
 }
 target = pathlib.Path(path)
 target.parent.mkdir(parents=True, exist_ok=True)
@@ -201,8 +227,10 @@ render_plan() {
     printf 'postgres_network=%s\n' "$NETWORK"
     printf 'pg_restore --clean --if-exists --no-owner --dbname=%s\n' "$DATABASE_NAME"
     printf 'candidate_image=%s\n' "$CANDIDATE_IMAGE"
+    printf 'candidate_worker_image=%s\n' "$CANDIDATE_WORKER_IMAGE"
     printf 'rollback_image=%s\n' "$ROLLBACK_IMAGE"
-    write_summary dry_run
+    printf 'rollback_worker_image=%s\n' "$ROLLBACK_WORKER_IMAGE"
+    write_summary dry_run false
 }
 
 wait_for_database() {
@@ -306,7 +334,12 @@ run_rehearsal() {
         -e DATABASE_DBNAME="$DATABASE_NAME" -e REDIS_HOST="$REDIS_CONTAINER" \
         "$ROLLBACK_IMAGE" >/dev/null
     wait_for_health "$ROLLBACK_CONTAINER"
-    write_summary passed
+    docker run --rm --name "$ROLLBACK_WORKER_CONTAINER" --network "$NETWORK" \
+        --entrypoint python -e RADAR_LIFECYCLE_PROTOCOL_VERSION=2 "$ROLLBACK_WORKER_IMAGE" \
+        -c 'import importlib.metadata as m, os; '\
+'assert m.version("sub2api-radar-worker"); '\
+'assert os.environ["RADAR_LIFECYCLE_PROTOCOL_VERSION"] == "2"'
+    write_summary passed true
     printf 'migration rehearsal passed.\n'
 }
 
@@ -323,7 +356,8 @@ require_command python3
 mkdir -p "$EVIDENCE_DIR"
 DOCKER_READY=1
 trap 'cleanup' EXIT
-for resource in "$DB_CONTAINER" "$REDIS_CONTAINER" "$CANDIDATE_CONTAINER" "$ROLLBACK_CONTAINER"; do
+for resource in "$DB_CONTAINER" "$REDIS_CONTAINER" "$CANDIDATE_CONTAINER" "$ROLLBACK_CONTAINER" \
+    "$ROLLBACK_WORKER_CONTAINER"; do
     if docker container inspect "$resource" >/dev/null 2>&1; then
         fail "rehearsal container already exists: $resource"
     fi
