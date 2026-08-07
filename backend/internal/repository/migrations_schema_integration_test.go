@@ -224,8 +224,10 @@ func TestMigration197TrustedLifecycleSchema(t *testing.T) {
 	for _, table := range []string{"evaluation_assignments", "evaluation_grading_jobs", "evaluation_analysis_jobs"} {
 		requireColumn(t, tx, table, "lease_epoch", "bigint", 0, true)
 		requireColumn(t, tx, table, "worker_image_digest", "text", 0, true)
-		requireColumn(t, tx, table, "work_origin", "text", 0, true)
 	}
+	requireColumn(t, tx, "evaluation_assignments", "work_origin", "text", 0, true)
+	requireColumn(t, tx, "evaluation_grading_jobs", "work_origin", "text", 0, false)
+	requireColumn(t, tx, "evaluation_analysis_jobs", "work_origin", "text", 0, false)
 	requireColumn(t, tx, "evaluation_run_events", "transition_version", "bigint", 0, true)
 	requireColumn(t, tx, "evaluation_run_events", "from_status", "character varying", 24, true)
 	requireColumn(t, tx, "evaluation_run_events", "to_status", "character varying", 24, true)
@@ -762,12 +764,44 @@ func TestMigration200ReliabilityAndRecoverySchema(t *testing.T) {
 	require.True(t, writerTrigger)
 }
 
-func TestMigration200ReliabilityAndRecoverySQLIsIdempotent(t *testing.T) {
+func TestMigration200ReliabilityAndRecoveryAnd208AlertScopeSQLAreIdempotent(t *testing.T) {
 	tx := testTx(t)
 	migrationPath := filepath.Join("..", "..", "migrations", "200_add_radar_reliability_and_dr.sql")
 	migrationSQL, err := os.ReadFile(migrationPath)
 	require.NoError(t, err)
 	require.NoError(t, execRadarFixtureSQL(context.Background(), tx, string(migrationSQL)))
+	alertScopeMigrationPath := filepath.Join("..", "..", "migrations", "208_remove_legacy_radar_alert_global_unique.sql")
+	alertScopeMigrationSQL, err := os.ReadFile(alertScopeMigrationPath)
+	require.NoError(t, err)
+	require.NoError(t, execRadarFixtureSQL(context.Background(), tx, `
+		DELETE FROM evaluation_alert_events;
+		DELETE FROM evaluation_alerts;
+		ALTER TABLE evaluation_alerts
+			ADD CONSTRAINT evaluation_alerts_model_route_capability_domain_cause_policy_version_key
+			UNIQUE (model_route, capability_domain, cause, policy_version)
+			DEFERRABLE INITIALLY IMMEDIATE;`))
+	require.NoError(t, execRadarFixtureSQL(context.Background(), tx, string(alertScopeMigrationSQL)))
+	require.NoError(t, execRadarFixtureSQL(context.Background(), tx, string(alertScopeMigrationSQL)))
+
+	var legacyGlobalUnique bool
+	require.NoError(t, tx.QueryRowContext(context.Background(), `
+		SELECT EXISTS (
+			SELECT 1
+			FROM pg_constraint c
+			WHERE c.conrelid='evaluation_alerts'::regclass
+			  AND c.contype='u'
+			  AND pg_get_constraintdef(c.oid) LIKE
+			      'UNIQUE (model_route, capability_domain, cause, policy_version)%'
+		)`).Scan(&legacyGlobalUnique))
+	require.False(t, legacyGlobalUnique, "tenant-owned alerts cannot retain the legacy global unique constraint")
+	requireConstraintDefinitionContains(t, tx, "evaluation_alerts", "uq_evaluation_alerts_tenant_scope",
+		"UNIQUE (tenant_id, model_route, capability_domain, cause, policy_version)")
+	for _, tenantID := range []int64{981001, 981002} {
+		require.NoError(t, execRadarFixtureSQL(context.Background(), tx, `
+			INSERT INTO evaluation_alerts (
+				id, tenant_id, model_route, capability_domain, cause, policy_version
+			) VALUES ($1,$2,'migration-scope','coding','service_quality',1)`, uuid.New(), tenantID))
+	}
 }
 
 func requireColumns(t *testing.T, tx *sql.Tx, table string, columns []string) {

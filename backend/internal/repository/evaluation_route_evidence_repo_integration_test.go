@@ -117,10 +117,15 @@ func TestEvaluationRouteEvidence_SealedIdentityIsImmutable(t *testing.T) {
 			id, schema_version, canonical_semantics_bytes, request_semantics_sha256
 		) VALUES ($1, 'radar-request-semantics-v1', convert_to('{}', 'UTF8'), $2)`,
 		semanticsID, strings.Repeat("1", 64)))
-	require.NoError(t, execRadarFixtureSQL(ctx, tx, `
-		INSERT INTO evaluation_evidence_signing_keys (
-			id, key_reference, status, state_epoch
-		) VALUES ($1, $2, 'active', 1)`, signingKeyID, "test-key-"+uuid.NewString()))
+	err = tx.QueryRowContext(ctx, `
+		SELECT id FROM evaluation_evidence_signing_keys WHERE status='active'`).Scan(&signingKeyID)
+	if errors.Is(err, sql.ErrNoRows) {
+		err = execRadarFixtureSQL(ctx, tx, `
+			INSERT INTO evaluation_evidence_signing_keys (
+				id, key_reference, status, state_epoch
+			) VALUES ($1, $2, 'active', 1)`, signingKeyID, "test-key-"+uuid.NewString())
+	}
+	require.NoError(t, err)
 
 	traceID := "sealed-" + uuid.NewString()
 	require.NoError(t, execRadarFixtureSQL(ctx, tx, `

@@ -185,6 +185,65 @@ func TestEvaluationRepository_ConcurrentLeaseAndLeaseFencing(t *testing.T) {
 	require.Equal(t, 1, attemptTwo)
 }
 
+func TestEvaluationRepository_ClaimDefaultsLegacyNullWorkOrigin(t *testing.T) {
+	ctx := context.Background()
+	fixture := createEvaluationRepositoryFixture(t, 1, []string{"route-a"}, 1)
+	repo := NewEvaluationRepository(integrationDB)
+	run, err := repo.CreateRunWithMatrix(ctx, service.CreateRunInput{
+		PlanID: fixture.planID, TriggerSource: "manual", CreatedBy: fixture.userID,
+	})
+	require.NoError(t, err)
+
+	setLegacyAssignmentWorkOrigin(t, `
+		UPDATE evaluation_assignments
+		SET work_origin=NULL
+		WHERE sample_id IN (SELECT id FROM evaluation_samples WHERE run_id=$1)`, run.ID)
+
+	lease, err := repo.ClaimAssignment(ctx, fixture.workerIDs[0], []string{"coding"}, time.Minute)
+	require.NoError(t, err)
+	require.NotNil(t, lease)
+	require.Equal(t, "initial", lease.WorkOrigin)
+}
+
+func TestEvaluationRepository_ReclaimDefaultsLegacyNullWorkOrigin(t *testing.T) {
+	ctx := context.Background()
+	fixture := createEvaluationRepositoryFixture(t, 1, []string{"route-a"}, 1)
+	repo := NewEvaluationRepository(integrationDB)
+	_, err := repo.CreateRunWithMatrix(ctx, service.CreateRunInput{
+		PlanID: fixture.planID, TriggerSource: "manual", CreatedBy: fixture.userID,
+	})
+	require.NoError(t, err)
+
+	old, err := repo.ClaimAssignment(ctx, fixture.workerIDs[0], []string{"coding"}, time.Minute)
+	require.NoError(t, err)
+	require.NotNil(t, old)
+	setLegacyAssignmentWorkOrigin(t, `
+		UPDATE evaluation_assignments
+		SET work_origin=NULL, lease_expires_at=NOW()-INTERVAL '1 second'
+		WHERE id=$1`, old.ID)
+
+	fresh, err := repo.ClaimAssignment(ctx, fixture.workerIDs[1], []string{"coding"}, time.Minute)
+	require.NoError(t, err)
+	require.NotNil(t, fresh)
+	require.Equal(t, "reclaimed", fresh.WorkOrigin)
+
+	var persistedOrigin string
+	require.NoError(t, integrationDB.QueryRowContext(ctx,
+		`SELECT work_origin FROM evaluation_assignments WHERE id=$1`, fresh.ID).Scan(&persistedOrigin))
+	require.Equal(t, "reclaimed", persistedOrigin)
+}
+
+func setLegacyAssignmentWorkOrigin(t *testing.T, statement string, args ...any) {
+	t.Helper()
+	ctx := context.Background()
+	tx, err := integrationDB.BeginTx(ctx, nil)
+	require.NoError(t, err)
+	defer func() { _ = tx.Rollback() }()
+	require.NoError(t, execRadarFixtureSQL(ctx, tx, `SET LOCAL session_replication_role = replica`))
+	require.NoError(t, execRadarFixtureSQL(ctx, tx, statement, args...))
+	require.NoError(t, tx.Commit())
+}
+
 func TestEvaluationGradingRepository_FailedAssignmentTerminatesRun(t *testing.T) {
 	ctx := context.Background()
 	fixture := createEvaluationRepositoryFixture(t, 1, []string{"route-a"}, 1)
@@ -851,6 +910,9 @@ func cleanupEvaluationRepositoryFixture(t *testing.T, fixture evaluationReposito
 	for _, statement := range []string{
 		`DELETE FROM evaluation_budget_ledger WHERE run_id IN (SELECT id FROM evaluation_runs WHERE plan_id = $1)`,
 		`DELETE FROM evaluation_artifacts WHERE run_id IN (SELECT id FROM evaluation_runs WHERE plan_id = $1)`,
+		`DELETE FROM evaluation_route_evidence WHERE evaluation_run_id IN (SELECT id FROM evaluation_runs WHERE plan_id = $1)`,
+		`DELETE FROM evaluation_outbox_event_causes WHERE run_id IN (SELECT id FROM evaluation_runs WHERE plan_id = $1)`,
+		`DELETE FROM evaluation_outbox_events WHERE run_id IN (SELECT id FROM evaluation_runs WHERE plan_id = $1)`,
 		`DELETE FROM evaluation_pair_bindings WHERE pair_spec_id IN (SELECT id FROM evaluation_pair_specs WHERE run_id IN (SELECT id FROM evaluation_runs WHERE plan_id = $1))`,
 		`DELETE FROM evaluation_side_specs WHERE pair_spec_id IN (SELECT id FROM evaluation_pair_specs WHERE run_id IN (SELECT id FROM evaluation_runs WHERE plan_id = $1))`,
 		`DELETE FROM evaluation_pair_specs WHERE run_id IN (SELECT id FROM evaluation_runs WHERE plan_id = $1)`,

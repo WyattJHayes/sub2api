@@ -450,10 +450,10 @@ func (r *radarGovernanceRepository) CreateGatePolicy(ctx context.Context, input 
 	}
 	defer func() { _ = tx.Rollback() }()
 	created := true
-	err = tx.QueryRowContext(ctx, `INSERT INTO evaluation_gate_policies (id,version,policy,policy_hash,enforcement_starts_at,created_by,tenant_id) VALUES ($1,$2,$3::jsonb,$4,$5,$6,$7) ON CONFLICT (version) DO NOTHING RETURNING id,version,policy,policy_hash,enforcement_starts_at,created_by,created_at,retired_at`, id, input.Version, string(input.Policy), policyHash, input.EnforcementStartsAt, input.CreatedBy, policyTenantID).Scan(&p.ID, &p.Version, &p.Policy, &p.PolicyHash, &p.EnforcementStartsAt, &p.CreatedBy, &p.CreatedAt, &p.RetiredAt)
+	err = tx.QueryRowContext(ctx, `INSERT INTO evaluation_gate_policies (id,version,policy,policy_hash,enforcement_starts_at,created_by,tenant_id) VALUES ($1,$2,$3::jsonb,$4,$5,$6,$7) ON CONFLICT (tenant_id,version) DO NOTHING RETURNING id,version,policy,policy_hash,enforcement_starts_at,created_by,created_at,retired_at`, id, input.Version, string(input.Policy), policyHash, input.EnforcementStartsAt, input.CreatedBy, policyTenantID).Scan(&p.ID, &p.Version, &p.Policy, &p.PolicyHash, &p.EnforcementStartsAt, &p.CreatedBy, &p.CreatedAt, &p.RetiredAt)
 	if errors.Is(err, sql.ErrNoRows) {
 		created = false
-		err = tx.QueryRowContext(ctx, `SELECT id,version,policy,policy_hash,enforcement_starts_at,created_by,created_at,retired_at FROM evaluation_gate_policies WHERE version=$1`, input.Version).Scan(&p.ID, &p.Version, &p.Policy, &p.PolicyHash, &p.EnforcementStartsAt, &p.CreatedBy, &p.CreatedAt, &p.RetiredAt)
+		err = tx.QueryRowContext(ctx, `SELECT id,version,policy,policy_hash,enforcement_starts_at,created_by,created_at,retired_at FROM evaluation_gate_policies WHERE tenant_id=$1 AND version=$2`, policyTenantID, input.Version).Scan(&p.ID, &p.Version, &p.Policy, &p.PolicyHash, &p.EnforcementStartsAt, &p.CreatedBy, &p.CreatedAt, &p.RetiredAt)
 		if err == nil && p.PolicyHash != policyHash {
 			return nil, errors.New("gate policy version already exists with different content")
 		}
@@ -689,7 +689,7 @@ func validateFrozenReleaseSubjectBinding(ctx context.Context, tx *sql.Tx, runID 
 	var valid bool
 	err := tx.QueryRowContext(ctx, `
 		WITH frozen_run_binding AS (
-			SELECT r.status, r.route_profile_version, dv.manifest_sha256
+			SELECT r.status, r.tenant_id, r.route_profile_version, dv.manifest_sha256
 			FROM evaluation_runs r
 			JOIN evaluation_plans p ON p.id = r.plan_id
 			JOIN evaluation_dataset_versions dv ON dv.id = p.dataset_version_id
@@ -701,7 +701,9 @@ func validateFrozenReleaseSubjectBinding(ctx context.Context, tx *sql.Tx, runID 
 			LEFT JOIN evaluation_pair_bindings pb ON pb.pair_spec_id = ps.id
 			WHERE ps.run_id = $1
 		), baseline_binding AS (
-			SELECT b.id, b.model_route
+			SELECT b.id, b.model_route,
+			       b.tenant_id AS baseline_tenant_id,
+			       h.tenant_id AS baseline_head_tenant_id
 			FROM evaluation_baselines b
 			JOIN evaluation_baseline_heads h
 			  ON h.baseline_id = b.id
@@ -716,6 +718,8 @@ func validateFrozenReleaseSubjectBinding(ctx context.Context, tx *sql.Tx, runID 
 			WHERE fr.status = 'completed'
 			  AND fr.manifest_sha256 = $4
 			  AND fr.route_profile_version = $5
+			  AND bb.baseline_tenant_id = fr.tenant_id
+			  AND bb.baseline_head_tenant_id = fr.tenant_id
 			  AND pc.pair_count > 0 AND pc.pair_count = pc.binding_count
 			  AND EXISTS (
 				SELECT 1

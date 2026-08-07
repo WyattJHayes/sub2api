@@ -183,7 +183,7 @@ func (r *radarGovernanceRepository) controlRun(ctx context.Context, runID uuid.U
 	case "fence":
 		newEpoch++
 		newStateVersion = row.stateVersion
-		rows, err := tx.QueryContext(ctx, `SELECT a.id, a.sample_id, s.case_id, s.model_route, s.sample_index, a.attempt, a.work_origin FROM evaluation_assignments a JOIN evaluation_samples s ON s.id=a.sample_id WHERE s.run_id=$1 AND a.status IN ('leased','running') FOR UPDATE`, runID)
+		rows, err := tx.QueryContext(ctx, `SELECT a.id, a.sample_id, s.case_id, s.model_route, s.sample_index, a.attempt, COALESCE(a.work_origin, 'initial') FROM evaluation_assignments a JOIN evaluation_samples s ON s.id=a.sample_id WHERE s.run_id=$1 AND a.status IN ('leased','running') FOR UPDATE`, runID)
 		if err != nil {
 			return nil, fmt.Errorf("load retryable runner work: %w", err)
 		}

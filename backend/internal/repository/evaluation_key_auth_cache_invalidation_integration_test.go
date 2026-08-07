@@ -69,7 +69,7 @@ func TestEnableEvaluationKeyInvalidatesCachedOrdinaryKeyBeforeEvaluationRequest(
 
 	token := mustSignEvaluationContext(t, cfg.Radar.SigningSecret, key.ID)
 	router := gin.New()
-	router.Use(servermiddleware.NewAPIKeyAuthMiddleware(apiKeyService, nil, cfg))
+	router.Use(gin.HandlerFunc(servermiddleware.NewAPIKeyAuthMiddleware(apiKeyService, nil, cfg)))
 	router.POST("/evaluation", func(c *gin.Context) { c.Status(http.StatusNoContent) })
 
 	// The first request materializes an ordinary-key snapshot in the shared auth cache.

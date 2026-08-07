@@ -97,6 +97,7 @@ func TestStatisticsWorkerPublishesCompleteReliabilitySnapshot(t *testing.T) {
 
 	mismatch := submission
 	mismatch.WorkerImageDigest = "sha256:" + strings.Repeat("e", 64)
+	sealReliabilitySubmission(&mismatch)
 	_, err = gradingRepo.PublishReliabilitySnapshot(ctx, mismatch)
 	require.ErrorIs(t, err, service.ErrWorkerIdentityMismatch)
 }

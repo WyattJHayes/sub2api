@@ -507,8 +507,9 @@ func (r *evaluationRepository) TransitionAssignment(ctx context.Context, input s
 			SET status = $3, heartbeat_at = NOW(), started_at = COALESCE(started_at, NOW()), updated_at = NOW()
 			FROM evaluation_samples s
 			JOIN evaluation_runs r ON r.id = s.run_id
-			JOIN evaluation_workers w ON w.id = a.leased_by AND w.status = 'active' AND w.tenant_id = r.tenant_id
+			JOIN evaluation_workers w ON w.status = 'active' AND w.tenant_id = r.tenant_id
 			WHERE a.id = $1 AND a.sample_id = s.id AND a.lease_token_hash = $2 AND a.lease_expires_at > NOW()
+				AND a.leased_by = w.id
 				AND a.status IN ('leased', 'running') AND a.lease_epoch = r.control_epoch
 				AND ($4::bigint IS NULL OR a.lease_epoch = $4)`
 		assignmentArgs := []any{input.AssignmentID, hashToken(input.LeaseToken), input.To, expectedEpoch}
@@ -525,8 +526,9 @@ func (r *evaluationRepository) TransitionAssignment(ctx context.Context, input s
 				heartbeat_at = NOW(), finished_at = NOW(), updated_at = NOW()
 			FROM evaluation_samples s
 			JOIN evaluation_runs r ON r.id = s.run_id
-			JOIN evaluation_workers w ON w.id = a.leased_by AND w.status = 'active' AND w.tenant_id = r.tenant_id
+			JOIN evaluation_workers w ON w.status = 'active' AND w.tenant_id = r.tenant_id
 			WHERE a.id = $1 AND a.sample_id = s.id AND a.lease_token_hash = $2 AND a.lease_expires_at > NOW()
+				AND a.leased_by = w.id
 				AND a.status IN ('leased', 'running') AND a.lease_epoch = r.control_epoch
 				AND ($4::bigint IS NULL OR a.lease_epoch = $4)`
 		assignmentArgs := []any{input.AssignmentID, hashToken(input.LeaseToken), input.To, expectedEpoch}
@@ -661,7 +663,7 @@ func reclaimExpiredAssignment(ctx context.Context, tx *sql.Tx, capabilities []st
 	err := tx.QueryRowContext(ctx, `
 		SELECT a.id, a.sample_id, s.run_id, s.case_id, s.model_route,
 			s.model_config, s.model_config_sha256, s.priority, s.sample_index, a.attempt,
-			r.control_epoch, a.work_origin
+			r.control_epoch, COALESCE(a.work_origin, 'initial')
 		FROM evaluation_assignments a
 		JOIN evaluation_samples s ON s.id = a.sample_id
 		JOIN evaluation_cases c ON c.id = s.case_id
@@ -741,7 +743,7 @@ func selectPendingAssignment(ctx context.Context, tx *sql.Tx, capabilities []str
 	err := tx.QueryRowContext(ctx, `
 		SELECT a.id, a.sample_id, s.run_id, s.case_id, s.model_route,
 			s.model_config, s.model_config_sha256, s.priority, s.sample_index, a.attempt,
-			r.control_epoch, a.work_origin
+			r.control_epoch, COALESCE(a.work_origin, 'initial')
 		FROM evaluation_assignments a
 		JOIN evaluation_samples s ON s.id = a.sample_id
 		JOIN evaluation_cases c ON c.id = s.case_id

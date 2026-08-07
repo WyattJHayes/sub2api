@@ -7,12 +7,14 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"strings"
 	"sync"
 	"testing"
 	"time"
 
 	"github.com/Wei-Shaw/sub2api/internal/service"
 	"github.com/google/uuid"
+	"github.com/shopspring/decimal"
 	"github.com/stretchr/testify/require"
 )
 
@@ -123,23 +125,53 @@ func TestLoadReliabilityGateSnapshotRejectsMalformedMetrics(t *testing.T) {
 }
 
 func TestLoadReliabilityGateSnapshotRejectsUnreconciledRouteBilling(t *testing.T) {
+	ctx := context.Background()
 	tx := testTx(t)
 	fixture := insertRadarControlPlaneConstraintFixture(t, tx)
+	_, err := tx.ExecContext(ctx, `
+		UPDATE evaluation_plans p
+		SET tenant_id=$1
+		FROM evaluation_runs r
+		WHERE r.id=$2 AND p.id=r.plan_id`, fixture.actorID, fixture.runID)
+	require.NoError(t, err)
+	_, err = tx.ExecContext(ctx, `UPDATE evaluation_runs SET tenant_id=$1 WHERE id=$2`, fixture.actorID, fixture.runID)
+	require.NoError(t, err)
 	require.NoError(t, tx.Commit())
-	ctx := context.Background()
-	ref := publishGateReliabilityHead(t, fixture.runID, "gate-billing-v1", "region:global")
+	tenantCtx := service.WithRadarTenant(ctx, fixture.actorID)
+	loadPlanRepo := NewRadarReliabilityRepository(integrationDB)
+	loadPlan, err := loadPlanRepo.CreateLoadPlan(tenantCtx, service.RadarLoadPlanInput{
+		TenantID: fixture.actorID, Environment: "test", RouteProfileVersion: "route-v1",
+		ModelAliases: []string{"route-a"}, Regions: []string{"global"}, TrafficMode: "closed_loop",
+		ConcurrencyLevels: []int{1}, InputTokenBuckets: []int{128}, OutputTokenBuckets: []int{64},
+		MeasurementSeconds: 60, MinimumValidRequests: 1, MaxRunCost: decimal.NewFromInt(1),
+		MaxConcurrency: 1, ClientImageDigest: "sha256:" + strings.Repeat("a", 64), GeneratorVersion: "loadgen-v1",
+	}, fixture.actorID)
+	require.NoError(t, err)
+	loadPlan, err = loadPlanRepo.PublishLoadPlan(tenantCtx, loadPlan.ID, fixture.actorID)
+	require.NoError(t, err)
+	ref := publishGateReliabilityHeadWithLoadPlan(t, fixture.runID, "gate-billing-v1", "region:global", loadPlan.ID)
 	var apiKeyID int64
 	require.NoError(t, integrationDB.QueryRowContext(ctx, `
-		INSERT INTO api_keys (user_id,key) VALUES ($1,$2) RETURNING id`,
-		fixture.actorID, "billing-gate-key-"+uuid.NewString()).Scan(&apiKeyID))
-	_, err := integrationDB.ExecContext(ctx, `
+		INSERT INTO api_keys (user_id,key,name) VALUES ($1,$2,$3) RETURNING id`,
+		fixture.actorID, "billing-gate-key-"+uuid.NewString(), "billing-gate-key").Scan(&apiKeyID))
+	_, err = integrationDB.ExecContext(ctx, `
 		INSERT INTO evaluation_route_evidence (
 			route_trace_id, evaluation_run_id, sample_id, api_key_id, request_id,
-			requested_model, route_profile_version, region, transport_status, started_at,
+			requested_model, route_profile_version, region, transport_status, started_at, terminal_at,
 			billed_amount, billing_status
-		) VALUES ($1,$2,$3,$4,$5,'route-a','route-v1','default','succeeded',NOW() - INTERVAL '90 seconds',0.01,'incomplete')`,
+		) VALUES ($1,$2,$3,$4,$5,'route-a','route-v1','default','succeeded',NOW() - INTERVAL '90 seconds',NOW() - INTERVAL '90 seconds',0.01,'incomplete')`,
 		uuid.NewString(), fixture.runID, fixture.sampleID, apiKeyID, "billing-request-"+uuid.NewString())
 	require.NoError(t, err)
+	var incompleteCount int
+	require.NoError(t, integrationDB.QueryRowContext(ctx, `
+		SELECT COUNT(*)
+		FROM evaluation_route_evidence e
+		JOIN evaluation_reliability_snapshots s ON s.id=$2
+		WHERE e.evaluation_run_id=$1
+		  AND e.terminal_at >= s.window_start
+		  AND e.terminal_at < s.window_end
+		  AND e.billing_status='incomplete'`, fixture.runID, ref.SnapshotID).Scan(&incompleteCount))
+	require.Equal(t, 1, incompleteCount)
 
 	readTx, err := integrationDB.BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
 	require.NoError(t, err)
@@ -213,11 +245,15 @@ func TestCreateGatePolicyRecordsOneCreatedEventForIdenticalRetry(t *testing.T) {
 }
 
 func publishGateReliabilityHead(t *testing.T, runID uuid.UUID, profileID, sliceKey string) service.RadarGateReliabilitySnapshotRef {
+	return publishGateReliabilityHeadWithLoadPlan(t, runID, profileID, sliceKey, uuid.Nil)
+}
+
+func publishGateReliabilityHeadWithLoadPlan(t *testing.T, runID uuid.UUID, profileID, sliceKey string, loadPlanID uuid.UUID) service.RadarGateReliabilitySnapshotRef {
 	t.Helper()
 	ctx := context.Background()
 	now := time.Now().UTC()
 	snapshot, err := NewEvaluationReliabilityRepository(integrationDB).Publish(ctx, ReliabilitySnapshotInput{
-		RunID: runID, ProfileID: profileID, SliceKey: sliceKey,
+		RunID: runID, LoadPlanID: loadPlanID, ProfileID: profileID, SliceKey: sliceKey,
 		WindowStart: now.Add(-2 * time.Minute), WindowEnd: now.Add(-time.Minute),
 		QueryVersion: "reliability-query-v1", SourceHash: hashString("gate-reliability-source" + uuid.NewString()),
 		FreshUntil: now.Add(time.Hour),
@@ -729,6 +765,12 @@ func TestFrozenReleaseSubjectBindingSelectsBaselineRouteOnPostgres(t *testing.T)
 	tx := testTx(t)
 	ctx := context.Background()
 	fixture := insertRadarControlPlaneConstraintFixture(t, tx)
+	require.NoError(t, execRadarFixtureSQL(ctx, tx, `
+		UPDATE evaluation_plans
+		SET tenant_id=$1
+		WHERE id=(SELECT plan_id FROM evaluation_runs WHERE id=$2)`, fixture.actorID, fixture.runID))
+	require.NoError(t, execRadarFixtureSQL(ctx, tx,
+		`UPDATE evaluation_runs SET tenant_id=$1 WHERE id=$2`, fixture.actorID, fixture.runID))
 	const routeProfile = "radar-route-profile-v1"
 	const runnerDigest = "sha256:runner"
 	const graderDigest = "sha256:grader"
@@ -813,8 +855,8 @@ func TestFrozenReleaseSubjectBindingSelectsBaselineRouteOnPostgres(t *testing.T)
 	datasetManifest := fmt.Sprintf("%064d", 1)
 	require.NoError(t, execRadarFixtureSQL(ctx, tx, `
 		INSERT INTO evaluation_baselines
-			(id,model_route,run_id,dataset_manifest_sha256,evidence_hash,route_profile_version,policy_version,proposed_by)
-		VALUES ($1,'deepseek',$2,$3,$4,$5,9900,$6)`,
+			(id,model_route,run_id,dataset_manifest_sha256,evidence_hash,route_profile_version,policy_version,proposed_by,tenant_id)
+		VALUES ($1,'deepseek',$2,$3,$4,$5,9900,$6,$6)`,
 		baselineID, fixture.runID, datasetManifest, hashString("baseline-evidence"), routeProfile, fixture.actorID))
 	require.NoError(t, execRadarFixtureSQL(ctx, tx, `SELECT set_config('app.evaluation_head_cas','1',true)`))
 	baselineEventID := uuid.New()
@@ -825,8 +867,8 @@ func TestFrozenReleaseSubjectBindingSelectsBaselineRouteOnPostgres(t *testing.T)
 		baselineEventID, baselineID, hashString("baseline-evidence"), fixture.actorID))
 	require.NoError(t, execRadarFixtureSQL(ctx, tx, `
 		INSERT INTO evaluation_baseline_heads
-			(environment,scope_type,scope_id,model_route,baseline_id,event_id)
-		VALUES ('production','global','global','deepseek',$1,$2)`, baselineID, baselineEventID))
+			(tenant_id,environment,scope_type,scope_id,model_route,baseline_id,event_id)
+		VALUES ($1,'production','global','global','deepseek',$2,$3)`, fixture.actorID, baselineID, baselineEventID))
 
 	subject := releaseSubjectFixture()
 	subject.BaselineID = baselineID
@@ -844,6 +886,18 @@ func TestFrozenReleaseSubjectBindingSelectsBaselineRouteOnPostgres(t *testing.T)
 	valid, err = validateFrozenReleaseSubjectBinding(ctx, tx, fixture.runID, subject)
 	require.NoError(t, err)
 	require.False(t, valid, "selected deepseek branch must reject qwen candidate identity")
+
+	require.NoError(t, execRadarFixtureSQL(ctx, tx, `SET LOCAL session_replication_role = replica`))
+	otherTenantID := fixture.actorID + 1_000_000
+	require.NoError(t, execRadarFixtureSQL(ctx, tx,
+		`UPDATE evaluation_baselines SET tenant_id=$1 WHERE id=$2`, otherTenantID, baselineID))
+	require.NoError(t, execRadarFixtureSQL(ctx, tx,
+		`UPDATE evaluation_baseline_heads SET tenant_id=$1 WHERE baseline_id=$2`, otherTenantID, baselineID))
+
+	subject.CandidateModelConfigSHA256 = candidateHashes["deepseek"]
+	valid, err = validateFrozenReleaseSubjectBinding(ctx, tx, fixture.runID, subject)
+	require.NoError(t, err)
+	require.False(t, valid, "baseline and head from another tenant must not satisfy a frozen release binding")
 }
 
 func TestTrustedGovernanceRecordsAreImmutable(t *testing.T) {

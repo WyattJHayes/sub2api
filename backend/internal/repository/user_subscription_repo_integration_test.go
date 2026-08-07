@@ -23,6 +23,7 @@ type UserSubscriptionRepoSuite struct {
 
 func (s *UserSubscriptionRepoSuite) SetupTest() {
 	s.ctx = context.Background()
+	resetUserAndGroupFixtures(s.T())
 	tx := testEntTx(s.T())
 	s.client = tx.Client()
 	s.repo = NewUserSubscriptionRepository(s.client).(*userSubscriptionRepository)

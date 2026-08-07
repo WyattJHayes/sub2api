@@ -134,8 +134,8 @@ func TestRunFencePropagatesAssignmentReplacement(t *testing.T) {
 		if _, err := tx.ExecContext(ctx, `
 			INSERT INTO evaluation_assignments (
 				id, sample_id, attempt, idempotency_key, status, lease_token_hash,
-				leased_by, lease_expires_at, lease_epoch
-			) VALUES ($1,$2,$3,$4,'leased',$5,$6,NOW()+INTERVAL '1 minute',1)`,
+				leased_by, lease_expires_at, lease_epoch, work_origin
+			) VALUES ($1,$2,$3,$4,'leased',$5,$6,NOW()+INTERVAL '1 minute',1,NULL)`,
 			leasedAssignmentID, sampleID, currentAttempt+1,
 			assignmentIdempotencyKey(runID, caseID, modelRoute, sampleIndex, currentAttempt+1),
 			hashToken("fence-replacement-"+uuid.NewString()), fixture.workerIDs[1]); err != nil {
@@ -156,6 +156,10 @@ func TestRunFencePropagatesAssignmentReplacement(t *testing.T) {
 	)
 	require.NoError(t, err)
 	require.Len(t, result.ReplacementIDs, 1)
+	var replacementOrigin string
+	require.NoError(t, integrationDB.QueryRowContext(ctx,
+		`SELECT work_origin FROM evaluation_assignments WHERE id=$1`, result.ReplacementIDs[0]).Scan(&replacementOrigin))
+	require.Equal(t, "initial", replacementOrigin)
 	var replacementEvents int
 	require.NoError(t, integrationDB.QueryRowContext(ctx, `
 		SELECT COUNT(*) FROM evaluation_outbox_events

@@ -146,7 +146,7 @@ func TestAggregateHeadOutboxPreservesRepeatedContentAdvance(t *testing.T) {
 	var eventCount int
 	require.NoError(t, integrationDB.QueryRowContext(ctx, `
 		SELECT COUNT(*) FROM evaluation_outbox_events
-		WHERE run_id=$1 AND event_type='global_recompute' AND source_type='aggregate_head'`, runID).Scan(&eventCount))
+		WHERE run_id=$1 AND event_type='gate_reevaluation' AND source_type='aggregate_head'`, runID).Scan(&eventCount))
 	require.Equal(t, 2, eventCount)
 }
 

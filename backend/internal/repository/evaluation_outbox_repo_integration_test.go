@@ -73,7 +73,7 @@ func TestCellAggregateHeadEmitsEveryScoreCause(t *testing.T) {
 	var eventID uuid.UUID
 	require.NoError(t, integrationDB.QueryRowContext(ctx, `
 		SELECT id FROM evaluation_outbox_events
-		WHERE event_type='global_recompute' AND source_type='aggregate_head'
+		WHERE event_type='gate_reevaluation' AND source_type='aggregate_head'
 		  AND source_id=$1`, snapshot.ID.String()).Scan(&eventID))
 	var causes, sourceHeads int
 	require.NoError(t, integrationDB.QueryRowContext(ctx, `
@@ -305,6 +305,11 @@ func TestDeadLetterReplayKeepsEventIdentityAndCauses(t *testing.T) {
 		Causes: []service.EvaluationOutboxCause{{EventID: causeID}},
 	})
 	require.NoError(t, err)
+	rootClaim, err := repo.Claim(ctx, fixture.workerIDs[0], []string{"root_fixture"}, 1, time.Minute)
+	require.NoError(t, err)
+	require.Len(t, rootClaim, 1)
+	require.Equal(t, causeID, rootClaim[0].ID)
+	require.NoError(t, repo.Complete(ctx, causeID, rootClaim[0].LeaseToken, rootClaim[0].LeaseEpoch))
 	claimed, err := repo.Claim(ctx, fixture.workerIDs[0], []string{"dead_letter_replay_test"}, 1, time.Minute)
 	require.NoError(t, err)
 	require.Len(t, claimed, 1)
@@ -320,6 +325,42 @@ func TestDeadLetterReplayKeepsEventIdentityAndCauses(t *testing.T) {
 	require.NoError(t, integrationDB.QueryRowContext(ctx, `
 		SELECT COUNT(*) FROM evaluation_outbox_event_causes WHERE event_id=$1`, event.ID).Scan(&causeCount))
 	require.Equal(t, 1, causeCount)
+}
+
+func TestEvaluationRepositoryFixtureCleanupRemovesOutboxEvents(t *testing.T) {
+	ctx := context.Background()
+	var causeID, eventID uuid.UUID
+
+	t.Run("create fixture outbox event and cause", func(t *testing.T) {
+		fixture := createEvaluationRepositoryFixture(t, 1, []string{"route-a"}, 1)
+		run, err := NewEvaluationRepository(integrationDB).CreateRunWithMatrix(ctx, service.CreateRunInput{
+			PlanID: fixture.planID, TriggerSource: "manual", CreatedBy: fixture.userID,
+		})
+		require.NoError(t, err)
+		causeID = insertEvaluationOutboxRootFixture(t, run.ID, "fixture_cleanup", strings.Repeat("8", 64))
+		event, err := NewEvaluationOutboxRepository(integrationDB).Enqueue(ctx, service.EnqueueEvaluationOutboxInput{
+			EventType: "fixture_cleanup_child", RunID: run.ID, ScopeKey: "global/global",
+			AnalysisVersion: "v1", SourceType: "fixture_cleanup", SourceID: uuid.NewString(),
+			SourceHash: strings.Repeat("9", 64), Payload: json.RawMessage(`{}`),
+			Causes: []service.EvaluationOutboxCause{{EventID: causeID}},
+		})
+		require.NoError(t, err)
+		eventID = event.ID
+		var causes int
+		require.NoError(t, integrationDB.QueryRowContext(ctx, `
+			SELECT COUNT(*) FROM evaluation_outbox_event_causes
+			WHERE event_id=$1 AND cause_event_id=$2`, eventID, causeID).Scan(&causes))
+		require.Equal(t, 1, causes)
+	})
+
+	var remainingEvents, remainingCauses int
+	require.NoError(t, integrationDB.QueryRowContext(ctx, `
+		SELECT COUNT(*) FROM evaluation_outbox_events WHERE id IN ($1,$2)`, causeID, eventID).Scan(&remainingEvents))
+	require.Zero(t, remainingEvents, "fixture cleanup must remove events before it removes the run")
+	require.NoError(t, integrationDB.QueryRowContext(ctx, `
+		SELECT COUNT(*) FROM evaluation_outbox_event_causes
+		WHERE event_id=$1 AND cause_event_id=$2`, eventID, causeID).Scan(&remainingCauses))
+	require.Zero(t, remainingCauses, "fixture cleanup must remove outbox cause relationships before it removes the run")
 }
 
 func insertEvaluationOutboxRootFixture(t *testing.T, runID uuid.UUID, sourceType, sourceHash string) uuid.UUID {
