@@ -72,19 +72,18 @@
             </div>
             <span v-else class="font-medium text-gray-900 dark:text-white">{{ row.model }}</span>
             <div
-              v-if="row.upstream_model_mismatch === true && row.upstream_response_model"
-              class="break-all pl-3 text-[11px]"
-              :class="isLikelyModelVariant(row) ? 'text-amber-600 dark:text-amber-400' : 'text-orange-600 dark:text-orange-400'"
-              :title="modelAuditTitle(row)"
+              class="flex flex-wrap items-center gap-x-1.5 gap-y-1 break-all pl-3 text-[11px]"
+              :class="upstreamModelStatusTextClass(row)"
+              :title="upstreamResponseTitle(row)"
             >
-              <span class="mr-1">↳ {{ t('usage.upstreamResponseModel') }}:</span>{{ row.upstream_response_model }}
+              <span class="mr-1">↳ {{ t('usage.upstreamResponseModel') }}:</span>{{ upstreamResponseModel(row) }}
               <span
-                class="ml-1 inline-flex rounded px-1 py-px text-[10px] font-medium ring-1 ring-inset"
-                :class="isLikelyModelVariant(row)
-                  ? 'bg-amber-50 text-amber-700 ring-amber-200 dark:bg-amber-500/10 dark:text-amber-300 dark:ring-amber-500/30'
-                  : 'bg-orange-50 text-orange-700 ring-orange-200 dark:bg-orange-500/10 dark:text-orange-300 dark:ring-orange-500/30'"
+                data-testid="upstream-model-status"
+                :data-status="upstreamModelStatus(row)"
+                class="inline-flex rounded px-1 py-px text-[10px] font-medium ring-1 ring-inset"
+                :class="upstreamModelStatusBadgeClass(row)"
               >
-                {{ isLikelyModelVariant(row) ? t('usage.modelVariant') : t('usage.modelMismatch') }}
+                {{ t(upstreamModelStatusLabel(row)) }}
               </span>
             </div>
           </div>
@@ -589,24 +588,55 @@ const showIpGeoToolbar = computed(() => props.columns.some((col) => col.key === 
 
 const sentUpstreamModel = (row: AdminUsageLog): string => row.upstream_model?.trim() || row.model?.trim() || ''
 
-const normalizeModelVariant = (model: string): string => model
-  .trim()
-  .toLowerCase()
-  .replace(/-latest$/, '')
-  .replace(/-\d{4}-\d{2}-\d{2}$/, '')
-  .replace(/-\d{8}$/, '')
+type UpstreamModelStatus = 'consistent' | 'unknown' | 'mismatch'
 
-const isLikelyModelVariant = (row: AdminUsageLog): boolean => {
-  const sent = sentUpstreamModel(row)
-  const response = row.upstream_response_model?.trim() || ''
-  return sent !== '' && response !== '' && normalizeModelVariant(sent) === normalizeModelVariant(response)
+const upstreamModelStatus = (row: AdminUsageLog): UpstreamModelStatus => {
+  if (!row.upstream_response_model?.trim()) return 'unknown'
+  if (row.upstream_model_mismatch === true) return 'mismatch'
+  if (row.upstream_model_mismatch === false) return 'consistent'
+  return 'unknown'
 }
+
+const upstreamModelStatusLabel = (row: AdminUsageLog): string => {
+  const status = upstreamModelStatus(row)
+  if (status === 'consistent') return 'usage.modelConsistent'
+  if (status === 'mismatch') return 'usage.modelMismatch'
+  return 'usage.modelUnknown'
+}
+
+const upstreamModelStatusTextClass = (row: AdminUsageLog): string => {
+  const status = upstreamModelStatus(row)
+  if (status === 'consistent') return 'text-emerald-600 dark:text-emerald-400'
+  if (status === 'mismatch') return 'text-red-600 dark:text-red-400'
+  return 'text-amber-600 dark:text-amber-400'
+}
+
+const upstreamModelStatusBadgeClass = (row: AdminUsageLog): string => {
+  const status = upstreamModelStatus(row)
+  if (status === 'consistent') {
+    return 'bg-emerald-50 text-emerald-700 ring-emerald-200 dark:bg-emerald-500/10 dark:text-emerald-300 dark:ring-emerald-500/30'
+  }
+  if (status === 'mismatch') {
+    return 'bg-red-50 text-red-700 ring-red-200 dark:bg-red-500/10 dark:text-red-300 dark:ring-red-500/30'
+  }
+  return 'bg-amber-50 text-amber-700 ring-amber-200 dark:bg-amber-500/10 dark:text-amber-300 dark:ring-amber-500/30'
+}
+
+const upstreamResponseModel = (row: AdminUsageLog): string =>
+  row.upstream_response_model?.trim() || t('usage.upstreamResponseUnknown')
 
 const modelAuditTitle = (row: AdminUsageLog): string => [
   `${t('usage.requestedModel')}: ${row.model || '-'}`,
   `${t('usage.sentUpstreamModel')}: ${sentUpstreamModel(row) || '-'}`,
   `${t('usage.upstreamResponseModel')}: ${row.upstream_response_model || '-'}`,
 ].join('\n')
+
+const upstreamResponseTitle = (row: AdminUsageLog): string => {
+  const response = row.upstream_response_model?.trim()
+  if (!response) return t('usage.upstreamResponseUnknownHint')
+  if (row.upstream_model_mismatch === true) return modelAuditTitle(row)
+  return `${t('usage.upstreamResponseModel')}: ${response}`
+}
 
 const currentPageIps = computed(() =>
   Array.from(new Set(props.data.map((row) => row.ip_address).filter((ip): ip is string => Boolean(ip))))

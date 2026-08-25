@@ -64,8 +64,11 @@ const messages: Record<string, string> = {
 	'usage.requestedModel': 'Requested',
 	'usage.sentUpstreamModel': 'Sent upstream',
 	'usage.upstreamResponseModel': 'Upstream response',
-	'usage.modelVariant': 'Possible version variant',
-	'usage.modelMismatch': 'Different model',
+	'usage.upstreamResponseUnknown': 'Unknown',
+	'usage.upstreamResponseUnknownHint': 'No upstream response model is available for this request',
+	'usage.modelConsistent': 'Model consistent',
+	'usage.modelUnknown': 'Model unknown',
+	'usage.modelMismatch': 'Model mismatch',
 }
 
 vi.mock('vue-i18n', async () => {
@@ -256,26 +259,13 @@ describe('admin UsageTable tooltip', () => {
     expect(text).toContain('claude-sonnet-4-20250514')
   })
 
-	it.each([
-		{
-			name: 'possible version variant',
-			responseModel: 'gpt-5.5-2026-08-01',
-			expectedBadge: 'Possible version variant',
-		},
-		{
-			name: 'different upstream model',
-			responseModel: 'gpt-5.4',
-			expectedBadge: 'Different model',
-		},
-	])('shows a compact upstream response audit marker for $name', ({ responseModel, expectedBadge }) => {
+	it('shows a red model mismatch status for every mismatched response', () => {
 		const wrapper = mount(UsageTable, {
 			props: {
 				data: [{
-					request_id: `req-${responseModel}`,
+					request_id: 'req-model-mismatch',
 					model: 'gpt-5.6-sol',
-					upstream_model: 'gpt-5.5',
-					model_mapping_chain: 'gpt-5.6-sol→gpt-5.5',
-					upstream_response_model: responseModel,
+					upstream_response_model: 'gpt-5.4',
 					upstream_model_mismatch: true,
 				}],
 				loading: false,
@@ -293,9 +283,63 @@ describe('admin UsageTable tooltip', () => {
 
 		const text = wrapper.text()
 		expect(text).toContain('gpt-5.6-sol')
-		expect(text).toContain('gpt-5.5')
-		expect(text).toContain(responseModel)
-		expect(text).toContain(expectedBadge)
+		expect(text).toContain('gpt-5.4')
+		expect(text).toContain('Model mismatch')
+		expect(wrapper.get('[data-testid="upstream-model-status"]').attributes('data-status')).toBe('mismatch')
+		expect(wrapper.get('[data-testid="upstream-model-status"]').classes()).toContain('text-red-700')
+	})
+
+	it('shows a green model consistent status when the response matches the sent model', () => {
+		const wrapper = mount(UsageTable, {
+			props: {
+				data: [{
+					request_id: 'req-user-model-match',
+					model: 'gpt-5.6-luna',
+					upstream_model: 'gpt-5.6-luna',
+					upstream_response_model: 'gpt-5.6-luna',
+					upstream_model_mismatch: false,
+				}],
+				loading: false,
+				columns: [],
+			},
+			global: {
+				stubs: {
+					DataTable: DataTableStub,
+					EmptyState: true,
+					Icon: true,
+					Teleport: true,
+				},
+			},
+		})
+
+		const text = wrapper.text()
+		expect(text).toContain('Upstream response:gpt-5.6-luna')
+		expect(text).toContain('Model consistent')
+		expect(wrapper.get('[data-testid="upstream-model-status"]').attributes('data-status')).toBe('consistent')
+		expect(wrapper.get('[data-testid="upstream-model-status"]').classes()).toContain('text-emerald-700')
+	})
+
+	it('shows a yellow model unknown status when the upstream response model is unavailable', () => {
+		const wrapper = mount(UsageTable, {
+			props: {
+				data: [{ request_id: 'req-user-model-unknown', model: 'gpt-5.6-luna' }],
+				loading: false,
+				columns: [],
+			},
+			global: {
+				stubs: {
+					DataTable: DataTableStub,
+					EmptyState: true,
+					Icon: true,
+					Teleport: true,
+				},
+			},
+		})
+
+		expect(wrapper.text()).toContain('Upstream response:Unknown')
+		expect(wrapper.text()).toContain('Model unknown')
+		expect(wrapper.get('[data-testid="upstream-model-status"]').attributes('data-status')).toBe('unknown')
+		expect(wrapper.get('[data-testid="upstream-model-status"]').classes()).toContain('text-amber-700')
 	})
 
   it.each([

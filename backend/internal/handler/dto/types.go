@@ -484,6 +484,12 @@ type UsageLog struct {
 	AccountID int64  `json:"account_id"`
 	RequestID string `json:"request_id"`
 	Model     string `json:"model"`
+	// UpstreamResponseModel is the model declared by the upstream response.
+	// It is safe for the record owner to view, while routing internals remain admin-only.
+	UpstreamResponseModel *string `json:"upstream_response_model,omitempty"`
+	// UpstreamModelMismatch reports whether the upstream response model differed
+	// from the model sent for this request.
+	UpstreamModelMismatch *bool `json:"upstream_model_mismatch,omitempty"`
 	// ServiceTier records the OpenAI service tier used for billing, e.g. "priority" / "flex".
 	ServiceTier *string `json:"service_tier,omitempty"`
 	// ReasoningEffort is the request's reasoning effort level.
@@ -563,10 +569,6 @@ type AdminUsageLog struct {
 	// UpstreamModel is the actual model sent to the upstream provider after mapping.
 	// Omitted when no mapping was applied (requested model was used as-is).
 	UpstreamModel *string `json:"upstream_model,omitempty"`
-	// UpstreamResponseModel is the raw model declared by the upstream response.
-	UpstreamResponseModel *string `json:"upstream_response_model,omitempty"`
-	// UpstreamModelMismatch is nil when the upstream did not declare a model.
-	UpstreamModelMismatch *bool `json:"upstream_model_mismatch,omitempty"`
 
 	// ChannelID 渠道 ID
 	ChannelID *int64 `json:"channel_id,omitempty"`
