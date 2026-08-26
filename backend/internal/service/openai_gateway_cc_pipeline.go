@@ -88,7 +88,19 @@ func (s *OpenAIGatewayService) failoverOpenAIUpstreamHTTPError(
 	upstreamMsg string,
 	upstreamModel string,
 ) *UpstreamFailoverError {
-	if !s.shouldFailoverOpenAIUpstreamResponse(resp.StatusCode, upstreamMsg, respBody) {
+	shouldFailover := s.shouldFailoverOpenAIUpstreamResponse(resp.StatusCode, upstreamMsg, respBody)
+	tempUnscheduled := false
+	if c != nil && account != nil && account.Platform != PlatformGrok && !shouldFailover && !IsResponseCommitted(c) && s.rateLimitService != nil {
+		tempUnscheduled = s.rateLimitService.CheckErrorPolicy(ctx, account, resp.StatusCode, respBody, upstreamModel) == ErrorPolicyTempUnscheduled
+		shouldFailover = tempUnscheduled
+	}
+	if account != nil && account.Platform == PlatformGrok {
+		shouldFailover = s.shouldFailoverGrokUpstreamError(resp.StatusCode, respBody)
+	}
+	if account != nil && account.Platform == PlatformGrok {
+		s.handleGrokAccountUpstreamError(ctx, account, resp.StatusCode, resp.Header, respBody)
+	}
+	if !shouldFailover {
 		return nil
 	}
 	upstreamDetail := ""
@@ -109,12 +121,19 @@ func (s *OpenAIGatewayService) failoverOpenAIUpstreamHTTPError(
 		Message:            upstreamMsg,
 		Detail:             upstreamDetail,
 	})
-	s.handleOpenAIAccountUpstreamError(ctx, account, resp.StatusCode, resp.Header, respBody, upstreamModel)
-	return &UpstreamFailoverError{
-		StatusCode:             resp.StatusCode,
-		ResponseBody:           respBody,
-		RetryableOnSameAccount: account.IsPoolMode() && (account.IsPoolModeRetryableStatus(resp.StatusCode) || isOpenAITransientProcessingError(resp.StatusCode, upstreamMsg, respBody)),
+	shouldDisable := tempUnscheduled
+	if account.Platform != PlatformGrok && !tempUnscheduled {
+		shouldDisable = s.handleOpenAIAccountUpstreamError(ctx, account, resp.StatusCode, resp.Header, respBody, upstreamModel)
 	}
+	return s.newOpenAIAccountFailoverError(
+		account,
+		resp.StatusCode,
+		resp.Header,
+		respBody,
+		upstreamMsg,
+		shouldDisable,
+		!shouldDisable && account.IsPoolMode() && (account.IsPoolModeRetryableStatus(resp.StatusCode) || isOpenAITransientProcessingError(resp.StatusCode, upstreamMsg, respBody)),
+	)
 }
 
 // openAIChatCompletionsTargetURL 解析账号的（非 Grok）Chat Completions 上游端点。
@@ -133,7 +152,7 @@ func (s *OpenAIGatewayService) openAIChatCompletionsTargetURL(account *Account) 
 // resolveCCFallbackTarget 解析两条 CC 回退路径共用的账号凭证与上游端点
 // （回退路径仅面向 APIKey 账号，凭证恒为 openai api_key）。
 func (s *OpenAIGatewayService) resolveCCFallbackTarget(account *Account) (apiKey string, targetURL string, err error) {
-	apiKey = account.GetOpenAIApiKey()
+	apiKey = strings.TrimSpace(account.GetOpenAIProtocolAPIKey())
 	if apiKey == "" {
 		return "", "", fmt.Errorf("account %d missing api_key", account.ID)
 	}
@@ -159,6 +178,7 @@ func (s *OpenAIGatewayService) sendCCUpstreamRequest(
 	stream bool,
 	bearerToken string,
 	userAgent string,
+	grokCacheIdentity string,
 ) (*http.Response, error) {
 	upstreamCtx, releaseUpstreamCtx := detachUpstreamContext(ctx)
 	upstreamReq, err := http.NewRequestWithContext(upstreamCtx, http.MethodPost, targetURL, bytes.NewReader(body))
@@ -188,14 +208,21 @@ func (s *OpenAIGatewayService) sendCCUpstreamRequest(
 		upstreamReq.Header.Set("user-agent", userAgent)
 	}
 
-	// 账号级请求头覆写（仅 openai api_key 账号启用时生效）
+	if account.Platform == PlatformGrok {
+		if account.IsGrokOAuth() {
+			applyGrokCLIHeaders(upstreamReq.Header)
+		}
+		applyGrokCacheHeaders(upstreamReq.Header, grokCacheIdentity)
+	}
+	// 账号级请求头覆写：放在所有内置默认头（含 Grok CLI 身份头）之后应用，
+	// 使配置值获得除共享传输层强制头之外的最高优先级。
 	account.ApplyHeaderOverrides(upstreamReq.Header)
 
 	proxyURL := ""
 	if account.Proxy != nil {
 		proxyURL = account.Proxy.URL()
 	}
-	resp, err := s.httpUpstream.Do(upstreamReq, proxyURL, account.ID, account.Concurrency)
+	resp, err := s.doOpenAIUpstream(upstreamReq, proxyURL, account)
 	if err != nil {
 		return nil, s.handleOpenAIUpstreamTransportError(ctx, c, account, err, false)
 	}
@@ -222,6 +249,7 @@ type ccStreamScanState struct {
 // emit 回调做各自的协议转换与写出。读错误按既有约定过滤 context 取消类噪声后
 // 记入 Warn 日志。
 func (s *OpenAIGatewayService) scanCCStream(
+	c *gin.Context,
 	resp *http.Response,
 	logPrefix string,
 	requestID string,
@@ -244,6 +272,12 @@ func (s *OpenAIGatewayService) scanCCStream(
 		if payload == "[DONE]" {
 			st.SawDone = true
 			break
+		}
+		// 观察上游 CC chunk 回显的 model / service_tier（计费以回显为准）。
+		// CC chunk 无 type 字段，按 untyped payload 观察（上游约束：只有终止
+		// 事件与无类型 body 报告实际处理档位）。
+		if observer := upstreamResponseModelObserverFromContext(c); observer != nil {
+			observer.ObserveOpenAI([]byte(payload), "")
 		}
 
 		if u := extractCCStreamUsage(payload); u != nil {
@@ -303,6 +337,11 @@ func (s *OpenAIGatewayService) readCCUpstreamJSONResponse(
 	if err := json.Unmarshal(respBody, &ccResp); err != nil {
 		writeError(c, http.StatusBadGateway, "api_error", "Failed to parse upstream response")
 		return nil, OpenAIUsage{}, fmt.Errorf("parse chat completions response: %w", err)
+	}
+	// 观察上游 CC JSON 回显的 model / service_tier（计费以回显为准）。
+	// CC JSON 无 type 字段，按 untyped payload 观察（上游约束）。
+	if observer := upstreamResponseModelObserverFromContext(c); observer != nil {
+		observer.ObserveOpenAI(respBody, "")
 	}
 
 	usage := OpenAIUsage{}

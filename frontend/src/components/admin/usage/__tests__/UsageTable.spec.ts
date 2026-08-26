@@ -4,7 +4,13 @@ const ipGeoMocks = vi.hoisted(() => ({
   fetchBatch: vi.fn(),
 }))
 
+const appStoreMocks = vi.hoisted(() => ({
+  showSuccess: vi.fn(),
+  showError: vi.fn(),
+}))
+
 vi.mock('@/utils/ipGeoLookup', () => ipGeoMocks)
+vi.mock('@/stores/app', () => ({ useAppStore: () => appStoreMocks }))
 
 import { describe, expect, it, vi, beforeEach } from 'vitest'
 import { mount } from '@vue/test-utils'
@@ -51,6 +57,18 @@ const messages: Record<string, string> = {
   'admin.usage.billingModeToken': 'Token',
   'admin.usage.billingModePerRequest': 'Per request',
   'admin.usage.billingModeImage': 'Image',
+	'admin.usage.requestIdCopied': 'Request ID copied',
+	'keys.copied': 'Copied',
+	'keys.copyToClipboard': 'Copy to clipboard',
+	'common.copyFailed': 'Copy failed',
+	'usage.requestedModel': 'Requested',
+	'usage.sentUpstreamModel': 'Sent upstream',
+	'usage.upstreamResponseModel': 'Upstream response',
+	'usage.upstreamResponseUnknown': 'Unknown',
+	'usage.upstreamResponseUnknownHint': 'No upstream response model is available for this request',
+	'usage.modelConsistent': 'Model consistent',
+	'usage.modelUnknown': 'Model unknown',
+	'usage.modelMismatch': 'Model mismatch',
 }
 
 vi.mock('vue-i18n', async () => {
@@ -72,6 +90,7 @@ const DataTableStub = {
         <slot name="cell-billing_mode" :row="row" />
         <slot name="cell-tokens" :row="row" />
         <slot name="cell-cost" :row="row" />
+        <slot name="cell-request_id" :row="row" />
       </div>
     </div>
   `,
@@ -118,6 +137,38 @@ describe('admin UsageTable tooltip', () => {
       height: 20,
       toJSON: () => ({}),
     } as DOMRect)
+  })
+
+  it('marks only usage rows that actually applied long-context billing', () => {
+    const wrapper = mount(UsageTable, {
+      props: {
+        data: [
+          {
+            ...baseImageRow,
+            request_id: 'req-long-context-enabled',
+            long_context_billing_applied: true,
+          },
+          {
+            ...baseImageRow,
+            request_id: 'req-long-context-disabled',
+            long_context_billing_applied: false,
+          },
+        ],
+        loading: false,
+        columns: [],
+      },
+      global: {
+        stubs: {
+          DataTable: DataTableStub,
+          EmptyState: true,
+          Icon: true,
+          Teleport: true,
+        },
+      },
+    })
+
+    expect(wrapper.findAll('[data-testid="long-context-billing-marker"]')).toHaveLength(1)
+    expect(wrapper.get('[data-testid="long-context-billing-marker"]').text()).toBe('x2')
   })
 
   it('shows service tier and billing breakdown in cost tooltip', async () => {
@@ -207,6 +258,89 @@ describe('admin UsageTable tooltip', () => {
     expect(text).toContain('claude-sonnet-4')
     expect(text).toContain('claude-sonnet-4-20250514')
   })
+
+	it('shows a red model mismatch status for every mismatched response', () => {
+		const wrapper = mount(UsageTable, {
+			props: {
+				data: [{
+					request_id: 'req-model-mismatch',
+					model: 'gpt-5.6-sol',
+					upstream_response_model: 'gpt-5.4',
+					upstream_model_mismatch: true,
+				}],
+				loading: false,
+				columns: [],
+			},
+			global: {
+				stubs: {
+					DataTable: DataTableStub,
+					EmptyState: true,
+					Icon: true,
+					Teleport: true,
+				},
+			},
+		})
+
+		const text = wrapper.text()
+		expect(text).toContain('gpt-5.6-sol')
+		expect(text).toContain('gpt-5.4')
+		expect(text).toContain('Model mismatch')
+		expect(wrapper.get('[data-testid="upstream-model-status"]').attributes('data-status')).toBe('mismatch')
+		expect(wrapper.get('[data-testid="upstream-model-status"]').classes()).toContain('text-red-700')
+	})
+
+	it('shows a green model consistent status when the response matches the sent model', () => {
+		const wrapper = mount(UsageTable, {
+			props: {
+				data: [{
+					request_id: 'req-user-model-match',
+					model: 'gpt-5.6-luna',
+					upstream_model: 'gpt-5.6-luna',
+					upstream_response_model: 'gpt-5.6-luna',
+					upstream_model_mismatch: false,
+				}],
+				loading: false,
+				columns: [],
+			},
+			global: {
+				stubs: {
+					DataTable: DataTableStub,
+					EmptyState: true,
+					Icon: true,
+					Teleport: true,
+				},
+			},
+		})
+
+		const text = wrapper.text()
+		expect(text).toContain('Upstream response:gpt-5.6-luna')
+		expect(text).toContain('Model consistent')
+		expect(wrapper.get('[data-testid="upstream-model-status"]').attributes('data-status')).toBe('consistent')
+		expect(wrapper.get('[data-testid="upstream-model-status"]').classes()).toContain('text-emerald-700')
+	})
+
+	it('shows a yellow model unknown status when the upstream response model is unavailable', () => {
+		const wrapper = mount(UsageTable, {
+			props: {
+				data: [{ request_id: 'req-user-model-unknown', model: 'gpt-5.6-luna' }],
+				loading: false,
+				columns: [],
+			},
+			global: {
+				stubs: {
+					DataTable: DataTableStub,
+					EmptyState: true,
+					Icon: true,
+					Teleport: true,
+				},
+			},
+		})
+
+		expect(wrapper.text()).toContain('Upstream response:Unknown')
+		expect(wrapper.text()).toContain('Model unknown')
+		expect(wrapper.get('[data-testid="upstream-model-status"]').attributes('data-status')).toBe('unknown')
+		expect(wrapper.get('[data-testid="upstream-model-status"]').classes()).toContain('text-amber-700')
+	})
 
   it.each([
     {
@@ -328,6 +462,40 @@ describe('admin UsageTable tooltip', () => {
     expect(text).toContain('Per-image price')
     expect(text).toContain('not recorded')
     expect(text).not.toContain('(2K)')
+  })
+})
+
+describe('admin UsageTable request ID column', () => {
+  beforeEach(() => {
+    appStoreMocks.showSuccess.mockReset()
+    appStoreMocks.showError.mockReset()
+  })
+
+  it('renders and copies the request ID', async () => {
+    const writeText = vi.fn().mockResolvedValue(undefined)
+    vi.stubGlobal('navigator', { clipboard: { writeText } })
+
+    const wrapper = mount(UsageTable, {
+      props: {
+        data: [{ ...baseImageRow, request_id: 'req-admin-visible-id' }],
+        loading: false,
+        columns: [{ key: 'request_id', label: 'Request ID' }],
+      },
+      global: {
+        stubs: {
+          DataTable: DataTableStub,
+          EmptyState: true,
+          Icon: true,
+          Teleport: true,
+        },
+      },
+    })
+
+    expect(wrapper.text()).toContain('req-admin-visible-id')
+    await wrapper.get('button[title="Copy to clipboard"]').trigger('click')
+
+    expect(writeText).toHaveBeenCalledWith('req-admin-visible-id')
+    expect(appStoreMocks.showSuccess).toHaveBeenCalledWith('Request ID copied')
   })
 })
 

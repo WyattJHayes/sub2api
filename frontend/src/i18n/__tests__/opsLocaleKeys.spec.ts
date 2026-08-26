@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import en from '@/i18n/locales/en'
+import zh from '@/i18n/locales/zh'
 
 function flattenKeys(obj: Record<string, any>, prefix = ''): string[] {
   const keys: string[] = []
@@ -20,12 +21,26 @@ describe('ops locale key completeness', () => {
     'admin.ops.timeRange.custom',
     'admin.ops.customTimeRange.startTime',
     'admin.ops.customTimeRange.endTime',
+    'admin.ops.errorDetail.upstreamStatus',
+    'admin.ops.errorDetail.rootCause',
+    'admin.ops.errorDetail.diagnosticPayloads',
+    'admin.ops.errorDetail.payloads.client',
+    'admin.ops.errorDetail.payloads.upstream_message',
+    'admin.ops.errorDetail.payloads.upstream_detail',
+    'admin.ops.errorDetail.payloads.upstream_events',
   ]
 
   for (const key of requiredKeys) {
     it(`en locale has ${key}`, () => {
       const enKeys = flattenKeys(en)
       expect(enKeys).toContain(key)
+    })
+  }
+
+  for (const key of requiredKeys) {
+    it(`zh locale has ${key}`, () => {
+      const zhKeys = flattenKeys(zh)
+      expect(zhKeys).toContain(key)
     })
   }
 })
@@ -35,4 +50,18 @@ describe('groups locale key completeness', () => {
     const enKeys = flattenKeys(en)
     expect(enKeys).toContain('admin.groups.failedToSave')
   })
+
+  const webSearchPricingKeys = [
+    'admin.groups.webSearchPricing.title',
+    'admin.groups.webSearchPricing.pricePerCall',
+    'admin.groups.webSearchPricing.pricePerCallHint',
+    'admin.groups.webSearchPricing.finalPricePreview',
+  ]
+
+  for (const key of webSearchPricingKeys) {
+    it(`en and zh locales both have ${key}`, () => {
+      expect(flattenKeys(en)).toContain(key)
+      expect(flattenKeys(zh)).toContain(key)
+    })
+  }
 })

@@ -106,15 +106,19 @@ func TestUsageLogFromService_IncludesServiceTierForUserAndAdmin(t *testing.T) {
 	require.InDelta(t, 1.5, *adminDTO.AccountRateMultiplier, 1e-12)
 }
 
-func TestUsageLogFromService_UsesRequestedModelAndKeepsUpstreamAdminOnly(t *testing.T) {
+func TestUsageLogFromService_UsesRequestedModelAndExposesResponseStatusWithoutUpstreamRouteModel(t *testing.T) {
 	t.Parallel()
 
 	upstreamModel := "claude-sonnet-4-20250514"
+	upstreamResponseModel := "claude-sonnet-4-20250513"
+	upstreamModelMismatch := true
 	log := &service.UsageLog{
-		RequestID:      "req_4",
-		Model:          upstreamModel,
-		RequestedModel: "claude-sonnet-4",
-		UpstreamModel:  &upstreamModel,
+		RequestID:             "req_4",
+		Model:                 upstreamModel,
+		RequestedModel:        "claude-sonnet-4",
+		UpstreamModel:         &upstreamModel,
+		UpstreamResponseModel: &upstreamResponseModel,
+		UpstreamModelMismatch: &upstreamModelMismatch,
 	}
 
 	userDTO := UsageLogFromService(log)
@@ -125,11 +129,15 @@ func TestUsageLogFromService_UsesRequestedModelAndKeepsUpstreamAdminOnly(t *test
 
 	userJSON, err := json.Marshal(userDTO)
 	require.NoError(t, err)
-	require.NotContains(t, string(userJSON), "upstream_model")
+	require.Contains(t, string(userJSON), `"upstream_response_model":"claude-sonnet-4-20250513"`)
+	require.Contains(t, string(userJSON), `"upstream_model_mismatch":true`)
+	require.NotContains(t, string(userJSON), `"upstream_model":`)
 
 	adminJSON, err := json.Marshal(adminDTO)
 	require.NoError(t, err)
 	require.Contains(t, string(adminJSON), `"upstream_model":"claude-sonnet-4-20250514"`)
+	require.Contains(t, string(adminJSON), `"upstream_response_model":"claude-sonnet-4-20250513"`)
+	require.Contains(t, string(adminJSON), `"upstream_model_mismatch":true`)
 }
 
 func TestUsageLogFromService_KeepsUserBillingAndIPWithoutAdminCostFields(t *testing.T) {

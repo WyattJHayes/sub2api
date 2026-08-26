@@ -53,23 +53,40 @@
         </template>
 
         <template #cell-model="{ row }">
-          <div v-if="row.model_mapping_chain && row.model_mapping_chain.includes('→')" class="space-y-0.5 text-xs">
-            <div v-for="(step, i) in row.model_mapping_chain.split('→')" :key="i"
-                 class="break-all"
-                 :class="i === 0 ? 'font-medium text-gray-900 dark:text-white' : 'text-gray-500 dark:text-gray-400'"
-                 :style="i > 0 ? `padding-left: ${i * 0.75}rem` : ''">
-              <span v-if="i > 0" class="mr-0.5">↳</span>{{ step }}
+          <div class="space-y-0.5 text-xs">
+            <div v-if="row.model_mapping_chain && row.model_mapping_chain.includes('→')" class="space-y-0.5">
+              <div v-for="(step, i) in row.model_mapping_chain.split('→')" :key="i"
+                   class="break-all"
+                   :class="i === 0 ? 'font-medium text-gray-900 dark:text-white' : 'text-gray-500 dark:text-gray-400'"
+                   :style="i > 0 ? `padding-left: ${i * 0.75}rem` : ''">
+                <span v-if="i > 0" class="mr-0.5">↳</span>{{ step }}
+              </div>
+            </div>
+            <div v-else-if="row.upstream_model && row.upstream_model !== row.model" class="space-y-0.5">
+              <div class="break-all font-medium text-gray-900 dark:text-white">
+                {{ row.model }}
+              </div>
+              <div class="break-all text-gray-500 dark:text-gray-400">
+                <span class="mr-0.5">↳</span>{{ row.upstream_model }}
+              </div>
+            </div>
+            <span v-else class="font-medium text-gray-900 dark:text-white">{{ row.model }}</span>
+            <div
+              class="flex flex-wrap items-center gap-x-1.5 gap-y-1 break-all pl-3 text-[11px]"
+              :class="upstreamModelStatusTextClass(row)"
+              :title="upstreamResponseTitle(row)"
+            >
+              <span class="mr-1">↳ {{ t('usage.upstreamResponseModel') }}:</span>{{ upstreamResponseModel(row) }}
+              <span
+                data-testid="upstream-model-status"
+                :data-status="upstreamModelStatus(row)"
+                class="inline-flex rounded px-1 py-px text-[10px] font-medium ring-1 ring-inset"
+                :class="upstreamModelStatusBadgeClass(row)"
+              >
+                {{ t(upstreamModelStatusLabel(row)) }}
+              </span>
             </div>
           </div>
-          <div v-else-if="row.upstream_model && row.upstream_model !== row.model" class="space-y-0.5 text-xs">
-            <div class="break-all font-medium text-gray-900 dark:text-white">
-              {{ row.model }}
-            </div>
-            <div class="break-all text-gray-500 dark:text-gray-400">
-              <span class="mr-0.5">↳</span>{{ row.upstream_model }}
-            </div>
-          </div>
-          <span v-else class="font-medium text-gray-900 dark:text-white">{{ row.model }}</span>
         </template>
 
         <template #cell-reasoning_effort="{ row }">
@@ -144,6 +161,12 @@
                   <span v-if="row.cache_ttl_overridden" :title="t('usage.cacheTtlOverriddenHint')" class="inline-flex items-center rounded px-1 py-px text-[10px] font-medium leading-tight bg-rose-100 text-rose-600 ring-1 ring-inset ring-rose-200 dark:bg-rose-500/20 dark:text-rose-400 dark:ring-rose-500/30 cursor-help">R</span>
                 </div>
               </div>
+              <div v-if="hasImageInputTokens(row)" class="flex items-center gap-2">
+                <div class="inline-flex items-center gap-1">
+                  <svg class="h-3.5 w-3.5 text-fuchsia-500" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z" /></svg>
+                  <span class="font-medium text-fuchsia-600 dark:text-fuchsia-400">{{ row.image_input_tokens.toLocaleString() }}</span>
+                </div>
+              </div>
               <div v-if="hasImageOutputTokens(row)" class="flex items-center gap-2">
                 <div class="inline-flex items-center gap-1">
                   <svg class="h-3.5 w-3.5 text-pink-500" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z" /></svg>
@@ -168,6 +191,11 @@
           <div class="text-sm">
             <div class="flex items-center gap-1.5">
               <span class="font-medium text-green-600 dark:text-green-400">${{ row.actual_cost?.toFixed(6) || '0.000000' }}</span>
+              <span
+                v-if="row.long_context_billing_applied"
+                data-testid="long-context-billing-marker"
+                class="inline-flex items-center rounded px-1 py-px text-[10px] font-semibold leading-tight bg-amber-100 text-amber-700 ring-1 ring-inset ring-amber-200 dark:bg-amber-500/20 dark:text-amber-300 dark:ring-amber-500/30"
+              >x2</span>
               <!-- Cost Detail Tooltip -->
               <div
                 class="group relative"
@@ -209,6 +237,24 @@
           <span class="text-sm text-gray-600 dark:text-gray-400">{{ formatDateTime(value) }}</span>
         </template>
 
+        <template #cell-request_id="{ row }">
+          <div v-if="row.request_id" class="flex max-w-[160px] items-center gap-1.5">
+            <span class="truncate font-mono text-xs text-gray-500 dark:text-gray-400" :title="row.request_id">
+              {{ row.request_id }}
+            </span>
+            <button
+              type="button"
+              class="shrink-0 rounded p-0.5 text-gray-400 transition-colors hover:bg-gray-100 hover:text-gray-600 dark:hover:bg-dark-700 dark:hover:text-gray-300"
+              :class="copiedRequestId === row.request_id ? 'text-green-500 hover:text-green-500' : ''"
+              :title="copiedRequestId === row.request_id ? t('keys.copied') : t('keys.copyToClipboard')"
+              @click="copyRequestId(row.request_id)"
+            >
+              <Icon :name="copiedRequestId === row.request_id ? 'check' : 'copy'" size="sm" class="h-3.5 w-3.5" />
+            </button>
+          </div>
+          <span v-else class="text-sm text-gray-400 dark:text-gray-500">-</span>
+        </template>
+
         <template #cell-user_agent="{ row }">
           <span v-if="row.user_agent" class="text-sm text-gray-600 dark:text-gray-400 block max-w-[320px] truncate" :title="row.user_agent">{{ formatUserAgent(row.user_agent) }}</span>
           <span v-else class="text-sm text-gray-400 dark:text-gray-500">-</span>
@@ -241,9 +287,17 @@
         <div class="space-y-1.5">
           <div>
             <div class="text-xs font-semibold text-gray-300 mb-1">{{ t('usage.tokenDetails') }}</div>
-            <div v-if="tokenTooltipData && tokenTooltipData.input_tokens > 0" class="flex items-center justify-between gap-4">
+            <div v-if="tokenTooltipData && tokenTooltipData.input_tokens > 0 && !hasImageInputTokens(tokenTooltipData)" class="flex items-center justify-between gap-4">
               <span class="text-gray-400">{{ t('admin.usage.inputTokens') }}</span>
               <span class="font-medium text-white">{{ tokenTooltipData.input_tokens.toLocaleString() }}</span>
+            </div>
+            <div v-if="tokenTooltipData && hasImageInputTokens(tokenTooltipData) && textInputTokens(tokenTooltipData) > 0" class="flex items-center justify-between gap-4">
+              <span class="text-gray-400">{{ t('admin.usage.inputTokens') }}</span>
+              <span class="font-medium text-white">{{ textInputTokens(tokenTooltipData).toLocaleString() }}</span>
+            </div>
+            <div v-if="tokenTooltipData && hasImageInputTokens(tokenTooltipData)" class="flex items-center justify-between gap-4">
+              <span class="text-gray-400">{{ t('usage.imageInputTokens') }}</span>
+              <span class="font-medium text-fuchsia-300">{{ tokenTooltipData.image_input_tokens.toLocaleString() }}</span>
             </div>
             <div v-if="tokenTooltipData && tokenTooltipData.output_tokens > 0 && !hasImageOutputTokens(tokenTooltipData)" class="flex items-center justify-between gap-4">
               <span class="text-gray-400">{{ t('admin.usage.outputTokens') }}</span>
@@ -322,6 +376,10 @@
               <span class="text-gray-400">{{ t('admin.usage.inputCost') }}</span>
               <span class="font-medium text-white">${{ tooltipData.input_cost.toFixed(6) }}</span>
             </div>
+            <div v-if="tooltipData && hasImageInputCost(tooltipData)" class="flex items-center justify-between gap-4">
+              <span class="text-gray-400">{{ t('usage.imageInputCost') }}</span>
+              <span class="font-medium text-fuchsia-300">${{ tooltipData.image_input_cost.toFixed(6) }}</span>
+            </div>
             <div v-if="tooltipData && tooltipData.output_cost > 0" class="flex items-center justify-between gap-4">
               <span class="text-gray-400">{{ t('admin.usage.outputCost') }}</span>
               <span class="font-medium text-white">${{ tooltipData.output_cost.toFixed(6) }}</span>
@@ -332,9 +390,13 @@
             </div>
             <!-- Token billing: show unit prices per 1M tokens -->
             <template v-if="tooltipData && !isImageUsage(tooltipData) && (!tooltipData.billing_mode || tooltipData.billing_mode === BILLING_MODE_TOKEN)">
-              <div v-if="tooltipData && tooltipData.input_tokens > 0" class="flex items-center justify-between gap-4">
+              <div v-if="tooltipData && textInputTokens(tooltipData) > 0" class="flex items-center justify-between gap-4">
                 <span class="text-gray-400">{{ t('usage.inputTokenPrice') }}</span>
-                <span class="font-medium text-sky-300">{{ formatTokenPricePerMillion(tooltipData.input_cost, tooltipData.input_tokens) }} {{ t('usage.perMillionTokens') }}</span>
+                <span class="font-medium text-sky-300">{{ formatTokenPricePerMillion(tooltipData.input_cost, textInputTokens(tooltipData)) }} {{ t('usage.perMillionTokens') }}</span>
+              </div>
+              <div v-if="tooltipData && hasImageInputTokens(tooltipData)" class="flex items-center justify-between gap-4">
+                <span class="text-gray-400">{{ t('usage.imageInputTokenPrice') }}</span>
+                <span class="font-medium text-fuchsia-300">{{ formatTokenPricePerMillion(tooltipData.image_input_cost ?? 0, tooltipData.image_input_tokens) }} {{ t('usage.perMillionTokens') }}</span>
               </div>
               <div v-if="tooltipData && tooltipData.output_cost > 0 && textOutputTokens(tooltipData) > 0" class="flex items-center justify-between gap-4">
                 <span class="text-gray-400">{{ t('usage.outputTokenPrice') }}</span>
@@ -436,6 +498,7 @@
 <script setup lang="ts">
 import { computed, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
+import { useAppStore } from '@/stores/app'
 import { formatDateTime, formatReasoningEffort } from '@/utils/format'
 import { formatCacheTokens, formatMultiplier } from '@/utils/formatters'
 import { formatTokenPricePerMillion } from '@/utils/usagePricing'
@@ -466,6 +529,9 @@ import {
   hasImageOutputTokens,
   textOutputTokens,
   hasImageOutputCost,
+  hasImageInputTokens,
+  textInputTokens,
+  hasImageInputCost,
 } from '@/utils/imageUsage'
 
 /** Compute the account-billed cost for display: (account_stats_cost ?? total_cost) * rate_multiplier */
@@ -512,11 +578,65 @@ const emit = defineEmits<{
   ipGeoBatchFailed: []
 }>()
 const { t } = useI18n()
+const appStore = useAppStore()
+const copiedRequestId = ref<string | null>(null)
 const showAccountBilling = props.showAccountBilling
 const showUpstreamEndpoint = props.showUpstreamEndpoint
 const ipGeoBatchLoading = ref(false)
 
 const showIpGeoToolbar = computed(() => props.columns.some((col) => col.key === 'ip_address'))
+
+const sentUpstreamModel = (row: AdminUsageLog): string => row.upstream_model?.trim() || row.model?.trim() || ''
+
+type UpstreamModelStatus = 'consistent' | 'unknown' | 'mismatch'
+
+const upstreamModelStatus = (row: AdminUsageLog): UpstreamModelStatus => {
+  if (!row.upstream_response_model?.trim()) return 'unknown'
+  if (row.upstream_model_mismatch === true) return 'mismatch'
+  if (row.upstream_model_mismatch === false) return 'consistent'
+  return 'unknown'
+}
+
+const upstreamModelStatusLabel = (row: AdminUsageLog): string => {
+  const status = upstreamModelStatus(row)
+  if (status === 'consistent') return 'usage.modelConsistent'
+  if (status === 'mismatch') return 'usage.modelMismatch'
+  return 'usage.modelUnknown'
+}
+
+const upstreamModelStatusTextClass = (row: AdminUsageLog): string => {
+  const status = upstreamModelStatus(row)
+  if (status === 'consistent') return 'text-emerald-600 dark:text-emerald-400'
+  if (status === 'mismatch') return 'text-red-600 dark:text-red-400'
+  return 'text-amber-600 dark:text-amber-400'
+}
+
+const upstreamModelStatusBadgeClass = (row: AdminUsageLog): string => {
+  const status = upstreamModelStatus(row)
+  if (status === 'consistent') {
+    return 'bg-emerald-50 text-emerald-700 ring-emerald-200 dark:bg-emerald-500/10 dark:text-emerald-300 dark:ring-emerald-500/30'
+  }
+  if (status === 'mismatch') {
+    return 'bg-red-50 text-red-700 ring-red-200 dark:bg-red-500/10 dark:text-red-300 dark:ring-red-500/30'
+  }
+  return 'bg-amber-50 text-amber-700 ring-amber-200 dark:bg-amber-500/10 dark:text-amber-300 dark:ring-amber-500/30'
+}
+
+const upstreamResponseModel = (row: AdminUsageLog): string =>
+  row.upstream_response_model?.trim() || t('usage.upstreamResponseUnknown')
+
+const modelAuditTitle = (row: AdminUsageLog): string => [
+  `${t('usage.requestedModel')}: ${row.model || '-'}`,
+  `${t('usage.sentUpstreamModel')}: ${sentUpstreamModel(row) || '-'}`,
+  `${t('usage.upstreamResponseModel')}: ${row.upstream_response_model || '-'}`,
+].join('\n')
+
+const upstreamResponseTitle = (row: AdminUsageLog): string => {
+  const response = row.upstream_response_model?.trim()
+  if (!response) return t('usage.upstreamResponseUnknownHint')
+  if (row.upstream_model_mismatch === true) return modelAuditTitle(row)
+  return `${t('usage.upstreamResponseModel')}: ${response}`
+}
 
 const currentPageIps = computed(() =>
   Array.from(new Set(props.data.map((row) => row.ip_address).filter((ip): ip is string => Boolean(ip))))
@@ -540,6 +660,19 @@ const handleBatchFetchIpGeo = async () => {
   }
 }
 
+const copyRequestId = async (requestId: string) => {
+  try {
+    await navigator.clipboard.writeText(requestId)
+    copiedRequestId.value = requestId
+    appStore.showSuccess(t('admin.usage.requestIdCopied'))
+    window.setTimeout(() => {
+      if (copiedRequestId.value === requestId) copiedRequestId.value = null
+    }, 2000)
+  } catch {
+    appStore.showError(t('common.copyFailed'))
+  }
+}
+
 // Tooltip state - cost
 const tooltipVisible = ref(false)
 const tooltipPosition = ref({ x: 0, y: 0 })
@@ -553,6 +686,7 @@ const tokenTooltipData = ref<AdminUsageLog | null>(null)
 const getRequestTypeLabel = (row: AdminUsageLog): string => {
   const requestType = resolveUsageRequestType(row)
   if (requestType === 'cyber') return t('usage.cyber')
+  if (requestType === 'live') return t('usage.live')
   if (requestType === 'ws_v2') return t('usage.ws')
   if (requestType === 'stream') return t('usage.stream')
   if (requestType === 'sync') return t('usage.sync')
@@ -562,6 +696,7 @@ const getRequestTypeLabel = (row: AdminUsageLog): string => {
 const getRequestTypeBadgeClass = (row: AdminUsageLog): string => {
   const requestType = resolveUsageRequestType(row)
   if (requestType === 'cyber') return 'bg-red-100 text-red-800 dark:bg-red-900 dark:text-red-200'
+  if (requestType === 'live') return 'bg-emerald-100 text-emerald-800 dark:bg-emerald-900 dark:text-emerald-200'
   if (requestType === 'ws_v2') return 'bg-violet-100 text-violet-800 dark:bg-violet-900 dark:text-violet-200'
   if (requestType === 'stream') return 'bg-blue-100 text-blue-800 dark:bg-blue-900 dark:text-blue-200'
   if (requestType === 'sync') return 'bg-gray-100 text-gray-800 dark:bg-gray-700 dark:text-gray-200'

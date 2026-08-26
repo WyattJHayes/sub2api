@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"github.com/tidwall/gjson"
 )
@@ -68,6 +69,20 @@ func TestOpenAICompactSSEKeepalive_StopBeforeFirstBeatKeepsWriterUntouched(t *te
 	waitForKeepaliveBeats()
 	require.Zero(t, rec.Body.Len())
 	require.False(t, StopOpenAICompactSSEKeepaliveCommitted(c))
+}
+
+func TestOpenAIAdjustedWrittenSizeExcludesResponsesStreamKeepalive(t *testing.T) {
+	c, rec := newCompactBridgeTestContext(t, false)
+	n, err := c.Writer.Write([]byte(":\n\n"))
+	require.NoError(t, err)
+	recordOpenAIStreamKeepaliveBytes(c, n)
+
+	require.Equal(t, -1, OpenAICompactKeepaliveAdjustedWrittenSize(c))
+
+	_, err = c.Writer.Write([]byte("data: semantic\n\n"))
+	require.NoError(t, err)
+	require.Equal(t, len("data: semantic\n\n"), OpenAICompactKeepaliveAdjustedWrittenSize(c))
+	require.Equal(t, ":\n\ndata: semantic\n\n", rec.Body.String())
 }
 
 // 心跳已提交后，2xx 桥接续写事件而不重复提交响应头。
@@ -141,6 +156,110 @@ func TestOpenAICompactKeepaliveWriter_RequestSideWriteSuspendsBeats(t *testing.T
 	require.Contains(t, rec.Body.String(), `{"error":"local reject"}`)
 }
 
+func TestOpenAICompactKeepaliveWriter_NilInnerWriter_NoPanic(t *testing.T) {
+	w := &openAICompactKeepaliveWriter{
+		k: &openAICompactSSEKeepalive{stop: make(chan struct{})},
+	}
+	w.ResponseWriter = nil
+
+	assert.NotPanics(t, func() {
+		assert.Equal(t, 0, w.Status())
+	})
+	assert.NotPanics(t, func() {
+		assert.Equal(t, 0, w.Size())
+	})
+	assert.NotPanics(t, func() {
+		assert.False(t, w.Written())
+	})
+	assert.NotPanics(t, func() {
+		assert.NotNil(t, w.Header())
+	})
+	assert.NotPanics(t, func() {
+		n, err := w.Write([]byte("test"))
+		assert.Equal(t, 0, n)
+		assert.NoError(t, err)
+	})
+	assert.NotPanics(t, func() {
+		n, err := w.WriteString("test")
+		assert.Equal(t, 0, n)
+		assert.NoError(t, err)
+	})
+	assert.NotPanics(t, func() {
+		w.WriteHeader(http.StatusOK)
+	})
+	assert.NotPanics(t, func() {
+		w.WriteHeaderNow()
+	})
+	assert.NotPanics(t, func() {
+		w.Flush()
+	})
+	assert.NotPanics(t, func() {
+		conn, rw, err := w.Hijack()
+		assert.Nil(t, conn)
+		assert.Nil(t, rw)
+		assert.Error(t, err)
+	})
+	assert.NotPanics(t, func() {
+		ch := w.CloseNotify()
+		assert.NotNil(t, ch)
+	})
+	assert.NotPanics(t, func() {
+		assert.Nil(t, w.Pusher())
+	})
+}
+
+func TestOpenAICompactKeepaliveWriter_NilKeepalive_NoPanic(t *testing.T) {
+	c, rec := newCompactBridgeTestContext(t, true)
+	w := &openAICompactKeepaliveWriter{ResponseWriter: c.Writer}
+
+	assert.NotPanics(t, func() {
+		assert.Equal(t, 0, w.Status())
+	})
+	assert.NotPanics(t, func() {
+		assert.Equal(t, 0, w.Size())
+	})
+	assert.NotPanics(t, func() {
+		assert.False(t, w.Written())
+	})
+	assert.NotPanics(t, func() {
+		w.Header().Set("X-Test", "ok")
+	})
+	assert.NotPanics(t, func() {
+		w.WriteHeader(http.StatusAccepted)
+	})
+	assert.NotPanics(t, func() {
+		n, err := w.WriteString("ok")
+		assert.Equal(t, 2, n)
+		assert.NoError(t, err)
+	})
+	assert.NotPanics(t, func() {
+		w.Flush()
+	})
+	require.Equal(t, "ok", rec.Header().Get("X-Test"))
+	require.Equal(t, "ok", rec.Body.String())
+}
+
+func TestOpenAICompactKeepaliveWriter_DelegatesWhenReady(t *testing.T) {
+	c, rec := newCompactBridgeTestContext(t, true)
+	stop := StartOpenAICompactSSEKeepalive(c, time.Hour)
+	defer stop()
+
+	w, ok := c.Writer.(*openAICompactKeepaliveWriter)
+	require.True(t, ok)
+
+	w.Header().Set("X-Test", "ok")
+	w.WriteHeader(http.StatusAccepted)
+	n, err := w.WriteString("ready")
+	require.NoError(t, err)
+	require.Equal(t, len("ready"), n)
+
+	require.Equal(t, http.StatusAccepted, w.Status())
+	require.Equal(t, len("ready"), w.Size())
+	require.True(t, w.Written())
+	require.Equal(t, "ok", rec.Header().Get("X-Test"))
+	require.Equal(t, "ready", rec.Body.String())
+}
+
 // fast policy block 在心跳提交后必须降级为 response.failed 终止事件。
 func TestWriteOpenAIFastPolicyBlockedResponse_AfterKeepaliveCommit(t *testing.T) {
 	c, rec := newCompactBridgeTestContext(t, true)
@@ -177,6 +296,20 @@ func TestOpenAICompactKeepaliveAdjustedWrittenSize_ExcludesHeartbeatBytes(t *tes
 	require.NoError(t, err)
 	require.Equal(t, len("real-bytes"), OpenAICompactKeepaliveAdjustedWrittenSize(c))
 	require.Contains(t, rec.Body.String(), ": keepalive\n\n")
+}
+
+func TestOpenAIStreamClientOutputStarted_IgnoresCompactKeepaliveBytes(t *testing.T) {
+	c, _ := newCompactBridgeTestContext(t, true)
+	stop := StartOpenAICompactSSEKeepalive(c, keepaliveTestInterval)
+	defer stop()
+	waitForKeepaliveBeats()
+
+	require.True(t, c.Writer.Written())
+	require.False(t, openAIStreamClientOutputStarted(c, false), "keepalive comments are not semantic output")
+
+	_, err := c.Writer.Write([]byte("real-output"))
+	require.NoError(t, err)
+	require.True(t, openAIStreamClientOutputStarted(c, false))
 }
 
 // fast policy block 在心跳未提交时保持 403 JSON 原语义。

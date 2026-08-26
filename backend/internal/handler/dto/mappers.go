@@ -146,6 +146,10 @@ func GroupFromServiceAdmin(g *service.Group) *AdminGroup {
 	}
 	out := &AdminGroup{
 		Group:                       groupFromServiceBase(g),
+		ProfitControlEnabled:        g.ProfitControlEnabled,
+		ProfitMinMargin:             g.ProfitMinMargin,
+		ProfitSafetyBuffer:          g.ProfitSafetyBuffer,
+		ModelPricing:                g.ModelPricing,
 		ModelRouting:                g.ModelRouting,
 		ModelRoutingEnabled:         g.ModelRoutingEnabled,
 		MCPXMLInject:                g.MCPXMLInject,
@@ -181,6 +185,7 @@ func groupFromServiceBase(g *service.Group) Group {
 		DailyLimitUSD:                   g.DailyLimitUSD,
 		WeeklyLimitUSD:                  g.WeeklyLimitUSD,
 		MonthlyLimitUSD:                 g.MonthlyLimitUSD,
+		LongContextPricingEnabled:       g.LongContextPricingEnabled,
 		AllowImageGeneration:            g.AllowImageGeneration,
 		AllowBatchImageGeneration:       g.AllowBatchImageGeneration,
 		ImageRateIndependent:            g.ImageRateIndependent,
@@ -199,13 +204,22 @@ func groupFromServiceBase(g *service.Group) Group {
 		VideoPrice480P:                  g.VideoPrice480P,
 		VideoPrice720P:                  g.VideoPrice720P,
 		VideoPrice1080P:                 g.VideoPrice1080P,
+		VideoModelPrices:                g.VideoModelPrices,
+		WebSearchPricePerCall:           g.WebSearchPricePerCall,
+		SearchPricePer1k:                g.SearchPricePer1k,
+		AudioRealtimePricePerMin:        g.AudioRealtimePricePerMin,
+		AudioTtsPricePerMillionChars:    g.AudioTTSPricePerMillionChars,
+		AudioSttPricePerHour:            g.AudioSTTPricePerHour,
 		ClaudeCodeOnly:                  g.ClaudeCodeOnly,
 		FallbackGroupID:                 g.FallbackGroupID,
 		FallbackGroupIDOnInvalidRequest: g.FallbackGroupIDOnInvalidRequest,
 		AllowMessagesDispatch:           g.AllowMessagesDispatch,
+		AllowLive:                       g.AllowLive,
 		RequireOAuthOnly:                g.RequireOAuthOnly,
 		RequirePrivacySet:               g.RequirePrivacySet,
 		RPMLimit:                        g.RPMLimit,
+		MaxReasoningEffort:              g.MaxReasoningEffort,
+		ReasoningEffortMappings:         g.ReasoningEffortMappings,
 		CreatedAt:                       g.CreatedAt,
 		UpdatedAt:                       g.UpdatedAt,
 	}
@@ -216,6 +230,11 @@ func AccountFromServiceShallow(a *service.Account) *Account {
 		return nil
 	}
 	redactedCreds, credsStatus := RedactCredentials(a.Credentials)
+	extra := redactAccountManagedExtra(a.Extra)
+	var ollamaCloudUsage *service.OllamaCloudUsageState
+	if state := service.OllamaCloudUsageStateFromAccount(a); state.Eligible {
+		ollamaCloudUsage = state
+	}
 	out := &Account{
 		ID:                      a.ID,
 		Name:                    a.Name,
@@ -224,7 +243,8 @@ func AccountFromServiceShallow(a *service.Account) *Account {
 		Type:                    a.Type,
 		Credentials:             redactedCreds,
 		CredentialsStatus:       credsStatus,
-		Extra:                   a.Extra,
+		Extra:                   extra,
+		OllamaCloudUsage:        ollamaCloudUsage,
 		ProxyID:                 a.ProxyID,
 		ProxyFallbackOriginID:   a.ProxyFallbackOriginID,
 		ProxyFallbackOriginName: a.ProxyFallbackOriginName,
@@ -380,6 +400,24 @@ func AccountFromServiceShallow(a *service.Account) *Account {
 	}
 
 	return out
+}
+
+func redactAccountManagedExtra(extra map[string]any) map[string]any {
+	if extra == nil {
+		return nil
+	}
+	redacted := make(map[string]any, len(extra))
+	for key, value := range extra {
+		switch key {
+		case service.OllamaCloudUsageSessionExtraKey,
+			service.OllamaCloudUsageAutoRefreshExtraKey,
+			service.OllamaCloudUsageSnapshotExtraKey:
+			continue
+		default:
+			redacted[key] = value
+		}
+	}
+	return redacted
 }
 
 func AccountFromService(a *service.Account) *Account {
@@ -590,7 +628,8 @@ func AccountSummaryFromService(a *service.Account) *AccountSummary {
 }
 
 func usageLogFromServiceUser(l *service.UsageLog) UsageLog {
-	// 普通用户 DTO：严禁包含管理员字段（例如 account_rate_multiplier、account、upstream_model）。
+	// 普通用户 DTO：公开计费、请求和上游响应模型状态；路由内部字段（例如
+	// account_rate_multiplier、account、upstream_model）仍然只对管理员可见。
 	requestType := l.EffectiveRequestType()
 	stream, openAIWSMode := service.ApplyLegacyRequestFields(requestType, l.Stream, l.OpenAIWSMode)
 	requestedModel := l.RequestedModel
@@ -598,54 +637,60 @@ func usageLogFromServiceUser(l *service.UsageLog) UsageLog {
 		requestedModel = l.Model
 	}
 	return UsageLog{
-		ID:                    l.ID,
-		UserID:                l.UserID,
-		APIKeyID:              l.APIKeyID,
-		AccountID:             l.AccountID,
-		RequestID:             l.RequestID,
-		Model:                 requestedModel,
-		ServiceTier:           l.ServiceTier,
-		ReasoningEffort:       l.ReasoningEffort,
-		InboundEndpoint:       l.InboundEndpoint,
-		GroupID:               l.GroupID,
-		SubscriptionID:        l.SubscriptionID,
-		InputTokens:           l.InputTokens,
-		OutputTokens:          l.OutputTokens,
-		CacheCreationTokens:   l.CacheCreationTokens,
-		CacheReadTokens:       l.CacheReadTokens,
-		CacheCreation5mTokens: l.CacheCreation5mTokens,
-		CacheCreation1hTokens: l.CacheCreation1hTokens,
-		InputCost:             l.InputCost,
-		OutputCost:            l.OutputCost,
-		CacheCreationCost:     l.CacheCreationCost,
-		CacheReadCost:         l.CacheReadCost,
-		TotalCost:             l.TotalCost,
-		ActualCost:            l.ActualCost,
-		RateMultiplier:        l.RateMultiplier,
-		BillingType:           l.BillingType,
-		RequestType:           requestType.String(),
-		Stream:                stream,
-		OpenAIWSMode:          openAIWSMode,
-		DurationMs:            l.DurationMs,
-		FirstTokenMs:          l.FirstTokenMs,
-		ImageCount:            l.ImageCount,
-		ImageSize:             l.ImageSize,
-		ImageInputSize:        l.ImageInputSize,
-		ImageOutputSize:       l.ImageOutputSize,
-		ImageOutputTokens:     l.ImageOutputTokens,
-		ImageOutputCost:       l.ImageOutputCost,
-		ImageSizeSource:       l.ImageSizeSource,
-		ImageSizeBreakdown:    l.ImageSizeBreakdown,
-		MediaType:             l.MediaType,
-		UserAgent:             l.UserAgent,
-		IPAddress:             l.IPAddress,
-		CacheTTLOverridden:    l.CacheTTLOverridden,
-		BillingMode:           l.BillingMode,
-		CreatedAt:             l.CreatedAt,
-		User:                  UserFromServiceShallow(l.User),
-		APIKey:                APIKeyFromService(l.APIKey),
-		Group:                 GroupFromServiceShallow(l.Group),
-		Subscription:          UserSubscriptionFromService(l.Subscription),
+		ID:                        l.ID,
+		UserID:                    l.UserID,
+		APIKeyID:                  l.APIKeyID,
+		AccountID:                 l.AccountID,
+		RequestID:                 l.RequestID,
+		Model:                     requestedModel,
+		UpstreamResponseModel:     l.UpstreamResponseModel,
+		UpstreamModelMismatch:     l.UpstreamModelMismatch,
+		ServiceTier:               l.ServiceTier,
+		ReasoningEffort:           l.ReasoningEffort,
+		InboundEndpoint:           l.InboundEndpoint,
+		GroupID:                   l.GroupID,
+		SubscriptionID:            l.SubscriptionID,
+		InputTokens:               l.InputTokens,
+		OutputTokens:              l.OutputTokens,
+		CacheCreationTokens:       l.CacheCreationTokens,
+		CacheReadTokens:           l.CacheReadTokens,
+		CacheCreation5mTokens:     l.CacheCreation5mTokens,
+		CacheCreation1hTokens:     l.CacheCreation1hTokens,
+		InputCost:                 l.InputCost,
+		OutputCost:                l.OutputCost,
+		CacheCreationCost:         l.CacheCreationCost,
+		CacheReadCost:             l.CacheReadCost,
+		TotalCost:                 l.TotalCost,
+		ActualCost:                l.ActualCost,
+		RateMultiplier:            l.RateMultiplier,
+		LongContextBillingApplied: l.LongContextBillingApplied,
+		BillingType:               l.BillingType,
+		RequestType:               requestType.String(),
+		Stream:                    stream,
+		OpenAIWSMode:              openAIWSMode,
+		DurationMs:                l.DurationMs,
+		FirstTokenMs:              l.FirstTokenMs,
+		ImageCount:                l.ImageCount,
+		ImageSize:                 l.ImageSize,
+		ImageInputSize:            l.ImageInputSize,
+		ImageOutputSize:           l.ImageOutputSize,
+		ImageInputTokens:          l.ImageInputTokens,
+		ImageInputCost:            l.ImageInputCost,
+		ImageOutputTokens:         l.ImageOutputTokens,
+		ImageOutputCost:           l.ImageOutputCost,
+		ImageSizeSource:           l.ImageSizeSource,
+		ImageSizeBreakdown:        l.ImageSizeBreakdown,
+		MediaType:                 l.MediaType,
+		UserAgent:                 l.UserAgent,
+		IPAddress:                 l.IPAddress,
+		SessionID:                 l.SessionID,
+		CacheTTLOverridden:        l.CacheTTLOverridden,
+		BillingMode:               l.BillingMode,
+		CreatedAt:                 l.CreatedAt,
+		User:                      UserFromServiceShallow(l.User),
+		APIKey:                    APIKeyFromService(l.APIKey),
+		Group:                     GroupFromServiceShallow(l.Group),
+		Subscription:              UserSubscriptionFromService(l.Subscription),
 	}
 }
 
