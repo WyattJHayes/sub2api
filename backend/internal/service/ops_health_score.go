@@ -2,6 +2,7 @@ package service
 
 import (
 	"math"
+	"strings"
 	"time"
 )
 
@@ -79,7 +80,7 @@ func computeInfraHealth(now time.Time, overview *OpsDashboardOverview) float64 {
 		}
 	}
 
-	// Compute resources score: CPU + Memory
+	// Compute resources score: CPU + memory usage + available memory/swap/disk/OOM.
 	computeScore := 100.0
 	if overview.SystemMetrics != nil {
 		cpuScore := 100.0
@@ -106,7 +107,12 @@ func computeInfraHealth(now time.Time, overview *OpsDashboardOverview) float64 {
 			}
 		}
 
-		computeScore = (cpuScore + memScore) / 2
+		resourceScore, resourceAvailable := computeResourceHealth(overview.SystemMetrics)
+		if resourceAvailable {
+			computeScore = (cpuScore + memScore + resourceScore) / 3
+		} else {
+			computeScore = (cpuScore + memScore) / 2
+		}
 	}
 
 	// Background jobs score
@@ -130,6 +136,51 @@ func computeInfraHealth(now time.Time, overview *OpsDashboardOverview) float64 {
 
 	// Weighted combination
 	return storageScore*0.4 + computeScore*0.3 + jobScore*0.3
+}
+
+func computeResourceHealth(metrics *OpsSystemMetricsSnapshot) (float64, bool) {
+	if metrics == nil {
+		return 100, false
+	}
+	score := 100.0
+	available := false
+	if metrics.MemAvailableMB != nil {
+		available = true
+		switch {
+		case *metrics.MemAvailableMB < 128:
+			score = 0
+		case *metrics.MemAvailableMB < 256:
+			score = math.Min(score, 60)
+		}
+	}
+	if metrics.SwapUsedMB != nil {
+		available = true
+		if *metrics.SwapUsedMB > 0 {
+			score = math.Min(score, 70)
+		}
+	}
+	if metrics.DiskUsedPercent != nil {
+		available = true
+		switch {
+		case *metrics.DiskUsedPercent >= 90:
+			score = 0
+		case *metrics.DiskUsedPercent >= 80:
+			score = math.Min(score, 60)
+		}
+	}
+	if metrics.OOMKillCount != nil {
+		available = true
+	}
+	warning := strings.ToLower(strings.TrimSpace(metrics.ResourceWarning))
+	if warning != "" {
+		available = true
+		if strings.Contains(warning, "critical:") {
+			score = 0
+		} else if strings.Contains(warning, "warning:") {
+			score = math.Min(score, 60)
+		}
+	}
+	return score, available
 }
 
 func clampFloat64(v float64, min float64, max float64) float64 {

@@ -27,6 +27,11 @@ func (r *opsRepository) GetDashboardOverview(ctx context.Context, filter *servic
 	if filter.StartTime.IsZero() || filter.EndTime.IsZero() {
 		return nil, fmt.Errorf("start_time/end_time required")
 	}
+	// Pre-aggregation currently stores the production-only dimension. Explicit
+	// non-production drill-downs therefore use the raw tables.
+	if opsTrafficClass(filter) != service.TrafficClassProduction {
+		filter.QueryMode = service.OpsQueryModeRaw
+	}
 
 	mode := filter.QueryMode
 	if !mode.IsValid() {
@@ -86,6 +91,10 @@ func (r *opsRepository) getDashboardOverviewRaw(ctx context.Context, filter *ser
 	sla := safeDivideFloat64(float64(successCount), float64(requestCountSLA))
 	errorRate := safeDivideFloat64(float64(errorCountSLA), float64(requestCountSLA))
 	upstreamErrorRate := safeDivideFloat64(float64(upstreamExcl), float64(requestCountSLA))
+	trafficBreakdown, err := r.queryTrafficBreakdown(ctx, filter, start, end)
+	if err != nil {
+		return nil, err
+	}
 
 	qpsCurrent, tpsCurrent, err := r.queryCurrentRates(ctx, filter, end)
 	if err != nil {
@@ -156,8 +165,9 @@ func (r *opsRepository) getDashboardOverviewRaw(ctx context.Context, filter *ser
 			Avg:     tpsAvg,
 		},
 
-		Duration: duration,
-		TTFT:     ttft,
+		Duration:         duration,
+		TTFT:             ttft,
+		TrafficBreakdown: trafficBreakdown,
 	}, nil
 }
 
@@ -306,6 +316,10 @@ func (r *opsRepository) getDashboardOverviewPreaggregated(ctx context.Context, f
 			tpsPeak = roundTo1DP(math.Max(tpsCurrent, tpsAvg))
 		}
 	}
+	trafficBreakdown, err := r.queryTrafficBreakdown(ctx, filter, start, end)
+	if err != nil {
+		return nil, err
+	}
 
 	return &service.OpsDashboardOverview{
 		StartTime: start,
@@ -339,8 +353,9 @@ func (r *opsRepository) getDashboardOverviewPreaggregated(ctx context.Context, f
 			Avg:     tpsAvg,
 		},
 
-		Duration: duration,
-		TTFT:     ttft,
+		Duration:         duration,
+		TTFT:             ttft,
+		TrafficBreakdown: trafficBreakdown,
 	}, nil
 }
 
@@ -981,8 +996,8 @@ func buildUsageWhere(filter *service.OpsDashboardFilter, start, end time.Time, s
 	}
 
 	idx := startIndex
-	clauses := make([]string, 0, 4)
-	args = make([]any, 0, 4)
+	clauses := make([]string, 0, 5)
+	args = make([]any, 0, 5)
 
 	args = append(args, start)
 	clauses = append(clauses, fmt.Sprintf("ul.created_at >= $%d", idx))
@@ -1004,6 +1019,10 @@ func buildUsageWhere(filter *service.OpsDashboardFilter, start, end time.Time, s
 		clauses = append(clauses, fmt.Sprintf("COALESCE(NULLIF(g.platform,''), a.platform) = $%d", idx))
 		idx++
 	}
+	trafficClass := opsTrafficClass(filter)
+	args = append(args, string(trafficClass))
+	clauses = append(clauses, fmt.Sprintf("ul.traffic_class = $%d", idx))
+	idx++
 
 	where = "WHERE " + strings.Join(clauses, " AND ")
 	return join, where, args, idx
@@ -1018,8 +1037,8 @@ func buildErrorWhere(filter *service.OpsDashboardFilter, start, end time.Time, s
 	}
 
 	idx := startIndex
-	clauses := make([]string, 0, 5)
-	args = make([]any, 0, 5)
+	clauses := make([]string, 0, 6)
+	args = make([]any, 0, 6)
 
 	args = append(args, start)
 	clauses = append(clauses, fmt.Sprintf("created_at >= $%d", idx))
@@ -1040,9 +1059,116 @@ func buildErrorWhere(filter *service.OpsDashboardFilter, start, end time.Time, s
 		clauses = append(clauses, fmt.Sprintf("platform = $%d", idx))
 		idx++
 	}
+	trafficClass := opsTrafficClass(filter)
+	args = append(args, string(trafficClass))
+	clauses = append(clauses, fmt.Sprintf("traffic_class = $%d", idx))
+	idx++
 
 	where = "WHERE " + strings.Join(clauses, " AND ")
 	return where, args, idx
+}
+
+func opsTrafficClass(filter *service.OpsDashboardFilter) service.TrafficClass {
+	if filter == nil || strings.TrimSpace(string(filter.TrafficClass)) == "" {
+		return service.TrafficClassProduction
+	}
+	return service.NormalizeTrafficClass(string(filter.TrafficClass))
+}
+
+// queryTrafficBreakdown counts successful usage rows and client-visible error
+// rows separately, then merges them by normalized class. This keeps metadata,
+// synthetic, and unknown activity visible without adding it to SLA metrics.
+func (r *opsRepository) queryTrafficBreakdown(ctx context.Context, filter *service.OpsDashboardFilter, start, end time.Time) (service.OpsTrafficBreakdown, error) {
+	platform := ""
+	var groupID *int64
+	if filter != nil {
+		platform = strings.TrimSpace(strings.ToLower(filter.Platform))
+		groupID = filter.GroupID
+	}
+
+	usageClauses := []string{"ul.created_at >= $1", "ul.created_at < $2"}
+	usageArgs := []any{start, end}
+	idx := 3
+	if groupID != nil && *groupID > 0 {
+		usageClauses = append(usageClauses, fmt.Sprintf("ul.group_id = $%d", idx))
+		usageArgs = append(usageArgs, *groupID)
+		idx++
+	}
+	if platform != "" {
+		usageClauses = append(usageClauses, fmt.Sprintf("COALESCE(NULLIF(g.platform, ''), a.platform) = $%d", idx))
+		usageArgs = append(usageArgs, platform)
+		idx++
+	}
+
+	errorClauses := []string{"e.created_at >= $1", "e.created_at < $2", "e.is_count_tokens = FALSE", "COALESCE(e.status_code, 0) >= 400"}
+	errorArgs := []any{start, end}
+	errorIdx := 3
+	if groupID != nil && *groupID > 0 {
+		errorClauses = append(errorClauses, fmt.Sprintf("e.group_id = $%d", errorIdx))
+		errorArgs = append(errorArgs, *groupID)
+		errorIdx++
+	}
+	if platform != "" {
+		errorClauses = append(errorClauses, fmt.Sprintf("e.platform = $%d", errorIdx))
+		errorArgs = append(errorArgs, platform)
+	}
+
+	// Both CTEs intentionally use the same positional arguments; this avoids
+	// exposing request bodies or dimensions beyond the selected platform/group.
+	q := `
+WITH all_traffic AS (
+  SELECT COALESCE(NULLIF(ul.traffic_class, ''), 'unknown') AS traffic_class,
+         COUNT(*) AS request_count
+  FROM usage_logs ul
+  LEFT JOIN groups g ON g.id = ul.group_id
+  LEFT JOIN accounts a ON a.id = ul.account_id
+  WHERE ` + strings.Join(usageClauses, " AND ") + `
+  GROUP BY 1
+  UNION ALL
+  SELECT COALESCE(NULLIF(e.traffic_class, ''), 'unknown') AS traffic_class,
+         COUNT(*) AS request_count
+  FROM ops_error_logs e
+  WHERE ` + strings.Join(errorClauses, " AND ") + `
+  GROUP BY 1
+)
+SELECT traffic_class, COALESCE(SUM(request_count), 0)
+FROM all_traffic
+GROUP BY traffic_class`
+
+	args := usageArgs
+	if len(errorArgs) != len(usageArgs) {
+		// The two branches currently have the same shape. Keep this guard so a
+		// future filter change cannot silently bind the wrong values.
+		return service.OpsTrafficBreakdown{}, fmt.Errorf("traffic breakdown filter argument mismatch")
+	}
+	rows, err := r.db.QueryContext(ctx, q, args...)
+	if err != nil {
+		return service.OpsTrafficBreakdown{}, err
+	}
+	defer func() { _ = rows.Close() }()
+
+	var out service.OpsTrafficBreakdown
+	for rows.Next() {
+		var class string
+		var count int64
+		if err := rows.Scan(&class, &count); err != nil {
+			return service.OpsTrafficBreakdown{}, err
+		}
+		switch service.NormalizeTrafficClass(class) {
+		case service.TrafficClassProduction:
+			out.Production += count
+		case service.TrafficClassMetadata:
+			out.Metadata += count
+		case service.TrafficClassSynthetic:
+			out.Synthetic += count
+		default:
+			out.Unknown += count
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return service.OpsTrafficBreakdown{}, err
+	}
+	return out, nil
 }
 
 func floatToIntPtr(v sql.NullFloat64) *int {

@@ -139,6 +139,8 @@ type UsageLog struct {
 	InboundEndpoint *string
 	// UpstreamEndpoint is the normalized upstream endpoint path, e.g. /v1/responses.
 	UpstreamEndpoint *string
+	// TrafficClass is normalized at the persistence boundary.
+	TrafficClass TrafficClass
 
 	GroupID        *int64
 	SubscriptionID *int64

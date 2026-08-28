@@ -29,7 +29,7 @@ func TestOpsRepositoryGetOpenAITokenStats_PaginationMode(t *testing.T) {
 	}
 
 	mock.ExpectQuery(`SELECT COUNT\(\*\) FROM stats`).
-		WithArgs(start, end, groupID, "openai").
+		WithArgs(start, end, groupID, "openai", "production").
 		WillReturnRows(sqlmock.NewRows([]string{"count"}).AddRow(int64(3)))
 
 	rows := sqlmock.NewRows([]string{
@@ -44,8 +44,8 @@ func TestOpsRepositoryGetOpenAITokenStats_PaginationMode(t *testing.T) {
 		AddRow("gpt-4o-mini", int64(20), 21.56, 120.34, int64(3000), int64(850), int64(18)).
 		AddRow("gpt-4.1", int64(20), 10.2, 240.0, int64(2500), int64(900), int64(20))
 
-	mock.ExpectQuery(`ORDER BY request_count DESC, model ASC\s+LIMIT \$5 OFFSET \$6`).
-		WithArgs(start, end, groupID, "openai", 10, 10).
+	mock.ExpectQuery(`ORDER BY request_count DESC, model ASC\s+LIMIT \$6 OFFSET \$7`).
+		WithArgs(start, end, groupID, "openai", "production", 10, 10).
 		WillReturnRows(rows)
 
 	resp, err := repo.GetOpenAITokenStats(context.Background(), filter)
@@ -82,7 +82,7 @@ func TestOpsRepositoryGetOpenAITokenStats_TopNMode(t *testing.T) {
 	}
 
 	mock.ExpectQuery(`SELECT COUNT\(\*\) FROM stats`).
-		WithArgs(start, end).
+		WithArgs(start, end, "production").
 		WillReturnRows(sqlmock.NewRows([]string{"count"}).AddRow(int64(1)))
 
 	rows := sqlmock.NewRows([]string{
@@ -96,8 +96,8 @@ func TestOpsRepositoryGetOpenAITokenStats_TopNMode(t *testing.T) {
 	}).
 		AddRow("gpt-4o", int64(5), nil, nil, int64(0), int64(0), int64(0))
 
-	mock.ExpectQuery(`ORDER BY request_count DESC, model ASC\s+LIMIT \$3`).
-		WithArgs(start, end, 5).
+	mock.ExpectQuery(`ORDER BY request_count DESC, model ASC\s+LIMIT \$4`).
+		WithArgs(start, end, "production", 5).
 		WillReturnRows(rows)
 
 	resp, err := repo.GetOpenAITokenStats(context.Background(), filter)
@@ -129,11 +129,11 @@ func TestOpsRepositoryGetOpenAITokenStats_EmptyResult(t *testing.T) {
 	}
 
 	mock.ExpectQuery(`SELECT COUNT\(\*\) FROM stats`).
-		WithArgs(start, end).
+		WithArgs(start, end, "production").
 		WillReturnRows(sqlmock.NewRows([]string{"count"}).AddRow(int64(0)))
 
-	mock.ExpectQuery(`ORDER BY request_count DESC, model ASC\s+LIMIT \$3 OFFSET \$4`).
-		WithArgs(start, end, 20, 0).
+	mock.ExpectQuery(`ORDER BY request_count DESC, model ASC\s+LIMIT \$4 OFFSET \$5`).
+		WithArgs(start, end, "production", 20, 0).
 		WillReturnRows(sqlmock.NewRows([]string{
 			"model",
 			"request_count",

@@ -30,6 +30,7 @@ type opsDashboardSnapshotV2CacheKey struct {
 	GroupID      *int64               `json:"group_id"`
 	QueryMode    service.OpsQueryMode `json:"mode"`
 	BucketSecond int                  `json:"bucket_second"`
+	TrafficClass service.TrafficClass `json:"traffic_class"`
 }
 
 // GetDashboardSnapshotV2 returns ops dashboard core snapshot in one request.
@@ -56,6 +57,10 @@ func (h *OpsHandler) GetDashboardSnapshotV2(c *gin.Context) {
 		Platform:  strings.TrimSpace(c.Query("platform")),
 		QueryMode: parseOpsQueryMode(c),
 	}
+	if err := applyOpsTrafficClassParam(c, filter); err != nil {
+		response.BadRequest(c, err.Error())
+		return
+	}
 	if v := strings.TrimSpace(c.Query("group_id")); v != "" {
 		id, err := strconv.ParseInt(v, 10, 64)
 		if err != nil || id <= 0 {
@@ -73,6 +78,7 @@ func (h *OpsHandler) GetDashboardSnapshotV2(c *gin.Context) {
 		GroupID:      filter.GroupID,
 		QueryMode:    filter.QueryMode,
 		BucketSecond: bucketSeconds,
+		TrafficClass: filter.TrafficClass,
 	})
 	cacheKey := string(keyRaw)
 

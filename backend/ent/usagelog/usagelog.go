@@ -40,6 +40,8 @@ const (
 	FieldBillingTier = "billing_tier"
 	// FieldBillingMode holds the string denoting the billing_mode field in the database.
 	FieldBillingMode = "billing_mode"
+	// FieldTrafficClass holds the string denoting the traffic_class field in the database.
+	FieldTrafficClass = "traffic_class"
 	// FieldGroupID holds the string denoting the group_id field in the database.
 	FieldGroupID = "group_id"
 	// FieldSubscriptionID holds the string denoting the subscription_id field in the database.
@@ -173,6 +175,7 @@ var Columns = []string{
 	FieldModelMappingChain,
 	FieldBillingTier,
 	FieldBillingMode,
+	FieldTrafficClass,
 	FieldGroupID,
 	FieldSubscriptionID,
 	FieldInputTokens,
@@ -236,6 +239,10 @@ var (
 	BillingTierValidator func(string) error
 	// BillingModeValidator is a validator for the "billing_mode" field. It is called by the builders before save.
 	BillingModeValidator func(string) error
+	// DefaultTrafficClass holds the default value on creation for the "traffic_class" field.
+	DefaultTrafficClass string
+	// TrafficClassValidator is a validator for the "traffic_class" field. It is called by the builders before save.
+	TrafficClassValidator func(string) error
 	// DefaultInputTokens holds the default value on creation for the "input_tokens" field.
 	DefaultInputTokens int
 	// DefaultOutputTokens holds the default value on creation for the "output_tokens" field.
@@ -363,6 +370,11 @@ func ByBillingTier(opts ...sql.OrderTermOption) OrderOption {
 // ByBillingMode orders the results by the billing_mode field.
 func ByBillingMode(opts ...sql.OrderTermOption) OrderOption {
 	return sql.OrderByField(FieldBillingMode, opts...).ToFunc()
+}
+
+// ByTrafficClass orders the results by the traffic_class field.
+func ByTrafficClass(opts ...sql.OrderTermOption) OrderOption {
+	return sql.OrderByField(FieldTrafficClass, opts...).ToFunc()
 }
 
 // ByGroupID orders the results by the group_id field.

@@ -471,6 +471,18 @@ func (s *OpsService) prepareErrorLogInput(ctx context.Context, entry *OpsInsertE
 		entry.ErrorType = "api_error"
 	}
 
+	// Normalize traffic classification once at the service boundary so single
+	// and batch error ingestion share the same bounded persistence contract.
+	entry.TrafficClass = ClassifyTraffic(TrafficClassificationInput{
+		RequestPath:       entry.RequestPath,
+		InboundEndpoint:   entry.InboundEndpoint,
+		UpstreamEndpoint:  entry.UpstreamEndpoint,
+		UserAgent:         entry.UserAgent,
+		IsCountTokens:     entry.IsCountTokens,
+		ExplicitClass:     string(entry.TrafficClass),
+		DefaultProduction: false,
+	})
+
 	// Credential acquisition is a gateway/account-auth stage, not an inference
 	// HTTP attempt. Enforce that ownership at the persistence boundary so an
 	// earlier inference attempt cannot leak its status or text into top-level

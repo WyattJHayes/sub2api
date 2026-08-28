@@ -130,6 +130,23 @@ export default {
       errorTrend: 'Error Trend',
       errorDistribution: 'Error Distribution',
       switchRate: 'Avg switches',
+      traffic: {
+        title: 'Traffic Classes',
+        scope: 'Core metrics default to production traffic only',
+        production: 'Production',
+        metadata: 'Metadata',
+        synthetic: 'Synthetic',
+        unknown: 'Unknown'
+      },
+      resources: {
+        title: 'Host Resources',
+        availableMemory: 'Available memory',
+        swap: 'Swap',
+        disk: 'Disk usage',
+        oom: 'OOM kills',
+        warning: 'Resource warning',
+        noWarning: 'No warnings'
+      },
       // Health Score & Diagnosis
       health: 'Health',
       healthCondition: 'Health Condition',

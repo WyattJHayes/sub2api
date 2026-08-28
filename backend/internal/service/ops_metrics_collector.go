@@ -19,6 +19,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/redis/go-redis/v9"
 	"github.com/shirou/gopsutil/v4/cpu"
+	"github.com/shirou/gopsutil/v4/disk"
 	"github.com/shirou/gopsutil/v4/mem"
 )
 
@@ -57,6 +58,8 @@ type OpsMetricsCollector struct {
 
 	lastCgroupCPUUsageNanos uint64
 	lastCgroupCPUSampleAt   time.Time
+	lastOOMKillCount        int64
+	hasOOMKillSample        bool
 
 	stopCh    chan struct{}
 	startOnce sync.Once
@@ -341,6 +344,12 @@ func (c *OpsMetricsCollector) collectAndPersist(ctx context.Context) error {
 		MemoryUsedMB:       sys.memoryUsedMB,
 		MemoryTotalMB:      sys.memoryTotalMB,
 		MemoryUsagePercent: sys.memoryUsagePercent,
+		MemAvailableMB:     sys.memAvailableMB,
+		SwapUsedMB:         sys.swapUsedMB,
+		SwapTotalMB:        sys.swapTotalMB,
+		DiskUsedPercent:    sys.diskUsedPercent,
+		OOMKillCount:       sys.oomKillCount,
+		ResourceWarning:    sys.resourceWarning,
 
 		DBOK:    boolPtr(dbOK),
 		RedisOK: boolPtr(redisOK),
@@ -449,7 +458,8 @@ SELECT
   COALESCE(COUNT(*), 0) AS success_count,
   COALESCE(SUM(input_tokens + output_tokens + cache_creation_tokens + cache_read_tokens), 0) AS token_consumed
 FROM usage_logs
-WHERE created_at >= $1 AND created_at < $2`
+WHERE created_at >= $1 AND created_at < $2
+  AND traffic_class = 'production'`
 
 	var tokens sql.NullInt64
 	if err := c.db.QueryRowContext(ctx, q, start, end).Scan(&successCount, &tokens); err != nil {
@@ -473,7 +483,8 @@ SELECT
   MAX(duration_ms) AS max_ms
 FROM usage_logs
 WHERE created_at >= $1 AND created_at < $2
-  AND duration_ms IS NOT NULL`
+  AND duration_ms IS NOT NULL
+  AND traffic_class = 'production'`
 
 		var p50, p90, p95, p99 sql.NullFloat64
 		var avg sql.NullFloat64
@@ -506,7 +517,8 @@ SELECT
   MAX(first_token_ms) AS max_ms
 FROM usage_logs
 WHERE created_at >= $1 AND created_at < $2
-  AND first_token_ms IS NOT NULL`
+  AND first_token_ms IS NOT NULL
+  AND traffic_class = 'production'`
 
 		var p50, p90, p95, p99 sql.NullFloat64
 		var avg sql.NullFloat64
@@ -550,7 +562,8 @@ SELECT
   COALESCE(COUNT(*) FILTER (WHERE error_owner = 'provider' AND NOT is_business_limited AND COALESCE(upstream_status_code, status_code, 0) = 529), 0) AS upstream_529
 FROM ops_error_logs
 WHERE created_at >= $1 AND created_at < $2
-  AND is_count_tokens = FALSE`
+  AND is_count_tokens = FALSE
+  AND traffic_class = 'production'`
 
 	if err := c.db.QueryRowContext(ctx, q, start, end).Scan(
 		&errorTotal,
@@ -577,7 +590,8 @@ CROSS JOIN LATERAL jsonb_array_elements(
   COALESCE(NULLIF(o.upstream_errors, 'null'::jsonb), '[]'::jsonb)
 ) AS ev
 WHERE o.created_at >= $1 AND o.created_at < $2
-  AND o.is_count_tokens = FALSE`
+  AND o.is_count_tokens = FALSE
+  AND o.traffic_class = 'production'`
 
 	var count int64
 	if err := c.db.QueryRowContext(ctx, q, start, end).Scan(&count); err != nil {
@@ -591,6 +605,12 @@ type opsCollectedSystemStats struct {
 	memoryUsedMB       *int64
 	memoryTotalMB      *int64
 	memoryUsagePercent *float64
+	memAvailableMB     *int64
+	swapUsedMB         *int64
+	swapTotalMB        *int64
+	diskUsedPercent    *float64
+	oomKillCount       *int64
+	resourceWarning    string
 }
 
 func (c *OpsMetricsCollector) collectSystemStats(ctx context.Context) (*opsCollectedSystemStats, error) {
@@ -626,8 +646,140 @@ func (c *OpsMetricsCollector) collectSystemStats(ctx context.Context) (*opsColle
 		}
 	}
 	out.memoryUsedMB, out.memoryTotalMB, out.memoryUsagePercent = resolveMemoryStats(cgroupUsed, cgroupTotal, cgroupOK, host)
+	var hostAvailable uint64
+	hostAvailableOK := false
+	if host != nil {
+		hostAvailable = host.Available
+		hostAvailableOK = true
+	} else if !(cgroupOK && cgroupTotal > 0 && cgroupUsed <= cgroupTotal) {
+		hostAvailable, hostAvailableOK = readMemAvailableBytes()
+	}
+	if available, ok := resolveAvailableMemoryBytes(cgroupUsed, cgroupTotal, cgroupOK, hostAvailable, hostAvailableOK); ok {
+		v := int64(available / bytesPerMB)
+		out.memAvailableMB = &v
+	}
+
+	if swap, err := mem.SwapMemoryWithContext(ctx); err == nil && swap != nil {
+		used := int64(swap.Used / bytesPerMB)
+		total := int64(swap.Total / bytesPerMB)
+		out.swapUsedMB = &used
+		out.swapTotalMB = &total
+	}
+	if usage, err := disk.UsageWithContext(ctx, "/"); err == nil && usage != nil && usage.Total > 0 {
+		pct := roundTo1DP(usage.UsedPercent)
+		out.diskUsedPercent = &pct
+	}
+	if oom, ok := readOOMKillCount(); ok {
+		out.oomKillCount = &oom
+	}
+	oomIncreased := false
+	if out.oomKillCount != nil {
+		if c.hasOOMKillSample && *out.oomKillCount > c.lastOOMKillCount {
+			oomIncreased = true
+		}
+		c.lastOOMKillCount = *out.oomKillCount
+		c.hasOOMKillSample = true
+	}
+	out.resourceWarning = resourceWarningSummary(out.memAvailableMB, out.swapUsedMB, out.diskUsedPercent, oomIncreased)
 
 	return out, nil
+}
+
+func parseMemAvailableBytes(content string) (uint64, bool) {
+	for _, line := range strings.Split(content, "\n") {
+		fields := strings.Fields(line)
+		if len(fields) < 2 || fields[0] != "MemAvailable:" {
+			continue
+		}
+		value, err := strconv.ParseUint(fields[1], 10, 64)
+		if err != nil {
+			return 0, false
+		}
+		if len(fields) >= 3 {
+			switch strings.ToLower(fields[2]) {
+			case "kb":
+				value *= 1024
+			case "mb":
+				value *= 1024 * 1024
+			case "gb":
+				value *= 1024 * 1024 * 1024
+			}
+		}
+		return value, true
+	}
+	return 0, false
+}
+
+func readMemAvailableBytes() (uint64, bool) {
+	raw, err := os.ReadFile("/proc/meminfo")
+	if err != nil {
+		return 0, false
+	}
+	return parseMemAvailableBytes(string(raw))
+}
+
+func resolveAvailableMemoryBytes(cgroupUsed, cgroupTotal uint64, cgroupOK bool, hostAvailable uint64, hostAvailableOK bool) (uint64, bool) {
+	if cgroupOK && cgroupTotal > 0 && cgroupUsed <= cgroupTotal {
+		return cgroupTotal - cgroupUsed, true
+	}
+	if hostAvailableOK {
+		return hostAvailable, true
+	}
+	return 0, false
+}
+
+func parseOOMKillCount(content string) (int64, bool) {
+	for _, line := range strings.Split(content, "\n") {
+		fields := strings.Fields(line)
+		if len(fields) < 2 || fields[0] != "oom_kill" {
+			continue
+		}
+		value, err := strconv.ParseInt(fields[1], 10, 64)
+		if err != nil || value < 0 {
+			return 0, false
+		}
+		return value, true
+	}
+	return 0, false
+}
+
+func readOOMKillCount() (int64, bool) {
+	if raw, err := os.ReadFile("/sys/fs/cgroup/memory.events"); err == nil {
+		if value, ok := parseOOMKillCount(string(raw)); ok {
+			return value, true
+		}
+	}
+	if raw, err := os.ReadFile("/proc/vmstat"); err == nil {
+		return parseOOMKillCount(string(raw))
+	}
+	return 0, false
+}
+
+func resourceWarningSummary(memAvailableMB, swapUsedMB *int64, diskUsedPercent *float64, oomIncreased bool) string {
+	warnings := make([]string, 0, 4)
+	if memAvailableMB != nil {
+		switch {
+		case *memAvailableMB < 128:
+			warnings = append(warnings, "critical:mem_available")
+		case *memAvailableMB < 256:
+			warnings = append(warnings, "warning:mem_available")
+		}
+	}
+	if swapUsedMB != nil && *swapUsedMB > 0 {
+		warnings = append(warnings, "warning:swap_used")
+	}
+	if diskUsedPercent != nil {
+		switch {
+		case *diskUsedPercent >= 90:
+			warnings = append(warnings, "critical:disk")
+		case *diskUsedPercent >= 80:
+			warnings = append(warnings, "warning:disk")
+		}
+	}
+	if oomIncreased {
+		warnings = append(warnings, "critical:oom_kill")
+	}
+	return strings.Join(warnings, ",")
 }
 
 // resolveMemoryStats picks a single, self-consistent (used, total, percent)

@@ -65,6 +65,12 @@ INSERT INTO ops_system_metrics (
   memory_used_mb,
   memory_total_mb,
   memory_usage_percent,
+  mem_available_mb,
+  swap_used_mb,
+  swap_total_mb,
+  disk_used_percent,
+  oom_kill_count,
+  resource_warning,
 
   db_ok,
   redis_ok,
@@ -86,10 +92,11 @@ INSERT INTO ops_system_metrics (
   $16,$17,$18,$19,$20,$21,
   $22,$23,$24,$25,$26,$27,
   $28,$29,$30,$31,
-  $32,$33,
-  $34,$35,
-  $36,$37,$38,
-  $39,$40
+  $32,$33,$34,$35,$36,$37,
+  $38,$39,
+  $40,$41,
+  $42,$43,$44,
+  $45,$46
 )`
 
 	_, err := r.db.ExecContext(
@@ -132,6 +139,12 @@ INSERT INTO ops_system_metrics (
 		opsNullInt(input.MemoryUsedMB),
 		opsNullInt(input.MemoryTotalMB),
 		opsNullFloat64(input.MemoryUsagePercent),
+		opsNullInt(input.MemAvailableMB),
+		opsNullInt(input.SwapUsedMB),
+		opsNullInt(input.SwapTotalMB),
+		opsNullFloat64(input.DiskUsedPercent),
+		opsNullInt(input.OOMKillCount),
+		opsNullString(input.ResourceWarning),
 
 		opsNullBool(input.DBOK),
 		opsNullBool(input.RedisOK),
@@ -167,6 +180,12 @@ SELECT
   memory_used_mb,
   memory_total_mb,
   memory_usage_percent,
+  mem_available_mb,
+  swap_used_mb,
+  swap_total_mb,
+  disk_used_percent,
+  oom_kill_count,
+  resource_warning,
 
   db_ok,
   redis_ok,
@@ -193,6 +212,12 @@ LIMIT 1`
 	var memUsed sql.NullInt64
 	var memTotal sql.NullInt64
 	var memPct sql.NullFloat64
+	var memAvailable sql.NullInt64
+	var swapUsed sql.NullInt64
+	var swapTotal sql.NullInt64
+	var diskUsed sql.NullFloat64
+	var oomKill sql.NullInt64
+	var resourceWarning sql.NullString
 	var dbOK sql.NullBool
 	var redisOK sql.NullBool
 	var redisTotal sql.NullInt64
@@ -212,6 +237,12 @@ LIMIT 1`
 		&memUsed,
 		&memTotal,
 		&memPct,
+		&memAvailable,
+		&swapUsed,
+		&swapTotal,
+		&diskUsed,
+		&oomKill,
+		&resourceWarning,
 		&dbOK,
 		&redisOK,
 		&redisTotal,
@@ -241,6 +272,29 @@ LIMIT 1`
 	if memPct.Valid {
 		v := memPct.Float64
 		out.MemoryUsagePercent = &v
+	}
+	if memAvailable.Valid {
+		v := memAvailable.Int64
+		out.MemAvailableMB = &v
+	}
+	if swapUsed.Valid {
+		v := swapUsed.Int64
+		out.SwapUsedMB = &v
+	}
+	if swapTotal.Valid {
+		v := swapTotal.Int64
+		out.SwapTotalMB = &v
+	}
+	if diskUsed.Valid {
+		v := diskUsed.Float64
+		out.DiskUsedPercent = &v
+	}
+	if oomKill.Valid {
+		v := oomKill.Int64
+		out.OOMKillCount = &v
+	}
+	if resourceWarning.Valid {
+		out.ResourceWarning = resourceWarning.String
 	}
 	if dbOK.Valid {
 		v := dbOK.Bool

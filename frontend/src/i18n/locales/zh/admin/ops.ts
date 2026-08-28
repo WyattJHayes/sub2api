@@ -130,6 +130,23 @@ export default {
       errorTrend: '错误趋势',
       errorDistribution: '错误分布',
       switchRate: '平均账号切换',
+      traffic: {
+        title: '流量分类',
+        scope: '核心指标默认仅统计生产流量',
+        production: '生产流量',
+        metadata: '元数据',
+        synthetic: '合成探针',
+        unknown: '未知流量'
+      },
+      resources: {
+        title: '主机资源',
+        availableMemory: '可用内存',
+        swap: 'Swap',
+        disk: '磁盘使用',
+        oom: 'OOM Kill',
+        warning: '资源告警',
+        noWarning: '无告警'
+      },
       // Health Score & Diagnosis
       health: '健康',
       healthCondition: '健康状况',

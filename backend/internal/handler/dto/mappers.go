@@ -645,6 +645,7 @@ func usageLogFromServiceUser(l *service.UsageLog) UsageLog {
 		Model:                     requestedModel,
 		UpstreamResponseModel:     l.UpstreamResponseModel,
 		UpstreamModelMismatch:     l.UpstreamModelMismatch,
+		TrafficClass:              string(service.NormalizeTrafficClass(string(l.TrafficClass))),
 		ServiceTier:               l.ServiceTier,
 		ReasoningEffort:           l.ReasoningEffort,
 		InboundEndpoint:           l.InboundEndpoint,

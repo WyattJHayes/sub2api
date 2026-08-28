@@ -7,11 +7,18 @@ import HelpTooltip from '@/components/common/HelpTooltip.vue'
 import BaseDialog from '@/components/common/BaseDialog.vue'
 import Icon from '@/components/icons/Icon.vue'
 import { adminAPI } from '@/api'
-import { opsAPI, type OpsDashboardOverview, type OpsMetricThresholds, type OpsRealtimeTrafficSummary } from '@/api/admin/ops'
+import {
+  opsAPI,
+  type OpsDashboardOverview,
+  type OpsMetricThresholds,
+  type OpsRealtimeTrafficSummary,
+  type OpsTrafficClass
+} from '@/api/admin/ops'
 import type { OpsRequestDetailsPreset } from './OpsRequestDetailsModal.vue'
 import { useAdminSettingsStore } from '@/stores'
 import { formatNumber } from '@/utils/format'
 import { formatMemorySizeMB } from '../utils/opsFormatters'
+import { getResourceSeverity, normalizeTrafficBreakdown, type ResourceSeverity } from '../utils/opsDashboardMetrics'
 
 type RealtimeWindow = '1min' | '5min' | '30min' | '1h'
 
@@ -19,6 +26,7 @@ interface Props {
   overview?: OpsDashboardOverview | null
   platform: string
   groupId: number | null
+  trafficClass: OpsTrafficClass
   timeRange: string
   queryMode: string
   loading: boolean
@@ -34,6 +42,7 @@ interface Props {
 interface Emits {
   (e: 'update:platform', value: string): void
   (e: 'update:group', value: number | null): void
+  (e: 'update:trafficClass', value: OpsTrafficClass): void
   (e: 'update:timeRange', value: string): void
   (e: 'update:queryMode', value: string): void
   (e: 'update:customTimeRange', startTime: string, endTime: string): void
@@ -127,6 +136,13 @@ const timeRangeOptions = computed(() => [
   }
 ])
 
+const trafficClassOptions = computed(() => [
+  { value: 'production', label: t('admin.ops.traffic.production') },
+  { value: 'metadata', label: t('admin.ops.traffic.metadata') },
+  { value: 'synthetic', label: t('admin.ops.traffic.synthetic') },
+  { value: 'unknown', label: t('admin.ops.traffic.unknown') }
+])
+
 const queryModeOptions = computed(() => [
   { value: 'auto', label: t('admin.ops.queryMode.auto') },
   { value: 'raw', label: t('admin.ops.queryMode.raw') },
@@ -170,6 +186,12 @@ function handleGroupChange(val: string | number | boolean | null) {
   }
   const id = typeof val === 'number' ? val : Number.parseInt(String(val), 10)
   emit('update:group', Number.isFinite(id) && id > 0 ? id : null)
+}
+
+function handleTrafficClassChange(val: string | number | boolean | null) {
+  const next = String(val || 'production') as OpsTrafficClass
+  if (!['production', 'metadata', 'synthetic', 'unknown'].includes(next)) return
+  emit('update:trafficClass', next)
 }
 
 function handleTimeRangeChange(val: string | number | boolean | null) {
@@ -276,6 +298,107 @@ function getThresholdColorClass(level: ThresholdLevel): string {
 const totalRequestsLabel = computed(() => formatNumber(overview.value?.request_count_total ?? 0))
 const totalTokensLabel = computed(() => formatNumber(overview.value?.token_consumed ?? 0))
 
+const trafficCards = computed(() => {
+  const breakdown = normalizeTrafficBreakdown(overview.value?.traffic_breakdown)
+  const definitions: Array<{ key: OpsTrafficClass; color: string; dot: string }> = [
+    {
+      key: 'production',
+      color: 'border-emerald-200 bg-emerald-50 text-emerald-700 dark:border-emerald-900/50 dark:bg-emerald-900/20 dark:text-emerald-300',
+      dot: 'bg-emerald-500'
+    },
+    {
+      key: 'metadata',
+      color: 'border-amber-200 bg-amber-50 text-amber-700 dark:border-amber-900/50 dark:bg-amber-900/20 dark:text-amber-300',
+      dot: 'bg-amber-500'
+    },
+    {
+      key: 'synthetic',
+      color: 'border-sky-200 bg-sky-50 text-sky-700 dark:border-sky-900/50 dark:bg-sky-900/20 dark:text-sky-300',
+      dot: 'bg-sky-500'
+    },
+    {
+      key: 'unknown',
+      color: 'border-gray-200 bg-gray-50 text-gray-700 dark:border-dark-700 dark:bg-dark-900/50 dark:text-gray-300',
+      dot: 'bg-gray-400'
+    }
+  ]
+  return definitions.map((definition) => ({
+    ...definition,
+    label: t(`admin.ops.traffic.${definition.key}`),
+    count: breakdown[definition.key]
+  }))
+})
+
+const resourceSeverity = computed<ResourceSeverity>(() => getResourceSeverity(systemMetrics.value))
+
+function resourceSeverityClass(level: ResourceSeverity): string {
+  switch (level) {
+    case 'critical':
+      return 'text-rose-600 dark:text-rose-400'
+    case 'warning':
+      return 'text-amber-600 dark:text-amber-400'
+    case 'ok':
+      return 'text-emerald-600 dark:text-emerald-400'
+    default:
+      return 'text-gray-900 dark:text-white'
+  }
+}
+
+const availableMemoryValue = computed<number | null>(() => {
+  const value = systemMetrics.value?.mem_available_mb
+  return typeof value === 'number' && Number.isFinite(value) && value >= 0 ? value : null
+})
+
+const availableMemorySeverity = computed<ResourceSeverity>(() => {
+  const value = availableMemoryValue.value
+  if (value == null) return 'unknown'
+  if (value < 128) return 'critical'
+  if (value < 256) return 'warning'
+  return 'ok'
+})
+
+const swapUsedValue = computed<number | null>(() => {
+  const value = systemMetrics.value?.swap_used_mb
+  return typeof value === 'number' && Number.isFinite(value) && value >= 0 ? value : null
+})
+
+const swapTotalValue = computed<number | null>(() => {
+  const value = systemMetrics.value?.swap_total_mb
+  return typeof value === 'number' && Number.isFinite(value) && value >= 0 ? value : null
+})
+
+const swapSeverity = computed<ResourceSeverity>(() => {
+  if (swapUsedValue.value == null) return 'unknown'
+  return swapUsedValue.value > 0 ? 'warning' : 'ok'
+})
+
+const diskUsedValue = computed<number | null>(() => {
+  const value = systemMetrics.value?.disk_used_percent
+  return typeof value === 'number' && Number.isFinite(value) && value >= 0 ? value : null
+})
+
+const diskSeverity = computed<ResourceSeverity>(() => {
+  const value = diskUsedValue.value
+  if (value == null) return 'unknown'
+  if (value >= 90) return 'critical'
+  if (value >= 80) return 'warning'
+  return 'ok'
+})
+
+const oomKillValue = computed<number | null>(() => {
+  const value = systemMetrics.value?.oom_kill_count
+  return typeof value === 'number' && Number.isFinite(value) && value >= 0 ? value : null
+})
+
+const oomSeverity = computed<ResourceSeverity>(() => {
+  if (resourceSeverity.value === 'critical' && String(systemMetrics.value?.resource_warning || '').includes('oom_kill')) {
+    return 'critical'
+  }
+  return oomKillValue.value == null ? 'unknown' : oomKillValue.value > 0 ? 'warning' : 'ok'
+})
+
+const resourceWarningLabel = computed(() => systemMetrics.value?.resource_warning?.trim() || t('admin.ops.resources.noWarning'))
+
 const realtimeTrafficSummary = ref<OpsRealtimeTrafficSummary | null>(null)
 const realtimeTrafficLoading = ref(false)
 
@@ -300,7 +423,7 @@ async function loadRealtimeTrafficSummary() {
   }
   realtimeTrafficLoading.value = true
   try {
-    const res = await opsAPI.getRealtimeTrafficSummary(realtimeWindow.value, props.platform, props.groupId)
+    const res = await opsAPI.getRealtimeTrafficSummary(realtimeWindow.value, props.platform, props.groupId, props.trafficClass)
     if (res && res.enabled === false) {
       adminSettingsStore.setOpsRealtimeMonitoringEnabledLocal(false)
     }
@@ -314,7 +437,7 @@ async function loadRealtimeTrafficSummary() {
 }
 
 watch(
-  () => [realtimeWindow.value, props.platform, props.groupId] as const,
+  () => [realtimeWindow.value, props.platform, props.groupId, props.trafficClass] as const,
   () => {
     loadRealtimeTrafficSummary()
   },
@@ -909,6 +1032,13 @@ function handleToolbarRefresh() {
             @update:model-value="handleGroupChange"
           />
 
+          <Select
+            :model-value="trafficClass"
+            :options="trafficClassOptions"
+            class="w-full sm:w-[140px]"
+            @update:model-value="handleTrafficClassChange"
+          />
+
           <div class="mx-1 hidden h-4 w-[1px] bg-gray-200 dark:bg-dark-700 sm:block"></div>
 
           <Select
@@ -1431,6 +1561,31 @@ function handleToolbarRefresh() {
       </div>
     </div>
 
+    <!-- Traffic class breakdown: all classes remain visible while core metrics use the selected class. -->
+    <div v-if="overview" class="mt-2 border-t border-gray-100 pt-4 dark:border-dark-700">
+      <div class="mb-3 flex flex-wrap items-baseline justify-between gap-2">
+        <h3 class="text-xs font-bold uppercase tracking-wider text-gray-400">{{ t('admin.ops.traffic.title') }}</h3>
+        <span class="text-[11px] text-gray-500 dark:text-gray-400">{{ t('admin.ops.traffic.scope') }}</span>
+      </div>
+      <div class="grid grid-cols-2 gap-3 sm:grid-cols-4">
+        <button
+          v-for="card in trafficCards"
+          :key="card.key"
+          type="button"
+          class="rounded-xl border p-3 text-left transition-shadow hover:shadow-sm"
+          :class="[card.color, trafficClass === card.key ? 'ring-2 ring-current ring-offset-1 dark:ring-offset-dark-800' : '']"
+          :aria-pressed="trafficClass === card.key"
+          @click="emit('update:trafficClass', card.key)"
+        >
+          <div class="flex items-center gap-2 text-[10px] font-bold uppercase tracking-wider">
+            <span class="h-2 w-2 rounded-full" :class="card.dot"></span>
+            <span>{{ card.label }}</span>
+          </div>
+          <div class="mt-2 text-2xl font-black">{{ formatNumber(card.count) }}</div>
+        </button>
+      </div>
+    </div>
+
     <!-- Integrated: System health (cards) -->
     <div v-if="overview" class="mt-2 border-t border-gray-100 pt-4 dark:border-dark-700">
       <div class="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-6">
@@ -1538,6 +1693,55 @@ function handleToolbarRefresh() {
             {{ t('common.total') }} <span class="font-mono">{{ jobHeartbeats.length }}</span>
             · {{ t('common.warning') }} <span class="font-mono">{{ jobsWarnCount }}</span>
           </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Resource risk signals required for the unchanged 2 GiB host. -->
+    <div v-if="overview" class="mt-2 border-t border-gray-100 pt-4 dark:border-dark-700">
+      <div class="mb-3 flex flex-wrap items-baseline justify-between gap-2">
+        <h3 class="text-xs font-bold uppercase tracking-wider text-gray-400">{{ t('admin.ops.resources.title') }}</h3>
+        <span class="text-xs font-bold" :class="resourceSeverityClass(resourceSeverity)">{{ resourceWarningLabel }}</span>
+      </div>
+      <div class="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-5">
+        <div class="rounded-xl bg-gray-50 p-3 dark:bg-dark-900">
+          <div class="text-[10px] font-bold uppercase tracking-wider text-gray-400">{{ t('admin.ops.resources.availableMemory') }}</div>
+          <div class="mt-1 text-lg font-black" :class="resourceSeverityClass(availableMemorySeverity)">
+            {{ availableMemoryValue == null ? '-' : formatMemorySizeMB(availableMemoryValue) }}
+          </div>
+          <div v-if="!props.fullscreen" class="mt-1 text-[10px] text-gray-500 dark:text-gray-400">warning &lt;256 MB · critical &lt;128 MB</div>
+        </div>
+
+        <div class="rounded-xl bg-gray-50 p-3 dark:bg-dark-900">
+          <div class="text-[10px] font-bold uppercase tracking-wider text-gray-400">{{ t('admin.ops.resources.swap') }}</div>
+          <div class="mt-1 text-lg font-black" :class="resourceSeverityClass(swapSeverity)">
+            {{ swapUsedValue == null ? '-' : formatMemorySizeMB(swapUsedValue) }}
+          </div>
+          <div v-if="!props.fullscreen" class="mt-1 text-[10px] text-gray-500 dark:text-gray-400">
+            {{ swapTotalValue == null ? '-' : `${formatMemorySizeMB(swapTotalValue)} total` }}
+          </div>
+        </div>
+
+        <div class="rounded-xl bg-gray-50 p-3 dark:bg-dark-900">
+          <div class="text-[10px] font-bold uppercase tracking-wider text-gray-400">{{ t('admin.ops.resources.disk') }}</div>
+          <div class="mt-1 text-lg font-black" :class="resourceSeverityClass(diskSeverity)">
+            {{ diskUsedValue == null ? '-' : `${diskUsedValue.toFixed(1)}%` }}
+          </div>
+          <div v-if="!props.fullscreen" class="mt-1 text-[10px] text-gray-500 dark:text-gray-400">warning ≥80% · critical ≥90%</div>
+        </div>
+
+        <div class="rounded-xl bg-gray-50 p-3 dark:bg-dark-900">
+          <div class="text-[10px] font-bold uppercase tracking-wider text-gray-400">{{ t('admin.ops.resources.oom') }}</div>
+          <div class="mt-1 text-lg font-black" :class="resourceSeverityClass(oomSeverity)">{{ oomKillValue == null ? '-' : oomKillValue }}</div>
+          <div v-if="!props.fullscreen" class="mt-1 text-[10px] text-gray-500 dark:text-gray-400">cumulative host counter</div>
+        </div>
+
+        <div class="rounded-xl bg-gray-50 p-3 dark:bg-dark-900">
+          <div class="text-[10px] font-bold uppercase tracking-wider text-gray-400">{{ t('admin.ops.resources.warning') }}</div>
+          <div class="mt-1 text-lg font-black" :class="resourceSeverityClass(resourceSeverity)">
+            {{ resourceSeverity === 'unknown' ? '-' : resourceSeverity }}
+          </div>
+          <div v-if="!props.fullscreen" class="mt-1 truncate text-[10px] text-gray-500 dark:text-gray-400" :title="resourceWarningLabel">{{ resourceWarningLabel }}</div>
         </div>
       </div>
     </div>
