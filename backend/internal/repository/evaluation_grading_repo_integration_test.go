@@ -612,7 +612,7 @@ func TestEvaluationOutbox_RejectsFutureCauseAndInsertOnlyMutation(t *testing.T) 
 func (r *evaluationGradingRepository) createRunForGradingTest(ctx context.Context, planID uuid.UUID) (*service.EvaluationRun, error) {
 	// The normal repository implementation owns run expansion; this helper keeps
 	// the focused integration fixtures independent of that concrete type.
-	eval := &evaluationRepository{db: r.db}
+	eval := &evaluationRepository{db: r.db, routeProfileVersion: radarRouteProfileVersion}
 	var tenantID int64
 	if err := r.db.QueryRowContext(ctx, `SELECT tenant_id FROM evaluation_plans WHERE id=$1`, planID).Scan(&tenantID); err != nil {
 		return nil, err
