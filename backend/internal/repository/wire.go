@@ -102,7 +102,11 @@ func ProvideEvaluationGradingRepository(db *sql.DB, cfg *config.Config, store se
 }
 
 func ProvideRadarProjectionRepository(governance service.RadarGovernanceRepository) service.RadarProjectionRepository {
-	return governance.(service.RadarProjectionRepository)
+	projection, ok := governance.(service.RadarProjectionRepository)
+	if !ok {
+		panic("Radar governance repository must implement RadarProjectionRepository")
+	}
+	return projection
 }
 
 func ProvideRadarGovernanceRepository(db *sql.DB, cfg *config.Config) service.RadarGovernanceRepository {

@@ -58,32 +58,6 @@ func (s *PricingService) SnapshotPricingSource() PricingSourceSnapshot {
 	}
 }
 
-func (s *PricingService) recordPricingRefresh(source string, remoteHash string, ok bool, err error) {
-	if s == nil {
-		return
-	}
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
-	s.source = normalizePricingSource(source, len(s.pricingData))
-	s.remoteHash = strings.TrimSpace(remoteHash)
-	s.lastRefreshAt = time.Now()
-	s.lastRefreshOK = ok
-	if err != nil {
-		s.lastRefreshError = err.Error()
-	} else {
-		s.lastRefreshError = ""
-	}
-}
-
-func (s *PricingService) recordPricingFallback(source string, err error) {
-	if s == nil {
-		return
-	}
-	s.fallbackTotal.Add(1)
-	s.recordPricingRefresh(source, "", false, err)
-}
-
 func logPricingSourceSnapshot(log *slog.Logger, now time.Time, snapshot PricingSourceSnapshot) {
 	if log == nil {
 		log = slog.Default()

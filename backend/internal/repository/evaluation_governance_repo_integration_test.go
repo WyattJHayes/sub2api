@@ -18,6 +18,69 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+type radarControlPlaneConstraintFixture struct {
+	actorID   int64
+	datasetID uuid.UUID
+	caseID    uuid.UUID
+	runID     uuid.UUID
+	sampleID  uuid.UUID
+}
+
+// insertRadarControlPlaneConstraintFixture creates the minimal completed run
+// required by governance repository integration tests.
+func insertRadarControlPlaneConstraintFixture(t *testing.T, tx *sql.Tx) radarControlPlaneConstraintFixture {
+	t.Helper()
+	ctx := context.Background()
+	suffix := uuid.NewString()
+	fixture := radarControlPlaneConstraintFixture{
+		datasetID: uuid.New(),
+		caseID:    uuid.New(),
+		runID:     uuid.New(),
+		sampleID:  uuid.New(),
+	}
+	require.NoError(t, tx.QueryRowContext(ctx, `
+		INSERT INTO users (email, password_hash, role, balance, concurrency, status)
+		VALUES ($1, 'radar-control-plane-test', 'admin', 0, 1, 'active')
+		RETURNING id`, "radar-control-plane-"+suffix+"@example.com").Scan(&fixture.actorID))
+	require.NoError(t, execRadarFixtureSQL(ctx, tx, `
+		INSERT INTO evaluation_dataset_versions (
+			id, dataset_key, version, manifest_sha256, source_type, status, created_by, published_at
+		) VALUES ($1, $2, 'v1', $3, 'synthetic', 'published', $4, NOW())`,
+		fixture.datasetID, "radar-constraints-"+suffix, fmt.Sprintf("%064d", 1), fixture.actorID))
+	require.NoError(t, execRadarFixtureSQL(ctx, tx, `
+		INSERT INTO evaluation_cases (
+			id, dataset_version_id, case_key, capability_domain, priority, weight, sample_count,
+			prompt_spec, expected_spec, execution_spec, grader_id, grader_version,
+			content_sha256, confidentiality
+		) VALUES ($1, $2, 'case-1', 'protocol', 'P0', 1, 1,
+			'{}'::jsonb, '{}'::jsonb, '{}'::jsonb, 'exact', 'v1', $3, 'synthetic')`,
+		fixture.caseID, fixture.datasetID, fmt.Sprintf("%064d", 2)))
+	planID := uuid.New()
+	require.NoError(t, execRadarFixtureSQL(ctx, tx, `
+		INSERT INTO evaluation_plans (
+			id, name, dataset_version_id, trigger_type, model_matrix,
+			max_run_cost, daily_cost_limit, max_concurrency, created_by
+		) VALUES ($1, 'constraint-plan', $2, 'manual', '[]'::jsonb, 1, 2, 1, $3)`,
+		planID, fixture.datasetID, fixture.actorID))
+	require.NoError(t, execRadarFixtureSQL(ctx, tx, `
+		INSERT INTO evaluation_runs (
+			id, plan_id, trigger_source, baseline_ref, candidate_ref, status,
+			budget_limit, reserved_cost, actual_cost, created_by, finished_at
+		) VALUES ($1, $2, 'manual', '{}'::jsonb, '{}'::jsonb, 'completed',
+			1, 0.01, 0.01, $3, NOW())`, fixture.runID, planID, fixture.actorID))
+	require.NoError(t, execRadarFixtureSQL(ctx, tx, `
+		INSERT INTO evaluation_samples (
+			id, run_id, case_id, model_route, sample_index, priority, status, estimated_cost
+		) VALUES ($1, $2, $3, 'candidate', 0, 'P0', 'completed', 0.01)`,
+		fixture.sampleID, fixture.runID, fixture.caseID))
+	return fixture
+}
+
+func execRadarFixtureSQL(ctx context.Context, tx *sql.Tx, query string, args ...any) error {
+	_, err := tx.ExecContext(ctx, query, args...)
+	return err
+}
+
 func TestRecordGateDecisionRejectsReliabilityWatermarkWithoutSnapshotRefs(t *testing.T) {
 	tx := testTx(t)
 	fixture := insertRadarControlPlaneConstraintFixture(t, tx)

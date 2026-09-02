@@ -112,6 +112,14 @@ func TestRouteTraceUpdatesLatestAttemptError(t *testing.T) {
 	require.Equal(t, "503", got.FallbackChain[0].ErrorCode)
 }
 
+func TestRouteTraceSnapshotExposesLatestResolvedModel(t *testing.T) {
+	trace := NewRouteTrace(EvaluationContext{}, RouteTraceConfig{HashKey: []byte(strings.Repeat("h", 32))})
+	trace.RecordAttempt(RouteAttempt{Provider: "anthropic", AccountID: 12, ChannelID: 4, ResolvedModel: "claude-sonnet-4", Region: "cn-east"})
+
+	got := trace.Snapshot()
+	require.Equal(t, "claude-sonnet-4", got.ResolvedModel)
+}
+
 func TestRouteTraceBuildsSealReadyAttemptChain(t *testing.T) {
 	trace := NewRouteTrace(EvaluationContext{ExpectedModelAlias: "route-a", ExpectedRouteProfile: "route-v42"}, RouteTraceConfig{
 		HashKey: []byte(strings.Repeat("h", 32)), Region: "cn-east",

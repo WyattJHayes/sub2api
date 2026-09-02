@@ -409,12 +409,12 @@ func isNilPatchValue(value any) bool {
 		return true
 	}
 	ref := reflect.ValueOf(value)
-	return ref.Kind() == reflect.Ptr && ref.IsNil()
+	return ref.Kind() == reflect.Pointer && ref.IsNil()
 }
 
 func patchClearsValue(value any) bool {
 	ref := reflect.ValueOf(value)
-	if ref.Kind() != reflect.Ptr || ref.IsNil() {
+	if ref.Kind() != reflect.Pointer || ref.IsNil() {
 		return false
 	}
 	elem := ref.Elem()
@@ -634,11 +634,19 @@ func (t *RouteTrace) Snapshot() RouteEvidence {
 
 	t.mu.Lock()
 	defer t.mu.Unlock()
+	var latest RouteFallbackEntry
+	if count := len(t.evidence.FallbackChain); count > 0 {
+		latest = t.evidence.FallbackChain[count-1]
+	}
 
 	return RouteEvidence{
-		Attempts:      t.evidence.Attempts,
-		FallbackChain: append([]RouteFallbackEntry(nil), t.evidence.FallbackChain...),
-		Region:        t.evidence.Region,
+		ResolvedModel:  latest.ResolvedModel,
+		Provider:       latest.Provider,
+		ChannelRef:     latest.ChannelRef,
+		AccountPoolRef: latest.AccountPoolRef,
+		Attempts:       t.evidence.Attempts,
+		FallbackChain:  append([]RouteFallbackEntry(nil), t.evidence.FallbackChain...),
+		Region:         t.evidence.Region,
 	}
 }
 
