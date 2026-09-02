@@ -491,6 +491,10 @@ func (h *GatewayHandler) Messages(c *gin.Context) {
 			}
 			account = latest
 			selection.Account = latest
+			// Record the final account attempt for Radar evidence after profit admission.
+			// This is the canonical point for the Anthropic messages path, including
+			// failover retries and any account replacement performed by admission.
+			recordEvaluationRouteAttempt(c.Request.Context(), h.cfg, account, channelMapping.ChannelID, reqModel)
 			// 等待路径保持既有 eager 绑定（无门时 helper 直接绑定）；调度器已
 			// 抢槽的直达路径无门时由选号内部绑定，这里只在门下补准入后绑定。
 			if selection.ProfitGateActive() || !selection.Acquired {
