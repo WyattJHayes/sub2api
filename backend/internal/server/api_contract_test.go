@@ -593,6 +593,7 @@ func TestAPIContracts(t *testing.T) {
 								"request_type": "stream",
 								"native_compaction_v2": false,
 								"openai_ws_mode": false,
+								"traffic_class": "unknown",
 								"group_id": null,
 								"subscription_id": null,
 							"input_tokens": 10,

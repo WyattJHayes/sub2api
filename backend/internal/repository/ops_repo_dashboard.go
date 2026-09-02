@@ -1097,7 +1097,6 @@ func (r *opsRepository) queryTrafficBreakdown(ctx context.Context, filter *servi
 	if platform != "" {
 		usageClauses = append(usageClauses, fmt.Sprintf("COALESCE(NULLIF(g.platform, ''), a.platform) = $%d", idx))
 		usageArgs = append(usageArgs, platform)
-		idx++
 	}
 
 	errorClauses := []string{"e.created_at >= $1", "e.created_at < $2", "e.is_count_tokens = FALSE", "COALESCE(e.status_code, 0) >= 400"}

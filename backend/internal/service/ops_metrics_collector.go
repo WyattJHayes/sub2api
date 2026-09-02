@@ -651,7 +651,7 @@ func (c *OpsMetricsCollector) collectSystemStats(ctx context.Context) (*opsColle
 	if host != nil {
 		hostAvailable = host.Available
 		hostAvailableOK = true
-	} else if !(cgroupOK && cgroupTotal > 0 && cgroupUsed <= cgroupTotal) {
+	} else if !cgroupOK || cgroupTotal == 0 || cgroupUsed > cgroupTotal {
 		hostAvailable, hostAvailableOK = readMemAvailableBytes()
 	}
 	if available, ok := resolveAvailableMemoryBytes(cgroupUsed, cgroupTotal, cgroupOK, hostAvailable, hostAvailableOK); ok {
