@@ -184,12 +184,18 @@ func runMainServer() {
 
 	log.Println("Shutting down server...")
 
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-
-	if err := app.Server.Shutdown(ctx); err != nil {
-		log.Printf("Server forced to shutdown: %v", err)
+	const shutdownTimeout = 5 * time.Second
+	if err := shutdownHTTPServer(app.Server, shutdownTimeout); err != nil {
+		log.Printf("Server forced to shutdown after %s: %v", shutdownTimeout, err)
+	} else {
+		log.Printf("Server shutdown completed within %s", shutdownTimeout)
 	}
 
 	log.Println("Server exited")
+}
+
+func shutdownHTTPServer(server *http.Server, timeout time.Duration) error {
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+	return server.Shutdown(ctx)
 }

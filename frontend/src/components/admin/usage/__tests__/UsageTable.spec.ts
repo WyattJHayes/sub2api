@@ -392,16 +392,47 @@ describe('admin UsageTable tooltip', () => {
     expect(reasoningEffortCell.text()).toContain('Max')
     expect(reasoningEffortCell.text()).not.toContain('XHigh')
     expect(reasoningEffortCell.text()).not.toContain('↳')
-  })
+	})
 
-	it('shows a red model mismatch status for every mismatched response', () => {
+	it.each([
+		{
+			name: 'matching upstream response model',
+			responseModel: 'gpt-5.5',
+			mismatch: false,
+			upstreamStatus: 'consistent',
+			expectedBadge: 'Model consistent',
+			color: 'emerald',
+			status: 'consistent',
+		},
+		{
+			name: 'missing upstream response model',
+			responseModel: undefined,
+			mismatch: null,
+			upstreamStatus: 'unknown',
+			expectedBadge: 'Model unknown',
+			color: 'amber',
+			status: 'unknown',
+		},
+		{
+			name: 'different upstream response model',
+			responseModel: 'gpt-5.4',
+			mismatch: true,
+			upstreamStatus: 'mismatch',
+			expectedBadge: 'Model mismatch',
+			color: 'red',
+			status: 'mismatch',
+		},
+	])('shows a traffic-light upstream response audit state for $name', ({ responseModel, mismatch, upstreamStatus, expectedBadge, color, status }) => {
 		const wrapper = mount(UsageTable, {
 			props: {
 				data: [{
-					request_id: 'req-model-mismatch',
+					request_id: `req-${responseModel}`,
 					model: 'gpt-5.6-sol',
-					upstream_response_model: 'gpt-5.4',
-					upstream_model_mismatch: true,
+					upstream_model: 'gpt-5.5',
+					model_mapping_chain: 'gpt-5.6-sol→gpt-5.5',
+					upstream_response_model: responseModel,
+					upstream_model_mismatch: mismatch,
+					upstream_model_status: upstreamStatus,
 				}],
 				loading: false,
 				columns: [],
@@ -418,21 +449,20 @@ describe('admin UsageTable tooltip', () => {
 
 		const text = wrapper.text()
 		expect(text).toContain('gpt-5.6-sol')
-		expect(text).toContain('gpt-5.4')
-		expect(text).toContain('Model mismatch')
-		expect(wrapper.get('[data-testid="upstream-model-status"]').attributes('data-status')).toBe('mismatch')
-		expect(wrapper.get('[data-testid="upstream-model-status"]').classes()).toContain('text-red-700')
+		expect(text).toContain('gpt-5.5')
+		if (responseModel) expect(text).toContain(responseModel)
+		expect(text).toContain(expectedBadge)
+		expect(wrapper.get(`[data-status="${status}"]`).classes().some((className) => className.includes(`text-${color}`))).toBe(true)
 	})
 
-	it('shows a green model consistent status when the response matches the sent model', () => {
+	it('does not infer consistency when a historical row has a response model but no decision', () => {
 		const wrapper = mount(UsageTable, {
 			props: {
 				data: [{
-					request_id: 'req-user-model-match',
-					model: 'gpt-5.6-luna',
-					upstream_model: 'gpt-5.6-luna',
-					upstream_response_model: 'gpt-5.6-luna',
-					upstream_model_mismatch: false,
+					request_id: 'req-historical-unknown',
+					model: 'gpt-5.6-sol',
+					upstream_response_model: 'gpt-5.5',
+					upstream_model_status: 'unknown',
 				}],
 				loading: false,
 				columns: [],
@@ -447,34 +477,8 @@ describe('admin UsageTable tooltip', () => {
 			},
 		})
 
-		const text = wrapper.text()
-		expect(text).toContain('Upstream response:gpt-5.6-luna')
-		expect(text).toContain('Model consistent')
-		expect(wrapper.get('[data-testid="upstream-model-status"]').attributes('data-status')).toBe('consistent')
-		expect(wrapper.get('[data-testid="upstream-model-status"]').classes()).toContain('text-emerald-700')
-	})
-
-	it('shows a yellow model unknown status when the upstream response model is unavailable', () => {
-		const wrapper = mount(UsageTable, {
-			props: {
-				data: [{ request_id: 'req-user-model-unknown', model: 'gpt-5.6-luna' }],
-				loading: false,
-				columns: [],
-			},
-			global: {
-				stubs: {
-					DataTable: DataTableStub,
-					EmptyState: true,
-					Icon: true,
-					Teleport: true,
-				},
-			},
-		})
-
-		expect(wrapper.text()).toContain('Upstream response:Unknown')
-		expect(wrapper.text()).toContain('Model unknown')
-		expect(wrapper.get('[data-testid="upstream-model-status"]').attributes('data-status')).toBe('unknown')
-		expect(wrapper.get('[data-testid="upstream-model-status"]').classes()).toContain('text-amber-700')
+		expect(wrapper.get('[data-status="unknown"]').text()).toContain('Model unknown')
+		expect(wrapper.get('[data-status="unknown"]').classes().some((className) => className.includes('text-amber'))).toBe(true)
 	})
 
   it.each([

@@ -2155,7 +2155,7 @@ func classifyOpsPhase(errType, message, code string) string {
 		return "upstream"
 	case "invalid_request_error", "permission_error", "forbidden_error", "not_found_error", "model_not_found":
 		return "request"
-	case "upstream_error", "overloaded_error":
+	case "upstream_error", "overloaded_error", "service_unavailable", "service_unavailable_error":
 		return "upstream"
 	case "api_error":
 		if isOpsNoAvailableAccountMessage(msg) {
@@ -2219,6 +2219,12 @@ func classifyOpsIsBusinessLimited(errType, phase, code string, status int, messa
 		return true
 	}
 	if isOpsLocalBusinessLimitError(code, strings.ToLower(message)) {
+		return true
+	}
+	// classifyOpsErrorLog only calls this helper for requests without upstream
+	// context, so model_not_found here specifically means the local
+	// group/model-configuration denial produced by classifyNoAccountError.
+	if errType == "model_not_found" {
 		return true
 	}
 	if phase == "billing" || phase == "concurrency" {

@@ -10,6 +10,7 @@ import (
 	"reflect"
 
 	"github.com/Wei-Shaw/sub2api/ent/migrate"
+	"github.com/google/uuid"
 
 	"entgo.io/ent"
 	"entgo.io/ent/dialect"
@@ -31,6 +32,11 @@ import (
 	"github.com/Wei-Shaw/sub2api/ent/channelmonitorrequesttemplate"
 	"github.com/Wei-Shaw/sub2api/ent/compositemodelroute"
 	"github.com/Wei-Shaw/sub2api/ent/errorpassthroughrule"
+	"github.com/Wei-Shaw/sub2api/ent/evaluationcase"
+	"github.com/Wei-Shaw/sub2api/ent/evaluationdatasetversion"
+	"github.com/Wei-Shaw/sub2api/ent/evaluationplan"
+	"github.com/Wei-Shaw/sub2api/ent/evaluationrouteevidence"
+	"github.com/Wei-Shaw/sub2api/ent/evaluationrun"
 	"github.com/Wei-Shaw/sub2api/ent/group"
 	"github.com/Wei-Shaw/sub2api/ent/idempotencyrecord"
 	"github.com/Wei-Shaw/sub2api/ent/identityadoptiondecision"
@@ -95,6 +101,16 @@ type Client struct {
 	CompositeModelRoute *CompositeModelRouteClient
 	// ErrorPassthroughRule is the client for interacting with the ErrorPassthroughRule builders.
 	ErrorPassthroughRule *ErrorPassthroughRuleClient
+	// EvaluationCase is the client for interacting with the EvaluationCase builders.
+	EvaluationCase *EvaluationCaseClient
+	// EvaluationDatasetVersion is the client for interacting with the EvaluationDatasetVersion builders.
+	EvaluationDatasetVersion *EvaluationDatasetVersionClient
+	// EvaluationPlan is the client for interacting with the EvaluationPlan builders.
+	EvaluationPlan *EvaluationPlanClient
+	// EvaluationRouteEvidence is the client for interacting with the EvaluationRouteEvidence builders.
+	EvaluationRouteEvidence *EvaluationRouteEvidenceClient
+	// EvaluationRun is the client for interacting with the EvaluationRun builders.
+	EvaluationRun *EvaluationRunClient
 	// Group is the client for interacting with the Group builders.
 	Group *GroupClient
 	// IdempotencyRecord is the client for interacting with the IdempotencyRecord builders.
@@ -168,6 +184,11 @@ func (c *Client) init() {
 	c.ChannelMonitorRequestTemplate = NewChannelMonitorRequestTemplateClient(c.config)
 	c.CompositeModelRoute = NewCompositeModelRouteClient(c.config)
 	c.ErrorPassthroughRule = NewErrorPassthroughRuleClient(c.config)
+	c.EvaluationCase = NewEvaluationCaseClient(c.config)
+	c.EvaluationDatasetVersion = NewEvaluationDatasetVersionClient(c.config)
+	c.EvaluationPlan = NewEvaluationPlanClient(c.config)
+	c.EvaluationRouteEvidence = NewEvaluationRouteEvidenceClient(c.config)
+	c.EvaluationRun = NewEvaluationRunClient(c.config)
 	c.Group = NewGroupClient(c.config)
 	c.IdempotencyRecord = NewIdempotencyRecordClient(c.config)
 	c.IdentityAdoptionDecision = NewIdentityAdoptionDecisionClient(c.config)
@@ -299,6 +320,11 @@ func (c *Client) Tx(ctx context.Context) (*Tx, error) {
 		ChannelMonitorRequestTemplate: NewChannelMonitorRequestTemplateClient(cfg),
 		CompositeModelRoute:           NewCompositeModelRouteClient(cfg),
 		ErrorPassthroughRule:          NewErrorPassthroughRuleClient(cfg),
+		EvaluationCase:                NewEvaluationCaseClient(cfg),
+		EvaluationDatasetVersion:      NewEvaluationDatasetVersionClient(cfg),
+		EvaluationPlan:                NewEvaluationPlanClient(cfg),
+		EvaluationRouteEvidence:       NewEvaluationRouteEvidenceClient(cfg),
+		EvaluationRun:                 NewEvaluationRunClient(cfg),
 		Group:                         NewGroupClient(cfg),
 		IdempotencyRecord:             NewIdempotencyRecordClient(cfg),
 		IdentityAdoptionDecision:      NewIdentityAdoptionDecisionClient(cfg),
@@ -357,6 +383,11 @@ func (c *Client) BeginTx(ctx context.Context, opts *sql.TxOptions) (*Tx, error) 
 		ChannelMonitorRequestTemplate: NewChannelMonitorRequestTemplateClient(cfg),
 		CompositeModelRoute:           NewCompositeModelRouteClient(cfg),
 		ErrorPassthroughRule:          NewErrorPassthroughRuleClient(cfg),
+		EvaluationCase:                NewEvaluationCaseClient(cfg),
+		EvaluationDatasetVersion:      NewEvaluationDatasetVersionClient(cfg),
+		EvaluationPlan:                NewEvaluationPlanClient(cfg),
+		EvaluationRouteEvidence:       NewEvaluationRouteEvidenceClient(cfg),
+		EvaluationRun:                 NewEvaluationRunClient(cfg),
 		Group:                         NewGroupClient(cfg),
 		IdempotencyRecord:             NewIdempotencyRecordClient(cfg),
 		IdentityAdoptionDecision:      NewIdentityAdoptionDecisionClient(cfg),
@@ -413,13 +444,15 @@ func (c *Client) Use(hooks ...Hook) {
 		c.AuthIdentity, c.AuthIdentityChannel, c.BatchImageEvent, c.BatchImageItem,
 		c.BatchImageJob, c.ChannelMonitor, c.ChannelMonitorDailyRollup,
 		c.ChannelMonitorHistory, c.ChannelMonitorRequestTemplate,
-		c.CompositeModelRoute, c.ErrorPassthroughRule, c.Group, c.IdempotencyRecord,
-		c.IdentityAdoptionDecision, c.PaymentAuditLog, c.PaymentOrder,
-		c.PaymentProviderInstance, c.PendingAuthSession, c.PromoCode, c.PromoCodeUsage,
-		c.Proxy, c.RedeemCode, c.SecuritySecret, c.Setting, c.SubscriptionPlan,
-		c.TLSFingerprintProfile, c.UsageCleanupTask, c.UsageLog, c.User,
-		c.UserAllowedGroup, c.UserAttributeDefinition, c.UserAttributeValue,
-		c.UserPlatformQuota, c.UserSubscription,
+		c.CompositeModelRoute, c.ErrorPassthroughRule, c.EvaluationCase,
+		c.EvaluationDatasetVersion, c.EvaluationPlan, c.EvaluationRouteEvidence,
+		c.EvaluationRun, c.Group, c.IdempotencyRecord, c.IdentityAdoptionDecision,
+		c.PaymentAuditLog, c.PaymentOrder, c.PaymentProviderInstance,
+		c.PendingAuthSession, c.PromoCode, c.PromoCodeUsage, c.Proxy, c.RedeemCode,
+		c.SecuritySecret, c.Setting, c.SubscriptionPlan, c.TLSFingerprintProfile,
+		c.UsageCleanupTask, c.UsageLog, c.User, c.UserAllowedGroup,
+		c.UserAttributeDefinition, c.UserAttributeValue, c.UserPlatformQuota,
+		c.UserSubscription,
 	} {
 		n.Use(hooks...)
 	}
@@ -433,13 +466,15 @@ func (c *Client) Intercept(interceptors ...Interceptor) {
 		c.AuthIdentity, c.AuthIdentityChannel, c.BatchImageEvent, c.BatchImageItem,
 		c.BatchImageJob, c.ChannelMonitor, c.ChannelMonitorDailyRollup,
 		c.ChannelMonitorHistory, c.ChannelMonitorRequestTemplate,
-		c.CompositeModelRoute, c.ErrorPassthroughRule, c.Group, c.IdempotencyRecord,
-		c.IdentityAdoptionDecision, c.PaymentAuditLog, c.PaymentOrder,
-		c.PaymentProviderInstance, c.PendingAuthSession, c.PromoCode, c.PromoCodeUsage,
-		c.Proxy, c.RedeemCode, c.SecuritySecret, c.Setting, c.SubscriptionPlan,
-		c.TLSFingerprintProfile, c.UsageCleanupTask, c.UsageLog, c.User,
-		c.UserAllowedGroup, c.UserAttributeDefinition, c.UserAttributeValue,
-		c.UserPlatformQuota, c.UserSubscription,
+		c.CompositeModelRoute, c.ErrorPassthroughRule, c.EvaluationCase,
+		c.EvaluationDatasetVersion, c.EvaluationPlan, c.EvaluationRouteEvidence,
+		c.EvaluationRun, c.Group, c.IdempotencyRecord, c.IdentityAdoptionDecision,
+		c.PaymentAuditLog, c.PaymentOrder, c.PaymentProviderInstance,
+		c.PendingAuthSession, c.PromoCode, c.PromoCodeUsage, c.Proxy, c.RedeemCode,
+		c.SecuritySecret, c.Setting, c.SubscriptionPlan, c.TLSFingerprintProfile,
+		c.UsageCleanupTask, c.UsageLog, c.User, c.UserAllowedGroup,
+		c.UserAttributeDefinition, c.UserAttributeValue, c.UserPlatformQuota,
+		c.UserSubscription,
 	} {
 		n.Intercept(interceptors...)
 	}
@@ -480,6 +515,16 @@ func (c *Client) Mutate(ctx context.Context, m Mutation) (Value, error) {
 		return c.CompositeModelRoute.mutate(ctx, m)
 	case *ErrorPassthroughRuleMutation:
 		return c.ErrorPassthroughRule.mutate(ctx, m)
+	case *EvaluationCaseMutation:
+		return c.EvaluationCase.mutate(ctx, m)
+	case *EvaluationDatasetVersionMutation:
+		return c.EvaluationDatasetVersion.mutate(ctx, m)
+	case *EvaluationPlanMutation:
+		return c.EvaluationPlan.mutate(ctx, m)
+	case *EvaluationRouteEvidenceMutation:
+		return c.EvaluationRouteEvidence.mutate(ctx, m)
+	case *EvaluationRunMutation:
+		return c.EvaluationRun.mutate(ctx, m)
 	case *GroupMutation:
 		return c.Group.mutate(ctx, m)
 	case *IdempotencyRecordMutation:
@@ -680,6 +725,38 @@ func (c *APIKeyClient) QueryUsageLogs(_m *APIKey) *UsageLogQuery {
 			sqlgraph.From(apikey.Table, apikey.FieldID, id),
 			sqlgraph.To(usagelog.Table, usagelog.FieldID),
 			sqlgraph.Edge(sqlgraph.O2M, false, apikey.UsageLogsTable, apikey.UsageLogsColumn),
+		)
+		fromV = sqlgraph.Neighbors(_m.driver.Dialect(), step)
+		return fromV, nil
+	}
+	return query
+}
+
+// QueryEvaluationRouteEvidence queries the evaluation_route_evidence edge of a APIKey.
+func (c *APIKeyClient) QueryEvaluationRouteEvidence(_m *APIKey) *EvaluationRouteEvidenceQuery {
+	query := (&EvaluationRouteEvidenceClient{config: c.config}).Query()
+	query.path = func(context.Context) (fromV *sql.Selector, _ error) {
+		id := _m.ID
+		step := sqlgraph.NewStep(
+			sqlgraph.From(apikey.Table, apikey.FieldID, id),
+			sqlgraph.To(evaluationrouteevidence.Table, evaluationrouteevidence.FieldID),
+			sqlgraph.Edge(sqlgraph.O2M, false, apikey.EvaluationRouteEvidenceTable, apikey.EvaluationRouteEvidenceColumn),
+		)
+		fromV = sqlgraph.Neighbors(_m.driver.Dialect(), step)
+		return fromV, nil
+	}
+	return query
+}
+
+// QueryEvaluationPlans queries the evaluation_plans edge of a APIKey.
+func (c *APIKeyClient) QueryEvaluationPlans(_m *APIKey) *EvaluationPlanQuery {
+	query := (&EvaluationPlanClient{config: c.config}).Query()
+	query.path = func(context.Context) (fromV *sql.Selector, _ error) {
+		id := _m.ID
+		step := sqlgraph.NewStep(
+			sqlgraph.From(apikey.Table, apikey.FieldID, id),
+			sqlgraph.To(evaluationplan.Table, evaluationplan.FieldID),
+			sqlgraph.Edge(sqlgraph.O2M, false, apikey.EvaluationPlansTable, apikey.EvaluationPlansColumn),
 		)
 		fromV = sqlgraph.Neighbors(_m.driver.Dialect(), step)
 		return fromV, nil
@@ -3013,6 +3090,799 @@ func (c *ErrorPassthroughRuleClient) mutate(ctx context.Context, m *ErrorPassthr
 		return (&ErrorPassthroughRuleDelete{config: c.config, hooks: c.Hooks(), mutation: m}).Exec(ctx)
 	default:
 		return nil, fmt.Errorf("ent: unknown ErrorPassthroughRule mutation op: %q", m.Op())
+	}
+}
+
+// EvaluationCaseClient is a client for the EvaluationCase schema.
+type EvaluationCaseClient struct {
+	config
+}
+
+// NewEvaluationCaseClient returns a client for the EvaluationCase from the given config.
+func NewEvaluationCaseClient(c config) *EvaluationCaseClient {
+	return &EvaluationCaseClient{config: c}
+}
+
+// Use adds a list of mutation hooks to the hooks stack.
+// A call to `Use(f, g, h)` equals to `evaluationcase.Hooks(f(g(h())))`.
+func (c *EvaluationCaseClient) Use(hooks ...Hook) {
+	c.hooks.EvaluationCase = append(c.hooks.EvaluationCase, hooks...)
+}
+
+// Intercept adds a list of query interceptors to the interceptors stack.
+// A call to `Intercept(f, g, h)` equals to `evaluationcase.Intercept(f(g(h())))`.
+func (c *EvaluationCaseClient) Intercept(interceptors ...Interceptor) {
+	c.inters.EvaluationCase = append(c.inters.EvaluationCase, interceptors...)
+}
+
+// Create returns a builder for creating a EvaluationCase entity.
+func (c *EvaluationCaseClient) Create() *EvaluationCaseCreate {
+	mutation := newEvaluationCaseMutation(c.config, OpCreate)
+	return &EvaluationCaseCreate{config: c.config, hooks: c.Hooks(), mutation: mutation}
+}
+
+// CreateBulk returns a builder for creating a bulk of EvaluationCase entities.
+func (c *EvaluationCaseClient) CreateBulk(builders ...*EvaluationCaseCreate) *EvaluationCaseCreateBulk {
+	return &EvaluationCaseCreateBulk{config: c.config, builders: builders}
+}
+
+// MapCreateBulk creates a bulk creation builder from the given slice. For each item in the slice, the function creates
+// a builder and applies setFunc on it.
+func (c *EvaluationCaseClient) MapCreateBulk(slice any, setFunc func(*EvaluationCaseCreate, int)) *EvaluationCaseCreateBulk {
+	rv := reflect.ValueOf(slice)
+	if rv.Kind() != reflect.Slice {
+		return &EvaluationCaseCreateBulk{err: fmt.Errorf("calling to EvaluationCaseClient.MapCreateBulk with wrong type %T, need slice", slice)}
+	}
+	builders := make([]*EvaluationCaseCreate, rv.Len())
+	for i := 0; i < rv.Len(); i++ {
+		builders[i] = c.Create()
+		setFunc(builders[i], i)
+	}
+	return &EvaluationCaseCreateBulk{config: c.config, builders: builders}
+}
+
+// Update returns an update builder for EvaluationCase.
+func (c *EvaluationCaseClient) Update() *EvaluationCaseUpdate {
+	mutation := newEvaluationCaseMutation(c.config, OpUpdate)
+	return &EvaluationCaseUpdate{config: c.config, hooks: c.Hooks(), mutation: mutation}
+}
+
+// UpdateOne returns an update builder for the given entity.
+func (c *EvaluationCaseClient) UpdateOne(_m *EvaluationCase) *EvaluationCaseUpdateOne {
+	mutation := newEvaluationCaseMutation(c.config, OpUpdateOne, withEvaluationCase(_m))
+	return &EvaluationCaseUpdateOne{config: c.config, hooks: c.Hooks(), mutation: mutation}
+}
+
+// UpdateOneID returns an update builder for the given id.
+func (c *EvaluationCaseClient) UpdateOneID(id uuid.UUID) *EvaluationCaseUpdateOne {
+	mutation := newEvaluationCaseMutation(c.config, OpUpdateOne, withEvaluationCaseID(id))
+	return &EvaluationCaseUpdateOne{config: c.config, hooks: c.Hooks(), mutation: mutation}
+}
+
+// Delete returns a delete builder for EvaluationCase.
+func (c *EvaluationCaseClient) Delete() *EvaluationCaseDelete {
+	mutation := newEvaluationCaseMutation(c.config, OpDelete)
+	return &EvaluationCaseDelete{config: c.config, hooks: c.Hooks(), mutation: mutation}
+}
+
+// DeleteOne returns a builder for deleting the given entity.
+func (c *EvaluationCaseClient) DeleteOne(_m *EvaluationCase) *EvaluationCaseDeleteOne {
+	return c.DeleteOneID(_m.ID)
+}
+
+// DeleteOneID returns a builder for deleting the given entity by its id.
+func (c *EvaluationCaseClient) DeleteOneID(id uuid.UUID) *EvaluationCaseDeleteOne {
+	builder := c.Delete().Where(evaluationcase.ID(id))
+	builder.mutation.id = &id
+	builder.mutation.op = OpDeleteOne
+	return &EvaluationCaseDeleteOne{builder}
+}
+
+// Query returns a query builder for EvaluationCase.
+func (c *EvaluationCaseClient) Query() *EvaluationCaseQuery {
+	return &EvaluationCaseQuery{
+		config: c.config,
+		ctx:    &QueryContext{Type: TypeEvaluationCase},
+		inters: c.Interceptors(),
+	}
+}
+
+// Get returns a EvaluationCase entity by its id.
+func (c *EvaluationCaseClient) Get(ctx context.Context, id uuid.UUID) (*EvaluationCase, error) {
+	return c.Query().Where(evaluationcase.ID(id)).Only(ctx)
+}
+
+// GetX is like Get, but panics if an error occurs.
+func (c *EvaluationCaseClient) GetX(ctx context.Context, id uuid.UUID) *EvaluationCase {
+	obj, err := c.Get(ctx, id)
+	if err != nil {
+		panic(err)
+	}
+	return obj
+}
+
+// QueryDatasetVersion queries the dataset_version edge of a EvaluationCase.
+func (c *EvaluationCaseClient) QueryDatasetVersion(_m *EvaluationCase) *EvaluationDatasetVersionQuery {
+	query := (&EvaluationDatasetVersionClient{config: c.config}).Query()
+	query.path = func(context.Context) (fromV *sql.Selector, _ error) {
+		id := _m.ID
+		step := sqlgraph.NewStep(
+			sqlgraph.From(evaluationcase.Table, evaluationcase.FieldID, id),
+			sqlgraph.To(evaluationdatasetversion.Table, evaluationdatasetversion.FieldID),
+			sqlgraph.Edge(sqlgraph.M2O, true, evaluationcase.DatasetVersionTable, evaluationcase.DatasetVersionColumn),
+		)
+		fromV = sqlgraph.Neighbors(_m.driver.Dialect(), step)
+		return fromV, nil
+	}
+	return query
+}
+
+// Hooks returns the client hooks.
+func (c *EvaluationCaseClient) Hooks() []Hook {
+	return c.hooks.EvaluationCase
+}
+
+// Interceptors returns the client interceptors.
+func (c *EvaluationCaseClient) Interceptors() []Interceptor {
+	return c.inters.EvaluationCase
+}
+
+func (c *EvaluationCaseClient) mutate(ctx context.Context, m *EvaluationCaseMutation) (Value, error) {
+	switch m.Op() {
+	case OpCreate:
+		return (&EvaluationCaseCreate{config: c.config, hooks: c.Hooks(), mutation: m}).Save(ctx)
+	case OpUpdate:
+		return (&EvaluationCaseUpdate{config: c.config, hooks: c.Hooks(), mutation: m}).Save(ctx)
+	case OpUpdateOne:
+		return (&EvaluationCaseUpdateOne{config: c.config, hooks: c.Hooks(), mutation: m}).Save(ctx)
+	case OpDelete, OpDeleteOne:
+		return (&EvaluationCaseDelete{config: c.config, hooks: c.Hooks(), mutation: m}).Exec(ctx)
+	default:
+		return nil, fmt.Errorf("ent: unknown EvaluationCase mutation op: %q", m.Op())
+	}
+}
+
+// EvaluationDatasetVersionClient is a client for the EvaluationDatasetVersion schema.
+type EvaluationDatasetVersionClient struct {
+	config
+}
+
+// NewEvaluationDatasetVersionClient returns a client for the EvaluationDatasetVersion from the given config.
+func NewEvaluationDatasetVersionClient(c config) *EvaluationDatasetVersionClient {
+	return &EvaluationDatasetVersionClient{config: c}
+}
+
+// Use adds a list of mutation hooks to the hooks stack.
+// A call to `Use(f, g, h)` equals to `evaluationdatasetversion.Hooks(f(g(h())))`.
+func (c *EvaluationDatasetVersionClient) Use(hooks ...Hook) {
+	c.hooks.EvaluationDatasetVersion = append(c.hooks.EvaluationDatasetVersion, hooks...)
+}
+
+// Intercept adds a list of query interceptors to the interceptors stack.
+// A call to `Intercept(f, g, h)` equals to `evaluationdatasetversion.Intercept(f(g(h())))`.
+func (c *EvaluationDatasetVersionClient) Intercept(interceptors ...Interceptor) {
+	c.inters.EvaluationDatasetVersion = append(c.inters.EvaluationDatasetVersion, interceptors...)
+}
+
+// Create returns a builder for creating a EvaluationDatasetVersion entity.
+func (c *EvaluationDatasetVersionClient) Create() *EvaluationDatasetVersionCreate {
+	mutation := newEvaluationDatasetVersionMutation(c.config, OpCreate)
+	return &EvaluationDatasetVersionCreate{config: c.config, hooks: c.Hooks(), mutation: mutation}
+}
+
+// CreateBulk returns a builder for creating a bulk of EvaluationDatasetVersion entities.
+func (c *EvaluationDatasetVersionClient) CreateBulk(builders ...*EvaluationDatasetVersionCreate) *EvaluationDatasetVersionCreateBulk {
+	return &EvaluationDatasetVersionCreateBulk{config: c.config, builders: builders}
+}
+
+// MapCreateBulk creates a bulk creation builder from the given slice. For each item in the slice, the function creates
+// a builder and applies setFunc on it.
+func (c *EvaluationDatasetVersionClient) MapCreateBulk(slice any, setFunc func(*EvaluationDatasetVersionCreate, int)) *EvaluationDatasetVersionCreateBulk {
+	rv := reflect.ValueOf(slice)
+	if rv.Kind() != reflect.Slice {
+		return &EvaluationDatasetVersionCreateBulk{err: fmt.Errorf("calling to EvaluationDatasetVersionClient.MapCreateBulk with wrong type %T, need slice", slice)}
+	}
+	builders := make([]*EvaluationDatasetVersionCreate, rv.Len())
+	for i := 0; i < rv.Len(); i++ {
+		builders[i] = c.Create()
+		setFunc(builders[i], i)
+	}
+	return &EvaluationDatasetVersionCreateBulk{config: c.config, builders: builders}
+}
+
+// Update returns an update builder for EvaluationDatasetVersion.
+func (c *EvaluationDatasetVersionClient) Update() *EvaluationDatasetVersionUpdate {
+	mutation := newEvaluationDatasetVersionMutation(c.config, OpUpdate)
+	return &EvaluationDatasetVersionUpdate{config: c.config, hooks: c.Hooks(), mutation: mutation}
+}
+
+// UpdateOne returns an update builder for the given entity.
+func (c *EvaluationDatasetVersionClient) UpdateOne(_m *EvaluationDatasetVersion) *EvaluationDatasetVersionUpdateOne {
+	mutation := newEvaluationDatasetVersionMutation(c.config, OpUpdateOne, withEvaluationDatasetVersion(_m))
+	return &EvaluationDatasetVersionUpdateOne{config: c.config, hooks: c.Hooks(), mutation: mutation}
+}
+
+// UpdateOneID returns an update builder for the given id.
+func (c *EvaluationDatasetVersionClient) UpdateOneID(id uuid.UUID) *EvaluationDatasetVersionUpdateOne {
+	mutation := newEvaluationDatasetVersionMutation(c.config, OpUpdateOne, withEvaluationDatasetVersionID(id))
+	return &EvaluationDatasetVersionUpdateOne{config: c.config, hooks: c.Hooks(), mutation: mutation}
+}
+
+// Delete returns a delete builder for EvaluationDatasetVersion.
+func (c *EvaluationDatasetVersionClient) Delete() *EvaluationDatasetVersionDelete {
+	mutation := newEvaluationDatasetVersionMutation(c.config, OpDelete)
+	return &EvaluationDatasetVersionDelete{config: c.config, hooks: c.Hooks(), mutation: mutation}
+}
+
+// DeleteOne returns a builder for deleting the given entity.
+func (c *EvaluationDatasetVersionClient) DeleteOne(_m *EvaluationDatasetVersion) *EvaluationDatasetVersionDeleteOne {
+	return c.DeleteOneID(_m.ID)
+}
+
+// DeleteOneID returns a builder for deleting the given entity by its id.
+func (c *EvaluationDatasetVersionClient) DeleteOneID(id uuid.UUID) *EvaluationDatasetVersionDeleteOne {
+	builder := c.Delete().Where(evaluationdatasetversion.ID(id))
+	builder.mutation.id = &id
+	builder.mutation.op = OpDeleteOne
+	return &EvaluationDatasetVersionDeleteOne{builder}
+}
+
+// Query returns a query builder for EvaluationDatasetVersion.
+func (c *EvaluationDatasetVersionClient) Query() *EvaluationDatasetVersionQuery {
+	return &EvaluationDatasetVersionQuery{
+		config: c.config,
+		ctx:    &QueryContext{Type: TypeEvaluationDatasetVersion},
+		inters: c.Interceptors(),
+	}
+}
+
+// Get returns a EvaluationDatasetVersion entity by its id.
+func (c *EvaluationDatasetVersionClient) Get(ctx context.Context, id uuid.UUID) (*EvaluationDatasetVersion, error) {
+	return c.Query().Where(evaluationdatasetversion.ID(id)).Only(ctx)
+}
+
+// GetX is like Get, but panics if an error occurs.
+func (c *EvaluationDatasetVersionClient) GetX(ctx context.Context, id uuid.UUID) *EvaluationDatasetVersion {
+	obj, err := c.Get(ctx, id)
+	if err != nil {
+		panic(err)
+	}
+	return obj
+}
+
+// QueryCases queries the cases edge of a EvaluationDatasetVersion.
+func (c *EvaluationDatasetVersionClient) QueryCases(_m *EvaluationDatasetVersion) *EvaluationCaseQuery {
+	query := (&EvaluationCaseClient{config: c.config}).Query()
+	query.path = func(context.Context) (fromV *sql.Selector, _ error) {
+		id := _m.ID
+		step := sqlgraph.NewStep(
+			sqlgraph.From(evaluationdatasetversion.Table, evaluationdatasetversion.FieldID, id),
+			sqlgraph.To(evaluationcase.Table, evaluationcase.FieldID),
+			sqlgraph.Edge(sqlgraph.O2M, false, evaluationdatasetversion.CasesTable, evaluationdatasetversion.CasesColumn),
+		)
+		fromV = sqlgraph.Neighbors(_m.driver.Dialect(), step)
+		return fromV, nil
+	}
+	return query
+}
+
+// QueryPlans queries the plans edge of a EvaluationDatasetVersion.
+func (c *EvaluationDatasetVersionClient) QueryPlans(_m *EvaluationDatasetVersion) *EvaluationPlanQuery {
+	query := (&EvaluationPlanClient{config: c.config}).Query()
+	query.path = func(context.Context) (fromV *sql.Selector, _ error) {
+		id := _m.ID
+		step := sqlgraph.NewStep(
+			sqlgraph.From(evaluationdatasetversion.Table, evaluationdatasetversion.FieldID, id),
+			sqlgraph.To(evaluationplan.Table, evaluationplan.FieldID),
+			sqlgraph.Edge(sqlgraph.O2M, false, evaluationdatasetversion.PlansTable, evaluationdatasetversion.PlansColumn),
+		)
+		fromV = sqlgraph.Neighbors(_m.driver.Dialect(), step)
+		return fromV, nil
+	}
+	return query
+}
+
+// Hooks returns the client hooks.
+func (c *EvaluationDatasetVersionClient) Hooks() []Hook {
+	return c.hooks.EvaluationDatasetVersion
+}
+
+// Interceptors returns the client interceptors.
+func (c *EvaluationDatasetVersionClient) Interceptors() []Interceptor {
+	return c.inters.EvaluationDatasetVersion
+}
+
+func (c *EvaluationDatasetVersionClient) mutate(ctx context.Context, m *EvaluationDatasetVersionMutation) (Value, error) {
+	switch m.Op() {
+	case OpCreate:
+		return (&EvaluationDatasetVersionCreate{config: c.config, hooks: c.Hooks(), mutation: m}).Save(ctx)
+	case OpUpdate:
+		return (&EvaluationDatasetVersionUpdate{config: c.config, hooks: c.Hooks(), mutation: m}).Save(ctx)
+	case OpUpdateOne:
+		return (&EvaluationDatasetVersionUpdateOne{config: c.config, hooks: c.Hooks(), mutation: m}).Save(ctx)
+	case OpDelete, OpDeleteOne:
+		return (&EvaluationDatasetVersionDelete{config: c.config, hooks: c.Hooks(), mutation: m}).Exec(ctx)
+	default:
+		return nil, fmt.Errorf("ent: unknown EvaluationDatasetVersion mutation op: %q", m.Op())
+	}
+}
+
+// EvaluationPlanClient is a client for the EvaluationPlan schema.
+type EvaluationPlanClient struct {
+	config
+}
+
+// NewEvaluationPlanClient returns a client for the EvaluationPlan from the given config.
+func NewEvaluationPlanClient(c config) *EvaluationPlanClient {
+	return &EvaluationPlanClient{config: c}
+}
+
+// Use adds a list of mutation hooks to the hooks stack.
+// A call to `Use(f, g, h)` equals to `evaluationplan.Hooks(f(g(h())))`.
+func (c *EvaluationPlanClient) Use(hooks ...Hook) {
+	c.hooks.EvaluationPlan = append(c.hooks.EvaluationPlan, hooks...)
+}
+
+// Intercept adds a list of query interceptors to the interceptors stack.
+// A call to `Intercept(f, g, h)` equals to `evaluationplan.Intercept(f(g(h())))`.
+func (c *EvaluationPlanClient) Intercept(interceptors ...Interceptor) {
+	c.inters.EvaluationPlan = append(c.inters.EvaluationPlan, interceptors...)
+}
+
+// Create returns a builder for creating a EvaluationPlan entity.
+func (c *EvaluationPlanClient) Create() *EvaluationPlanCreate {
+	mutation := newEvaluationPlanMutation(c.config, OpCreate)
+	return &EvaluationPlanCreate{config: c.config, hooks: c.Hooks(), mutation: mutation}
+}
+
+// CreateBulk returns a builder for creating a bulk of EvaluationPlan entities.
+func (c *EvaluationPlanClient) CreateBulk(builders ...*EvaluationPlanCreate) *EvaluationPlanCreateBulk {
+	return &EvaluationPlanCreateBulk{config: c.config, builders: builders}
+}
+
+// MapCreateBulk creates a bulk creation builder from the given slice. For each item in the slice, the function creates
+// a builder and applies setFunc on it.
+func (c *EvaluationPlanClient) MapCreateBulk(slice any, setFunc func(*EvaluationPlanCreate, int)) *EvaluationPlanCreateBulk {
+	rv := reflect.ValueOf(slice)
+	if rv.Kind() != reflect.Slice {
+		return &EvaluationPlanCreateBulk{err: fmt.Errorf("calling to EvaluationPlanClient.MapCreateBulk with wrong type %T, need slice", slice)}
+	}
+	builders := make([]*EvaluationPlanCreate, rv.Len())
+	for i := 0; i < rv.Len(); i++ {
+		builders[i] = c.Create()
+		setFunc(builders[i], i)
+	}
+	return &EvaluationPlanCreateBulk{config: c.config, builders: builders}
+}
+
+// Update returns an update builder for EvaluationPlan.
+func (c *EvaluationPlanClient) Update() *EvaluationPlanUpdate {
+	mutation := newEvaluationPlanMutation(c.config, OpUpdate)
+	return &EvaluationPlanUpdate{config: c.config, hooks: c.Hooks(), mutation: mutation}
+}
+
+// UpdateOne returns an update builder for the given entity.
+func (c *EvaluationPlanClient) UpdateOne(_m *EvaluationPlan) *EvaluationPlanUpdateOne {
+	mutation := newEvaluationPlanMutation(c.config, OpUpdateOne, withEvaluationPlan(_m))
+	return &EvaluationPlanUpdateOne{config: c.config, hooks: c.Hooks(), mutation: mutation}
+}
+
+// UpdateOneID returns an update builder for the given id.
+func (c *EvaluationPlanClient) UpdateOneID(id uuid.UUID) *EvaluationPlanUpdateOne {
+	mutation := newEvaluationPlanMutation(c.config, OpUpdateOne, withEvaluationPlanID(id))
+	return &EvaluationPlanUpdateOne{config: c.config, hooks: c.Hooks(), mutation: mutation}
+}
+
+// Delete returns a delete builder for EvaluationPlan.
+func (c *EvaluationPlanClient) Delete() *EvaluationPlanDelete {
+	mutation := newEvaluationPlanMutation(c.config, OpDelete)
+	return &EvaluationPlanDelete{config: c.config, hooks: c.Hooks(), mutation: mutation}
+}
+
+// DeleteOne returns a builder for deleting the given entity.
+func (c *EvaluationPlanClient) DeleteOne(_m *EvaluationPlan) *EvaluationPlanDeleteOne {
+	return c.DeleteOneID(_m.ID)
+}
+
+// DeleteOneID returns a builder for deleting the given entity by its id.
+func (c *EvaluationPlanClient) DeleteOneID(id uuid.UUID) *EvaluationPlanDeleteOne {
+	builder := c.Delete().Where(evaluationplan.ID(id))
+	builder.mutation.id = &id
+	builder.mutation.op = OpDeleteOne
+	return &EvaluationPlanDeleteOne{builder}
+}
+
+// Query returns a query builder for EvaluationPlan.
+func (c *EvaluationPlanClient) Query() *EvaluationPlanQuery {
+	return &EvaluationPlanQuery{
+		config: c.config,
+		ctx:    &QueryContext{Type: TypeEvaluationPlan},
+		inters: c.Interceptors(),
+	}
+}
+
+// Get returns a EvaluationPlan entity by its id.
+func (c *EvaluationPlanClient) Get(ctx context.Context, id uuid.UUID) (*EvaluationPlan, error) {
+	return c.Query().Where(evaluationplan.ID(id)).Only(ctx)
+}
+
+// GetX is like Get, but panics if an error occurs.
+func (c *EvaluationPlanClient) GetX(ctx context.Context, id uuid.UUID) *EvaluationPlan {
+	obj, err := c.Get(ctx, id)
+	if err != nil {
+		panic(err)
+	}
+	return obj
+}
+
+// QueryDatasetVersion queries the dataset_version edge of a EvaluationPlan.
+func (c *EvaluationPlanClient) QueryDatasetVersion(_m *EvaluationPlan) *EvaluationDatasetVersionQuery {
+	query := (&EvaluationDatasetVersionClient{config: c.config}).Query()
+	query.path = func(context.Context) (fromV *sql.Selector, _ error) {
+		id := _m.ID
+		step := sqlgraph.NewStep(
+			sqlgraph.From(evaluationplan.Table, evaluationplan.FieldID, id),
+			sqlgraph.To(evaluationdatasetversion.Table, evaluationdatasetversion.FieldID),
+			sqlgraph.Edge(sqlgraph.M2O, true, evaluationplan.DatasetVersionTable, evaluationplan.DatasetVersionColumn),
+		)
+		fromV = sqlgraph.Neighbors(_m.driver.Dialect(), step)
+		return fromV, nil
+	}
+	return query
+}
+
+// QueryGatewayAPIKey queries the gateway_api_key edge of a EvaluationPlan.
+func (c *EvaluationPlanClient) QueryGatewayAPIKey(_m *EvaluationPlan) *APIKeyQuery {
+	query := (&APIKeyClient{config: c.config}).Query()
+	query.path = func(context.Context) (fromV *sql.Selector, _ error) {
+		id := _m.ID
+		step := sqlgraph.NewStep(
+			sqlgraph.From(evaluationplan.Table, evaluationplan.FieldID, id),
+			sqlgraph.To(apikey.Table, apikey.FieldID),
+			sqlgraph.Edge(sqlgraph.M2O, true, evaluationplan.GatewayAPIKeyTable, evaluationplan.GatewayAPIKeyColumn),
+		)
+		fromV = sqlgraph.Neighbors(_m.driver.Dialect(), step)
+		return fromV, nil
+	}
+	return query
+}
+
+// QueryRuns queries the runs edge of a EvaluationPlan.
+func (c *EvaluationPlanClient) QueryRuns(_m *EvaluationPlan) *EvaluationRunQuery {
+	query := (&EvaluationRunClient{config: c.config}).Query()
+	query.path = func(context.Context) (fromV *sql.Selector, _ error) {
+		id := _m.ID
+		step := sqlgraph.NewStep(
+			sqlgraph.From(evaluationplan.Table, evaluationplan.FieldID, id),
+			sqlgraph.To(evaluationrun.Table, evaluationrun.FieldID),
+			sqlgraph.Edge(sqlgraph.O2M, false, evaluationplan.RunsTable, evaluationplan.RunsColumn),
+		)
+		fromV = sqlgraph.Neighbors(_m.driver.Dialect(), step)
+		return fromV, nil
+	}
+	return query
+}
+
+// Hooks returns the client hooks.
+func (c *EvaluationPlanClient) Hooks() []Hook {
+	return c.hooks.EvaluationPlan
+}
+
+// Interceptors returns the client interceptors.
+func (c *EvaluationPlanClient) Interceptors() []Interceptor {
+	return c.inters.EvaluationPlan
+}
+
+func (c *EvaluationPlanClient) mutate(ctx context.Context, m *EvaluationPlanMutation) (Value, error) {
+	switch m.Op() {
+	case OpCreate:
+		return (&EvaluationPlanCreate{config: c.config, hooks: c.Hooks(), mutation: m}).Save(ctx)
+	case OpUpdate:
+		return (&EvaluationPlanUpdate{config: c.config, hooks: c.Hooks(), mutation: m}).Save(ctx)
+	case OpUpdateOne:
+		return (&EvaluationPlanUpdateOne{config: c.config, hooks: c.Hooks(), mutation: m}).Save(ctx)
+	case OpDelete, OpDeleteOne:
+		return (&EvaluationPlanDelete{config: c.config, hooks: c.Hooks(), mutation: m}).Exec(ctx)
+	default:
+		return nil, fmt.Errorf("ent: unknown EvaluationPlan mutation op: %q", m.Op())
+	}
+}
+
+// EvaluationRouteEvidenceClient is a client for the EvaluationRouteEvidence schema.
+type EvaluationRouteEvidenceClient struct {
+	config
+}
+
+// NewEvaluationRouteEvidenceClient returns a client for the EvaluationRouteEvidence from the given config.
+func NewEvaluationRouteEvidenceClient(c config) *EvaluationRouteEvidenceClient {
+	return &EvaluationRouteEvidenceClient{config: c}
+}
+
+// Use adds a list of mutation hooks to the hooks stack.
+// A call to `Use(f, g, h)` equals to `evaluationrouteevidence.Hooks(f(g(h())))`.
+func (c *EvaluationRouteEvidenceClient) Use(hooks ...Hook) {
+	c.hooks.EvaluationRouteEvidence = append(c.hooks.EvaluationRouteEvidence, hooks...)
+}
+
+// Intercept adds a list of query interceptors to the interceptors stack.
+// A call to `Intercept(f, g, h)` equals to `evaluationrouteevidence.Intercept(f(g(h())))`.
+func (c *EvaluationRouteEvidenceClient) Intercept(interceptors ...Interceptor) {
+	c.inters.EvaluationRouteEvidence = append(c.inters.EvaluationRouteEvidence, interceptors...)
+}
+
+// Create returns a builder for creating a EvaluationRouteEvidence entity.
+func (c *EvaluationRouteEvidenceClient) Create() *EvaluationRouteEvidenceCreate {
+	mutation := newEvaluationRouteEvidenceMutation(c.config, OpCreate)
+	return &EvaluationRouteEvidenceCreate{config: c.config, hooks: c.Hooks(), mutation: mutation}
+}
+
+// CreateBulk returns a builder for creating a bulk of EvaluationRouteEvidence entities.
+func (c *EvaluationRouteEvidenceClient) CreateBulk(builders ...*EvaluationRouteEvidenceCreate) *EvaluationRouteEvidenceCreateBulk {
+	return &EvaluationRouteEvidenceCreateBulk{config: c.config, builders: builders}
+}
+
+// MapCreateBulk creates a bulk creation builder from the given slice. For each item in the slice, the function creates
+// a builder and applies setFunc on it.
+func (c *EvaluationRouteEvidenceClient) MapCreateBulk(slice any, setFunc func(*EvaluationRouteEvidenceCreate, int)) *EvaluationRouteEvidenceCreateBulk {
+	rv := reflect.ValueOf(slice)
+	if rv.Kind() != reflect.Slice {
+		return &EvaluationRouteEvidenceCreateBulk{err: fmt.Errorf("calling to EvaluationRouteEvidenceClient.MapCreateBulk with wrong type %T, need slice", slice)}
+	}
+	builders := make([]*EvaluationRouteEvidenceCreate, rv.Len())
+	for i := 0; i < rv.Len(); i++ {
+		builders[i] = c.Create()
+		setFunc(builders[i], i)
+	}
+	return &EvaluationRouteEvidenceCreateBulk{config: c.config, builders: builders}
+}
+
+// Update returns an update builder for EvaluationRouteEvidence.
+func (c *EvaluationRouteEvidenceClient) Update() *EvaluationRouteEvidenceUpdate {
+	mutation := newEvaluationRouteEvidenceMutation(c.config, OpUpdate)
+	return &EvaluationRouteEvidenceUpdate{config: c.config, hooks: c.Hooks(), mutation: mutation}
+}
+
+// UpdateOne returns an update builder for the given entity.
+func (c *EvaluationRouteEvidenceClient) UpdateOne(_m *EvaluationRouteEvidence) *EvaluationRouteEvidenceUpdateOne {
+	mutation := newEvaluationRouteEvidenceMutation(c.config, OpUpdateOne, withEvaluationRouteEvidence(_m))
+	return &EvaluationRouteEvidenceUpdateOne{config: c.config, hooks: c.Hooks(), mutation: mutation}
+}
+
+// UpdateOneID returns an update builder for the given id.
+func (c *EvaluationRouteEvidenceClient) UpdateOneID(id string) *EvaluationRouteEvidenceUpdateOne {
+	mutation := newEvaluationRouteEvidenceMutation(c.config, OpUpdateOne, withEvaluationRouteEvidenceID(id))
+	return &EvaluationRouteEvidenceUpdateOne{config: c.config, hooks: c.Hooks(), mutation: mutation}
+}
+
+// Delete returns a delete builder for EvaluationRouteEvidence.
+func (c *EvaluationRouteEvidenceClient) Delete() *EvaluationRouteEvidenceDelete {
+	mutation := newEvaluationRouteEvidenceMutation(c.config, OpDelete)
+	return &EvaluationRouteEvidenceDelete{config: c.config, hooks: c.Hooks(), mutation: mutation}
+}
+
+// DeleteOne returns a builder for deleting the given entity.
+func (c *EvaluationRouteEvidenceClient) DeleteOne(_m *EvaluationRouteEvidence) *EvaluationRouteEvidenceDeleteOne {
+	return c.DeleteOneID(_m.ID)
+}
+
+// DeleteOneID returns a builder for deleting the given entity by its id.
+func (c *EvaluationRouteEvidenceClient) DeleteOneID(id string) *EvaluationRouteEvidenceDeleteOne {
+	builder := c.Delete().Where(evaluationrouteevidence.ID(id))
+	builder.mutation.id = &id
+	builder.mutation.op = OpDeleteOne
+	return &EvaluationRouteEvidenceDeleteOne{builder}
+}
+
+// Query returns a query builder for EvaluationRouteEvidence.
+func (c *EvaluationRouteEvidenceClient) Query() *EvaluationRouteEvidenceQuery {
+	return &EvaluationRouteEvidenceQuery{
+		config: c.config,
+		ctx:    &QueryContext{Type: TypeEvaluationRouteEvidence},
+		inters: c.Interceptors(),
+	}
+}
+
+// Get returns a EvaluationRouteEvidence entity by its id.
+func (c *EvaluationRouteEvidenceClient) Get(ctx context.Context, id string) (*EvaluationRouteEvidence, error) {
+	return c.Query().Where(evaluationrouteevidence.ID(id)).Only(ctx)
+}
+
+// GetX is like Get, but panics if an error occurs.
+func (c *EvaluationRouteEvidenceClient) GetX(ctx context.Context, id string) *EvaluationRouteEvidence {
+	obj, err := c.Get(ctx, id)
+	if err != nil {
+		panic(err)
+	}
+	return obj
+}
+
+// QueryAPIKey queries the api_key edge of a EvaluationRouteEvidence.
+func (c *EvaluationRouteEvidenceClient) QueryAPIKey(_m *EvaluationRouteEvidence) *APIKeyQuery {
+	query := (&APIKeyClient{config: c.config}).Query()
+	query.path = func(context.Context) (fromV *sql.Selector, _ error) {
+		id := _m.ID
+		step := sqlgraph.NewStep(
+			sqlgraph.From(evaluationrouteevidence.Table, evaluationrouteevidence.FieldID, id),
+			sqlgraph.To(apikey.Table, apikey.FieldID),
+			sqlgraph.Edge(sqlgraph.M2O, true, evaluationrouteevidence.APIKeyTable, evaluationrouteevidence.APIKeyColumn),
+		)
+		fromV = sqlgraph.Neighbors(_m.driver.Dialect(), step)
+		return fromV, nil
+	}
+	return query
+}
+
+// Hooks returns the client hooks.
+func (c *EvaluationRouteEvidenceClient) Hooks() []Hook {
+	return c.hooks.EvaluationRouteEvidence
+}
+
+// Interceptors returns the client interceptors.
+func (c *EvaluationRouteEvidenceClient) Interceptors() []Interceptor {
+	return c.inters.EvaluationRouteEvidence
+}
+
+func (c *EvaluationRouteEvidenceClient) mutate(ctx context.Context, m *EvaluationRouteEvidenceMutation) (Value, error) {
+	switch m.Op() {
+	case OpCreate:
+		return (&EvaluationRouteEvidenceCreate{config: c.config, hooks: c.Hooks(), mutation: m}).Save(ctx)
+	case OpUpdate:
+		return (&EvaluationRouteEvidenceUpdate{config: c.config, hooks: c.Hooks(), mutation: m}).Save(ctx)
+	case OpUpdateOne:
+		return (&EvaluationRouteEvidenceUpdateOne{config: c.config, hooks: c.Hooks(), mutation: m}).Save(ctx)
+	case OpDelete, OpDeleteOne:
+		return (&EvaluationRouteEvidenceDelete{config: c.config, hooks: c.Hooks(), mutation: m}).Exec(ctx)
+	default:
+		return nil, fmt.Errorf("ent: unknown EvaluationRouteEvidence mutation op: %q", m.Op())
+	}
+}
+
+// EvaluationRunClient is a client for the EvaluationRun schema.
+type EvaluationRunClient struct {
+	config
+}
+
+// NewEvaluationRunClient returns a client for the EvaluationRun from the given config.
+func NewEvaluationRunClient(c config) *EvaluationRunClient {
+	return &EvaluationRunClient{config: c}
+}
+
+// Use adds a list of mutation hooks to the hooks stack.
+// A call to `Use(f, g, h)` equals to `evaluationrun.Hooks(f(g(h())))`.
+func (c *EvaluationRunClient) Use(hooks ...Hook) {
+	c.hooks.EvaluationRun = append(c.hooks.EvaluationRun, hooks...)
+}
+
+// Intercept adds a list of query interceptors to the interceptors stack.
+// A call to `Intercept(f, g, h)` equals to `evaluationrun.Intercept(f(g(h())))`.
+func (c *EvaluationRunClient) Intercept(interceptors ...Interceptor) {
+	c.inters.EvaluationRun = append(c.inters.EvaluationRun, interceptors...)
+}
+
+// Create returns a builder for creating a EvaluationRun entity.
+func (c *EvaluationRunClient) Create() *EvaluationRunCreate {
+	mutation := newEvaluationRunMutation(c.config, OpCreate)
+	return &EvaluationRunCreate{config: c.config, hooks: c.Hooks(), mutation: mutation}
+}
+
+// CreateBulk returns a builder for creating a bulk of EvaluationRun entities.
+func (c *EvaluationRunClient) CreateBulk(builders ...*EvaluationRunCreate) *EvaluationRunCreateBulk {
+	return &EvaluationRunCreateBulk{config: c.config, builders: builders}
+}
+
+// MapCreateBulk creates a bulk creation builder from the given slice. For each item in the slice, the function creates
+// a builder and applies setFunc on it.
+func (c *EvaluationRunClient) MapCreateBulk(slice any, setFunc func(*EvaluationRunCreate, int)) *EvaluationRunCreateBulk {
+	rv := reflect.ValueOf(slice)
+	if rv.Kind() != reflect.Slice {
+		return &EvaluationRunCreateBulk{err: fmt.Errorf("calling to EvaluationRunClient.MapCreateBulk with wrong type %T, need slice", slice)}
+	}
+	builders := make([]*EvaluationRunCreate, rv.Len())
+	for i := 0; i < rv.Len(); i++ {
+		builders[i] = c.Create()
+		setFunc(builders[i], i)
+	}
+	return &EvaluationRunCreateBulk{config: c.config, builders: builders}
+}
+
+// Update returns an update builder for EvaluationRun.
+func (c *EvaluationRunClient) Update() *EvaluationRunUpdate {
+	mutation := newEvaluationRunMutation(c.config, OpUpdate)
+	return &EvaluationRunUpdate{config: c.config, hooks: c.Hooks(), mutation: mutation}
+}
+
+// UpdateOne returns an update builder for the given entity.
+func (c *EvaluationRunClient) UpdateOne(_m *EvaluationRun) *EvaluationRunUpdateOne {
+	mutation := newEvaluationRunMutation(c.config, OpUpdateOne, withEvaluationRun(_m))
+	return &EvaluationRunUpdateOne{config: c.config, hooks: c.Hooks(), mutation: mutation}
+}
+
+// UpdateOneID returns an update builder for the given id.
+func (c *EvaluationRunClient) UpdateOneID(id uuid.UUID) *EvaluationRunUpdateOne {
+	mutation := newEvaluationRunMutation(c.config, OpUpdateOne, withEvaluationRunID(id))
+	return &EvaluationRunUpdateOne{config: c.config, hooks: c.Hooks(), mutation: mutation}
+}
+
+// Delete returns a delete builder for EvaluationRun.
+func (c *EvaluationRunClient) Delete() *EvaluationRunDelete {
+	mutation := newEvaluationRunMutation(c.config, OpDelete)
+	return &EvaluationRunDelete{config: c.config, hooks: c.Hooks(), mutation: mutation}
+}
+
+// DeleteOne returns a builder for deleting the given entity.
+func (c *EvaluationRunClient) DeleteOne(_m *EvaluationRun) *EvaluationRunDeleteOne {
+	return c.DeleteOneID(_m.ID)
+}
+
+// DeleteOneID returns a builder for deleting the given entity by its id.
+func (c *EvaluationRunClient) DeleteOneID(id uuid.UUID) *EvaluationRunDeleteOne {
+	builder := c.Delete().Where(evaluationrun.ID(id))
+	builder.mutation.id = &id
+	builder.mutation.op = OpDeleteOne
+	return &EvaluationRunDeleteOne{builder}
+}
+
+// Query returns a query builder for EvaluationRun.
+func (c *EvaluationRunClient) Query() *EvaluationRunQuery {
+	return &EvaluationRunQuery{
+		config: c.config,
+		ctx:    &QueryContext{Type: TypeEvaluationRun},
+		inters: c.Interceptors(),
+	}
+}
+
+// Get returns a EvaluationRun entity by its id.
+func (c *EvaluationRunClient) Get(ctx context.Context, id uuid.UUID) (*EvaluationRun, error) {
+	return c.Query().Where(evaluationrun.ID(id)).Only(ctx)
+}
+
+// GetX is like Get, but panics if an error occurs.
+func (c *EvaluationRunClient) GetX(ctx context.Context, id uuid.UUID) *EvaluationRun {
+	obj, err := c.Get(ctx, id)
+	if err != nil {
+		panic(err)
+	}
+	return obj
+}
+
+// QueryPlan queries the plan edge of a EvaluationRun.
+func (c *EvaluationRunClient) QueryPlan(_m *EvaluationRun) *EvaluationPlanQuery {
+	query := (&EvaluationPlanClient{config: c.config}).Query()
+	query.path = func(context.Context) (fromV *sql.Selector, _ error) {
+		id := _m.ID
+		step := sqlgraph.NewStep(
+			sqlgraph.From(evaluationrun.Table, evaluationrun.FieldID, id),
+			sqlgraph.To(evaluationplan.Table, evaluationplan.FieldID),
+			sqlgraph.Edge(sqlgraph.M2O, true, evaluationrun.PlanTable, evaluationrun.PlanColumn),
+		)
+		fromV = sqlgraph.Neighbors(_m.driver.Dialect(), step)
+		return fromV, nil
+	}
+	return query
+}
+
+// Hooks returns the client hooks.
+func (c *EvaluationRunClient) Hooks() []Hook {
+	return c.hooks.EvaluationRun
+}
+
+// Interceptors returns the client interceptors.
+func (c *EvaluationRunClient) Interceptors() []Interceptor {
+	return c.inters.EvaluationRun
+}
+
+func (c *EvaluationRunClient) mutate(ctx context.Context, m *EvaluationRunMutation) (Value, error) {
+	switch m.Op() {
+	case OpCreate:
+		return (&EvaluationRunCreate{config: c.config, hooks: c.Hooks(), mutation: m}).Save(ctx)
+	case OpUpdate:
+		return (&EvaluationRunUpdate{config: c.config, hooks: c.Hooks(), mutation: m}).Save(ctx)
+	case OpUpdateOne:
+		return (&EvaluationRunUpdateOne{config: c.config, hooks: c.Hooks(), mutation: m}).Save(ctx)
+	case OpDelete, OpDeleteOne:
+		return (&EvaluationRunDelete{config: c.config, hooks: c.Hooks(), mutation: m}).Exec(ctx)
+	default:
+		return nil, fmt.Errorf("ent: unknown EvaluationRun mutation op: %q", m.Op())
 	}
 }
 
@@ -6829,24 +7699,26 @@ type (
 		AuthIdentityChannel, BatchImageEvent, BatchImageItem, BatchImageJob,
 		ChannelMonitor, ChannelMonitorDailyRollup, ChannelMonitorHistory,
 		ChannelMonitorRequestTemplate, CompositeModelRoute, ErrorPassthroughRule,
-		Group, IdempotencyRecord, IdentityAdoptionDecision, PaymentAuditLog,
-		PaymentOrder, PaymentProviderInstance, PendingAuthSession, PromoCode,
-		PromoCodeUsage, Proxy, RedeemCode, SecuritySecret, Setting, SubscriptionPlan,
-		TLSFingerprintProfile, UsageCleanupTask, UsageLog, User, UserAllowedGroup,
-		UserAttributeDefinition, UserAttributeValue, UserPlatformQuota,
-		UserSubscription []ent.Hook
+		EvaluationCase, EvaluationDatasetVersion, EvaluationPlan,
+		EvaluationRouteEvidence, EvaluationRun, Group, IdempotencyRecord,
+		IdentityAdoptionDecision, PaymentAuditLog, PaymentOrder,
+		PaymentProviderInstance, PendingAuthSession, PromoCode, PromoCodeUsage, Proxy,
+		RedeemCode, SecuritySecret, Setting, SubscriptionPlan, TLSFingerprintProfile,
+		UsageCleanupTask, UsageLog, User, UserAllowedGroup, UserAttributeDefinition,
+		UserAttributeValue, UserPlatformQuota, UserSubscription []ent.Hook
 	}
 	inters struct {
 		APIKey, Account, AccountGroup, Announcement, AnnouncementRead, AuthIdentity,
 		AuthIdentityChannel, BatchImageEvent, BatchImageItem, BatchImageJob,
 		ChannelMonitor, ChannelMonitorDailyRollup, ChannelMonitorHistory,
 		ChannelMonitorRequestTemplate, CompositeModelRoute, ErrorPassthroughRule,
-		Group, IdempotencyRecord, IdentityAdoptionDecision, PaymentAuditLog,
-		PaymentOrder, PaymentProviderInstance, PendingAuthSession, PromoCode,
-		PromoCodeUsage, Proxy, RedeemCode, SecuritySecret, Setting, SubscriptionPlan,
-		TLSFingerprintProfile, UsageCleanupTask, UsageLog, User, UserAllowedGroup,
-		UserAttributeDefinition, UserAttributeValue, UserPlatformQuota,
-		UserSubscription []ent.Interceptor
+		EvaluationCase, EvaluationDatasetVersion, EvaluationPlan,
+		EvaluationRouteEvidence, EvaluationRun, Group, IdempotencyRecord,
+		IdentityAdoptionDecision, PaymentAuditLog, PaymentOrder,
+		PaymentProviderInstance, PendingAuthSession, PromoCode, PromoCodeUsage, Proxy,
+		RedeemCode, SecuritySecret, Setting, SubscriptionPlan, TLSFingerprintProfile,
+		UsageCleanupTask, UsageLog, User, UserAllowedGroup, UserAttributeDefinition,
+		UserAttributeValue, UserPlatformQuota, UserSubscription []ent.Interceptor
 	}
 )
 

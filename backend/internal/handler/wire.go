@@ -3,6 +3,7 @@ package handler
 import (
 	"github.com/Wei-Shaw/sub2api/internal/config"
 	"github.com/Wei-Shaw/sub2api/internal/handler/admin"
+	radarhandler "github.com/Wei-Shaw/sub2api/internal/handler/internal"
 	"github.com/Wei-Shaw/sub2api/internal/securityaudit"
 	"github.com/Wei-Shaw/sub2api/internal/service"
 
@@ -47,6 +48,8 @@ func ProvideAdminHandlers(
 	affiliateHandler *admin.AffiliateHandler,
 	complianceHandler *admin.ComplianceHandler,
 	auditLogHandler *admin.AuditLogHandler,
+	radarGovernanceHandler *admin.RadarGovernanceHandler,
+	radarReliabilityHandler *admin.RadarReliabilityHandler,
 	upstreamBillingProbe *service.UpstreamBillingProbeService,
 	ollamaCloudUsage *service.OllamaCloudUsageService,
 ) *AdminHandlers {
@@ -89,6 +92,8 @@ func ProvideAdminHandlers(
 		Affiliate:              affiliateHandler,
 		Compliance:             complianceHandler,
 		AuditLog:               auditLogHandler,
+		RadarGovernance:        radarGovernanceHandler,
+		RadarReliability:       radarReliabilityHandler,
 	}
 }
 
@@ -150,6 +155,14 @@ func ProvideBatchImageHandler(
 	return h
 }
 
+func ProvideRadarWorkerHandler(repo service.EvaluationGradingRepository, cfg *config.Config) RadarWorkerHandler {
+	return radarhandler.ProvideRadarGraderHandler(repo, cfg)
+}
+
+func ProvideRadarHealthHandler(projection service.RadarProjectionRepository, reports service.QualityReportReader) *RadarHealthHandler {
+	return NewRadarHealthHandler(projection, reports)
+}
+
 // ProvideSystemHandler creates admin.SystemHandler with UpdateService
 func ProvideSystemHandler(updateService *service.UpdateService, lockService *service.SystemOperationLockService) *admin.SystemHandler {
 	return admin.NewSystemHandler(updateService, lockService)
@@ -194,6 +207,8 @@ func ProvideHandlers(
 	modelPlazaHandler *ModelPlazaHandler,
 	asyncImageHandler *AsyncImageHandler,
 	batchImageHandler *BatchImageHandler,
+	radarHealthHandler *RadarHealthHandler,
+	radarWorkerHandler RadarWorkerHandler,
 	_ *service.IdempotencyCoordinator,
 	_ *service.IdempotencyCleanupService,
 	_ *service.OpenAIQuotaAutoResetService,
@@ -220,6 +235,8 @@ func ProvideHandlers(
 		ModelPlaza:       modelPlazaHandler,
 		AsyncImage:       asyncImageHandler,
 		BatchImage:       batchImageHandler,
+		RadarHealth:      radarHealthHandler,
+		RadarWorker:      radarWorkerHandler,
 	}
 }
 
@@ -246,6 +263,8 @@ var ProviderSet = wire.NewSet(
 	NewModelPlazaHandler,
 	NewAsyncImageHandler,
 	ProvideBatchImageHandler,
+	ProvideRadarHealthHandler,
+	ProvideRadarWorkerHandler,
 
 	// Admin handlers
 	admin.NewDashboardHandler,
@@ -283,6 +302,8 @@ var ProviderSet = wire.NewSet(
 	admin.NewAffiliateHandler,
 	admin.NewComplianceHandler,
 	admin.NewAuditLogHandler,
+	admin.NewRadarGovernanceHandler,
+	admin.NewRadarReliabilityHandler,
 
 	// AdminHandlers and Handlers constructors
 	ProvideAdminHandlers,

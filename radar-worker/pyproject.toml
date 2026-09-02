@@ -1,0 +1,55 @@
+[build-system]
+requires = ["hatchling>=1.27,<2"]
+build-backend = "hatchling.build"
+
+[project]
+name = "sub2api-radar-worker"
+version = "0.2.0"
+description = "Controlled runner, grader, and statistics workers for Sub2API Radar"
+requires-python = ">=3.12,<3.15"
+dependencies = [
+  "httpx>=0.28,<0.29",
+  "pydantic>=2.11,<3",
+  "pydantic-settings>=2.9,<3",
+  "rfc8785>=0.1.4,<0.2",
+  "jsonschema>=4.24,<5",
+  "numpy>=2.2,<3",
+  "scipy>=1.15,<2",
+  "tenacity>=9.1,<10",
+]
+
+[project.optional-dependencies]
+dev = [
+  "pytest>=8.4,<9",
+  "pytest-asyncio>=1.0,<2",
+  "respx>=0.22,<0.23",
+  "ruff>=0.12,<0.13",
+  "mypy>=1.16,<2",
+  "pip-audit>=2.9,<3",
+]
+
+[project.scripts]
+radar-runner = "sub2api_radar.runner:main"
+radar-grader = "sub2api_radar.grader:main"
+radar-statistics = "sub2api_radar.statistics.service:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/sub2api_radar"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
+pythonpath = ["src"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B"]
+
+[tool.mypy]
+python_version = "3.12"
+strict = true
+packages = ["sub2api_radar"]
+mypy_path = "src"

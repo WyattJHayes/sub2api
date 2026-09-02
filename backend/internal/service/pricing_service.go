@@ -15,6 +15,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/Wei-Shaw/sub2api/internal/config"
@@ -170,6 +171,13 @@ type PricingService struct {
 	pricingData  map[string]*LiteLLMModelPricing
 	lastUpdated  time.Time
 	localHash    string
+	source       string
+	remoteHash   string
+
+	lastRefreshAt    time.Time
+	lastRefreshOK    bool
+	lastRefreshError string
+	fallbackTotal    atomic.Uint64
 
 	// 停止信号
 	stopCh chan struct{}

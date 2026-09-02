@@ -119,6 +119,10 @@ backend/.installed
 tests
 !deploy/tests/
 !deploy/tests/**
+!radar-worker/tests/
+!radar-worker/tests/**
+__pycache__/
+*.pyc
 CLAUDE.md
 .claude
 scripts

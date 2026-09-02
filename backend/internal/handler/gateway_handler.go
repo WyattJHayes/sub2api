@@ -37,6 +37,54 @@ const gatewayCompatibilityMetricsLogInterval = 1024
 
 var gatewayCompatibilityMetricsLogCounter atomic.Uint64
 
+func recordEvaluationRouteAttempt(ctx context.Context, cfg *config.Config, account *service.Account, channelID int64, requestedModel string) {
+	trace, ok := service.RouteTraceFromContext(ctx)
+	if !ok || account == nil {
+		return
+	}
+
+	region := ""
+	if cfg != nil {
+		region = cfg.Radar.Region
+	}
+	trace.RecordAttempt(service.RouteAttempt{
+		Provider:      account.Platform,
+		AccountID:     account.ID,
+		ChannelID:     channelID,
+		ResolvedModel: account.GetMappedModel(requestedModel),
+		Region:        region,
+	})
+}
+
+func recordEvaluationRouteFailover(ctx context.Context, failoverErr *service.UpstreamFailoverError) {
+	trace, ok := service.RouteTraceFromContext(ctx)
+	if !ok || failoverErr == nil {
+		return
+	}
+	if failoverErr.StatusCode > 0 {
+		trace.RecordLatestAttemptError(strconv.Itoa(failoverErr.StatusCode))
+		return
+	}
+	if reason := stableRouteFailureReason(failoverErr.Reason); reason != "" {
+		trace.RecordLatestAttemptError(reason)
+	}
+}
+
+func stableRouteFailureReason(reason service.GatewayFailureReason) string {
+	value := strings.TrimSpace(string(reason))
+	if value == "" {
+		return ""
+	}
+	for _, character := range value {
+		if (character < 'a' || character > 'z') &&
+			(character < '0' || character > '9') &&
+			character != '_' && character != '-' {
+			return ""
+		}
+	}
+	return value
+}
+
 // GatewayHandler handles API gateway requests
 type GatewayHandler struct {
 	gatewayService            *service.GatewayService

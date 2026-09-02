@@ -1,0 +1,73 @@
+name: ${RADAR_COMPOSE_PROJECT_NAME:?RADAR_COMPOSE_PROJECT_NAME is required}
+
+services:
+  sub2api-staging:
+    container_name: ${RADAR_COMPOSE_RESOURCE_PREFIX:?RADAR_COMPOSE_RESOURCE_PREFIX is required}-sub2api-rehearsal
+    build: null
+    image: ${RADAR_CONTROL_PLANE_IMAGE:?RADAR_CONTROL_PLANE_IMAGE is required}
+    pull_policy: never
+    ports:
+      - "127.0.0.1:${RADAR_CONTROL_PLANE_PORT:-18080}:8080"
+  postgres-staging:
+    container_name: ${RADAR_COMPOSE_RESOURCE_PREFIX:?RADAR_COMPOSE_RESOURCE_PREFIX is required}-postgres-rehearsal
+    image: ${RADAR_POSTGRES_IMAGE:?RADAR_POSTGRES_IMAGE is required}
+    pull_policy: never
+  redis-staging:
+    container_name: ${RADAR_COMPOSE_RESOURCE_PREFIX:?RADAR_COMPOSE_RESOURCE_PREFIX is required}-redis-rehearsal
+    image: ${RADAR_REDIS_IMAGE:?RADAR_REDIS_IMAGE is required}
+    pull_policy: never
+  minio-staging:
+    container_name: ${RADAR_COMPOSE_RESOURCE_PREFIX:?RADAR_COMPOSE_RESOURCE_PREFIX is required}-minio-rehearsal
+    image: ${RADAR_MINIO_IMAGE:?RADAR_MINIO_IMAGE is required}
+    pull_policy: never
+  minio-init:
+    container_name: ${RADAR_COMPOSE_RESOURCE_PREFIX:?RADAR_COMPOSE_RESOURCE_PREFIX is required}-minio-init-rehearsal
+    image: ${RADAR_MINIO_MC_IMAGE:?RADAR_MINIO_MC_IMAGE is required}
+    pull_policy: never
+  clamav-staging:
+    container_name: ${RADAR_COMPOSE_RESOURCE_PREFIX:?RADAR_COMPOSE_RESOURCE_PREFIX is required}-clamav-rehearsal
+    image: ${RADAR_CLAMAV_IMAGE:?RADAR_CLAMAV_IMAGE is required}
+    pull_policy: never
+  radar-synthetic-upstream:
+    container_name: ${RADAR_COMPOSE_RESOURCE_PREFIX:?RADAR_COMPOSE_RESOURCE_PREFIX is required}-synthetic-upstream-rehearsal
+    image: ${RADAR_WORKER_IMAGE:?RADAR_WORKER_IMAGE is required}
+    pull_policy: never
+  radar-runner:
+    container_name: ${RADAR_COMPOSE_RESOURCE_PREFIX:?RADAR_COMPOSE_RESOURCE_PREFIX is required}-runner-rehearsal
+    build: null
+    image: ${RADAR_WORKER_IMAGE:?RADAR_WORKER_IMAGE is required}
+    pull_policy: never
+  radar-grader:
+    container_name: ${RADAR_COMPOSE_RESOURCE_PREFIX:?RADAR_COMPOSE_RESOURCE_PREFIX is required}-grader-rehearsal
+    build: null
+    image: ${RADAR_WORKER_IMAGE:?RADAR_WORKER_IMAGE is required}
+    pull_policy: never
+  radar-statistics:
+    container_name: ${RADAR_COMPOSE_RESOURCE_PREFIX:?RADAR_COMPOSE_RESOURCE_PREFIX is required}-statistics-rehearsal
+    build: null
+    image: ${RADAR_WORKER_IMAGE:?RADAR_WORKER_IMAGE is required}
+    pull_policy: never
+
+networks:
+  control_plane:
+    name: ${RADAR_COMPOSE_RESOURCE_PREFIX:?RADAR_COMPOSE_RESOURCE_PREFIX is required}-control-rehearsal
+    internal: true
+  radar_worker_internal:
+    name: ${RADAR_COMPOSE_RESOURCE_PREFIX:?RADAR_COMPOSE_RESOURCE_PREFIX is required}-internal-rehearsal
+    internal: true
+
+volumes:
+  radar_staging_postgres:
+    name: ${RADAR_COMPOSE_RESOURCE_PREFIX:?RADAR_COMPOSE_RESOURCE_PREFIX is required}-postgres-rehearsal
+  radar_staging_redis:
+    name: ${RADAR_COMPOSE_RESOURCE_PREFIX:?RADAR_COMPOSE_RESOURCE_PREFIX is required}-redis-rehearsal
+  radar_staging_artifacts:
+    name: ${RADAR_COMPOSE_RESOURCE_PREFIX:?RADAR_COMPOSE_RESOURCE_PREFIX is required}-artifacts-rehearsal
+  radar_staging_clamav:
+    name: ${RADAR_COMPOSE_RESOURCE_PREFIX:?RADAR_COMPOSE_RESOURCE_PREFIX is required}-clamav-rehearsal
+  radar_runner_state:
+    name: ${RADAR_COMPOSE_RESOURCE_PREFIX:?RADAR_COMPOSE_RESOURCE_PREFIX is required}-runner-rehearsal
+  radar_grader_state:
+    name: ${RADAR_COMPOSE_RESOURCE_PREFIX:?RADAR_COMPOSE_RESOURCE_PREFIX is required}-grader-rehearsal
+  radar_statistics_state:
+    name: ${RADAR_COMPOSE_RESOURCE_PREFIX:?RADAR_COMPOSE_RESOURCE_PREFIX is required}-statistics-rehearsal

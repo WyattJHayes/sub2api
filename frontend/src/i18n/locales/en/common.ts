@@ -180,6 +180,7 @@ export default {
     proxies: 'Proxies',
     redeemCodes: 'Redeem Codes',
     ops: 'Ops',
+    qualityRadar: 'Quality Radar',
     promoCodes: 'Promo Codes',
     settings: 'Settings',
     myAccount: 'My Account',
@@ -206,6 +207,49 @@ export default {
     contentModeration: 'Content Moderation',
     promptAudit: 'Prompt Audit',
     auditLogs: 'Audit Logs',
+  },
+
+  modelHealth: {
+    title: 'Model Health',
+    description: 'View public quality and reliability signals for available models.',
+    updated: 'Last updated',
+    p99: 'P99 latency',
+    errorRate: 'Error rate',
+    empty: 'No public model health data available',
+    loadFailed: 'Unable to load model health data. Please try again later.',
+    status: {
+      healthy: 'Healthy',
+      degraded: 'Degraded',
+      insufficient_evidence: 'Insufficient evidence'
+    },
+    quality: {
+      normal: 'No significant anomaly',
+      observe: 'Needs observation',
+      suspected: 'Suspected anomaly',
+      highRisk: 'High risk',
+      insufficient: 'Insufficient coverage',
+      adulteration: 'Adulteration risk',
+      degradation: 'Degradation risk'
+    },
+    report: {
+      title: 'Model Quality Report',
+      notFound: 'Detection coverage is currently insufficient, so no quality report is available yet.',
+      loadFailed: 'Unable to load the quality report. Please try again later.',
+      declaredModel: 'Tested model', overall: 'Overall conclusion', source: 'Source identification', samples: 'Samples', confidence: 'Confidence',
+      behaviorGroup: 'Model behavior and capability profile', protocolGroup: 'Invocation and protocol quality', keyEvidence: 'Key evidence',
+      noEvidence: 'No public key evidence is available.', confirmedSource: 'Confirmed source', inferredSource: 'Behavioral inference',
+      sourceUnavailable: 'Source cannot be determined yet', sourceBoundary: 'Source identification uses allowlisted controlled-probe evidence only and excludes raw route data.',
+      generatedAt: 'Generated', freshUntil: 'Fresh until', stale: 'Report is stale', coverageInsufficient: 'Insufficient coverage', alternateCandidates: 'Other candidate sources'
+    },
+    dimension: {
+      knowledge_freshness: 'Knowledge freshness', model_fingerprint: 'Model fingerprint match', reasoning_stability: 'Reasoning stability', structure_compliance: 'Structure compliance',
+      parameter_fidelity: 'Parameter fidelity', instruction_hierarchy: 'Instruction hierarchy', protocol_schema: 'Protocol schema', stream_completeness: 'Stream completeness'
+    },
+    evidence: {
+      within_policy_bounds: 'The result is within current policy bounds.', coverage_insufficient: 'Coverage is insufficient and the result should be observed.', fingerprint_matched: 'The behavior fingerprint matches the declared source.', fingerprint_mismatch: 'The behavior fingerprint diverges from the declared source.',
+      reasoning_variance: 'Reasoning outcomes show abnormal variance.', structure_violation: 'Structure compliance deviates from expectations.', parameter_deviation: 'Parameter fidelity deviates from expectations.', instruction_violation: 'Instruction hierarchy deviates from expectations.',
+      protocol_violation: 'Protocol schema compliance deviates from expectations.', stream_incomplete: 'Stream response completeness is insufficient.', source_confirmed: 'The source is confirmed by controlled evidence.', source_inferred: 'The source is inferred from behavior.', source_insufficient_evidence: 'Source evidence is insufficient for a determination.'
+    }
   },
 
   // Auth

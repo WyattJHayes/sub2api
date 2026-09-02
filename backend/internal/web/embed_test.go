@@ -216,6 +216,19 @@ func (m *mockSettingsProvider) GetPublicSettingsForInjection(ctx context.Context
 	return m.settings, m.err
 }
 
+func embeddedJSAssetPath(t *testing.T, distFS fs.FS) string {
+	t.Helper()
+	entries, err := fs.ReadDir(distFS, "assets")
+	require.NoError(t, err)
+	for _, entry := range entries {
+		if !entry.IsDir() && strings.HasSuffix(entry.Name(), ".js") {
+			return "assets/" + entry.Name()
+		}
+	}
+	t.Fatal("embedded frontend does not contain a JavaScript asset")
+	return ""
+}
+
 func TestFrontendServer_InjectSettings(t *testing.T) {
 	t.Run("injects_settings_with_nonce_placeholder", func(t *testing.T) {
 		provider := &mockSettingsProvider{
@@ -648,14 +661,15 @@ func TestFrontendServer_Middleware(t *testing.T) {
 		router := gin.New()
 		router.Use(server.Middleware())
 
-		// Request for existing static file
+		assetPath := embeddedJSAssetPath(t, server.distFS)
 		w := httptest.NewRecorder()
-		req := httptest.NewRequest(http.MethodGet, "/logo.png", nil)
+		req := httptest.NewRequest(http.MethodGet, "/"+assetPath, nil)
 		router.ServeHTTP(w, req)
 
 		assert.Equal(t, http.StatusOK, w.Code)
-		assert.Contains(t, w.Header().Get("Content-Type"), "image/png")
-		assert.Empty(t, w.Header().Get("Cache-Control"))
+		assert.Contains(t, strings.ToLower(w.Header().Get("Content-Type")), "javascript")
+		assert.NotContains(t, strings.ToLower(w.Header().Get("Content-Type")), "text/html")
+		assert.Equal(t, staticAssetsCacheControl, w.Header().Get("Cache-Control"))
 
 		entries, err := fs.ReadDir(server.distFS, "assets")
 		require.NoError(t, err)
@@ -675,6 +689,13 @@ func TestFrontendServer_Middleware(t *testing.T) {
 
 		assert.Equal(t, http.StatusOK, assetWriter.Code)
 		assert.Equal(t, staticAssetsCacheControl, assetWriter.Header().Get("Cache-Control"))
+
+		missingWriter := httptest.NewRecorder()
+		missingRequest := httptest.NewRequest(http.MethodGet, "/assets/missing-AbCd1234.js", nil)
+		router.ServeHTTP(missingWriter, missingRequest)
+		assert.Equal(t, http.StatusNotFound, missingWriter.Code)
+		assert.Equal(t, "no-store", missingWriter.Header().Get("Cache-Control"))
+		assert.NotContains(t, strings.ToLower(missingWriter.Header().Get("Content-Type")), "text/html")
 	})
 }
 
@@ -684,6 +705,16 @@ func TestEmbeddedFrontendBypassesBareVideoAPIRoutes(t *testing.T) {
 		"/videos/edits",
 		"/videos/extensions",
 		"/videos/request-123",
+	} {
+		require.True(t, shouldBypassEmbeddedFrontend(path), "path=%s", path)
+	}
+}
+
+func TestEmbeddedFrontendBypassesPrivateRadarWorkerRoutes(t *testing.T) {
+	for _, path := range []string{
+		"/internal/radar/v1/leases:claim",
+		"/internal/radar/v1/grading-leases:claim",
+		"/internal/radar/v1/analysis-jobs:claim",
 	} {
 		require.True(t, shouldBypassEmbeddedFrontend(path), "path=%s", path)
 	}
@@ -730,16 +761,20 @@ func TestHasEmbeddedFrontend(t *testing.T) {
 func TestServeEmbeddedFrontend(t *testing.T) {
 	t.Run("serves_static_files", func(t *testing.T) {
 		middleware := ServeEmbeddedFrontend()
+		distFS, err := fs.Sub(frontendFS, "dist")
+		require.NoError(t, err)
+		assetPath := embeddedJSAssetPath(t, distFS)
 
 		router := gin.New()
 		router.Use(middleware)
 
 		w := httptest.NewRecorder()
-		req := httptest.NewRequest(http.MethodGet, "/logo.png", nil)
+		req := httptest.NewRequest(http.MethodGet, "/"+assetPath, nil)
 		router.ServeHTTP(w, req)
 
 		assert.Equal(t, http.StatusOK, w.Code)
-		assert.Contains(t, w.Header().Get("Content-Type"), "image/png")
+		assert.Contains(t, strings.ToLower(w.Header().Get("Content-Type")), "javascript")
+		assert.NotContains(t, strings.ToLower(w.Header().Get("Content-Type")), "text/html")
 	})
 
 	t.Run("serves_index_html_for_root", func(t *testing.T) {
@@ -775,6 +810,20 @@ func TestServeEmbeddedFrontend(t *testing.T) {
 				assert.Contains(t, w.Header().Get("Content-Type"), "text/html")
 			})
 		}
+	})
+
+	t.Run("returns_not_found_for_missing_static_asset", func(t *testing.T) {
+		middleware := ServeEmbeddedFrontend()
+		router := gin.New()
+		router.Use(middleware)
+
+		w := httptest.NewRecorder()
+		req := httptest.NewRequest(http.MethodGet, "/assets/missing-AbCd1234.js", nil)
+		router.ServeHTTP(w, req)
+
+		assert.Equal(t, http.StatusNotFound, w.Code)
+		assert.Equal(t, "no-store", w.Header().Get("Cache-Control"))
+		assert.NotContains(t, strings.ToLower(w.Header().Get("Content-Type")), "text/html")
 	})
 
 	t.Run("skips_api_routes", func(t *testing.T) {

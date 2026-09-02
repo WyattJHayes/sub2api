@@ -1,4 +1,4 @@
-.PHONY: build build-backend build-frontend test test-backend test-frontend test-frontend-critical
+.PHONY: build build-backend build-frontend test test-backend test-frontend test-frontend-critical test-frontend-radar test-radar-e2e
 
 FRONTEND_CRITICAL_VITEST := \
 	src/api/__tests__/client.spec.ts \
@@ -14,6 +14,14 @@ FRONTEND_CRITICAL_VITEST := \
 	src/features/channel-monitor-v2/__tests__/designSystem.structure.spec.ts \
 	src/features/channel-monitor-v2/__tests__/monitorFormat.spec.ts \
 	src/features/channel-monitor-v2/__tests__/monitorZoom.spec.ts
+
+FRONTEND_RADAR_VITEST := \
+	src/views/user/__tests__/ModelHealthView.spec.ts \
+	src/views/user/__tests__/ModelQualityReportView.spec.ts \
+	src/views/admin/radar/__tests__/RadarModelsView.spec.ts \
+	src/views/admin/radar/__tests__/RadarManagementViews.spec.ts \
+	src/views/admin/radar/__tests__/RadarShellNavigation.spec.ts \
+	src/views/admin/radar/__tests__/RadarLocalizedViews.spec.ts
 
 # 一键编译前后端
 build: build-backend build-frontend
@@ -36,6 +44,13 @@ test-frontend:
 	@pnpm --dir frontend run lint:check
 	@pnpm --dir frontend run typecheck
 	@$(MAKE) test-frontend-critical
+	@$(MAKE) test-frontend-radar
 
 test-frontend-critical:
 	@pnpm --dir frontend exec vitest run $(FRONTEND_CRITICAL_VITEST)
+
+test-frontend-radar:
+	@pnpm --dir frontend exec vitest run $(FRONTEND_RADAR_VITEST)
+
+test-radar-e2e:
+	@cd frontend && pnpm test:e2e

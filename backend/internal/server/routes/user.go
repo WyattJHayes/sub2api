@@ -112,6 +112,13 @@ func RegisterUserRoutes(
 			usage.POST("/dashboard/api-keys-usage", h.Usage.DashboardAPIKeysUsage)
 		}
 
+		// 质量雷达用户只读视图
+		if h.RadarHealth != nil {
+			radar := authenticated.Group("/radar")
+			radar.GET("/health", h.RadarHealth.List)
+			radar.GET("/models/:alias/quality-report", h.RadarHealth.Detail)
+		}
+
 		// 公告（用户可见）
 		announcements := authenticated.Group("/announcements")
 		{

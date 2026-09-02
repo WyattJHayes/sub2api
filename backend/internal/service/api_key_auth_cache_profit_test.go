@@ -17,11 +17,12 @@ import (
 func profitAuthTestAPIKey() *APIKey {
 	groupID := int64(50)
 	return &APIKey{
-		ID:      82,
-		UserID:  40,
-		GroupID: &groupID,
-		Name:    "profit-auth-roundtrip",
-		Status:  StatusActive,
+		ID:           82,
+		UserID:       40,
+		GroupID:      &groupID,
+		Name:         "profit-auth-roundtrip",
+		Status:       StatusActive,
+		IsEvaluation: true,
 		User: &User{
 			ID:          40,
 			Email:       "profit@test.local",
@@ -37,6 +38,7 @@ func profitAuthTestAPIKey() *APIKey {
 			RateMultiplier:       0.06,
 			SubscriptionType:     SubscriptionTypeStandard,
 			PeakRateEnabled:      false,
+			FreeOpenAIFast:       true,
 			ProfitControlEnabled: true,
 			ProfitMinMargin:      0.2,
 			ProfitSafetyBuffer:   0.05,
@@ -53,7 +55,7 @@ func TestAPIKeyAuthSnapshotProfitControlRoundtrip(t *testing.T) {
 	snapshot := svc.snapshotFromAPIKey(context.Background(), apiKey)
 	require.NotNil(t, snapshot)
 	require.Equal(t, apiKeyAuthSnapshotVersion, snapshot.Version)
-	require.Equal(t, 22, snapshot.Version, "v22 起认证快照携带分组免费 Fast 开关")
+	require.Equal(t, 23, snapshot.Version, "v23 起认证快照同时保留评测密钥标记和分组免费 Fast 开关")
 
 	// 模拟 L2 缓存的完整 JSON 往返（与 apiKeyCache.SetAuthCache/GetAuthCache 同构）。
 	payload, err := json.Marshal(&APIKeyAuthCacheEntry{Snapshot: snapshot})
@@ -67,6 +69,8 @@ func TestAPIKeyAuthSnapshotProfitControlRoundtrip(t *testing.T) {
 	require.NotNil(t, materialized.Group)
 	require.True(t, materialized.Group.Hydrated)
 	require.True(t, materialized.Group.ProfitControlEnabled)
+	require.True(t, materialized.IsEvaluation)
+	require.True(t, materialized.Group.FreeOpenAIFast)
 	require.InDelta(t, 0.2, materialized.Group.ProfitMinMargin, 1e-12)
 	require.InDelta(t, 0.05, materialized.Group.ProfitSafetyBuffer, 1e-12)
 	require.InDelta(t, 0.06, materialized.Group.RateMultiplier, 1e-12)

@@ -386,6 +386,54 @@ func ProvideUsageCleanupService(repo UsageCleanupRepository, timingWheel *Timing
 	return svc
 }
 
+func ProvideEvaluationOutboxConsumerMode(cfg *config.Config) EvaluationOutboxConsumerMode {
+	if cfg == nil || cfg.Radar.OutboxConsumerMode == "" {
+		return EvaluationOutboxConsumerModeCore
+	}
+	return EvaluationOutboxConsumerMode(cfg.Radar.OutboxConsumerMode)
+}
+
+func ProvideEvaluationOutboxConsumerRuntime(
+	repository EvaluationOutboxRepository,
+	dispatcher EvaluationOutboxDispatchHandler,
+	scheduler RouteEvidenceTerminalizationScheduler,
+	cfg *config.Config,
+) *EvaluationOutboxConsumerRuntime {
+	mode := ProvideEvaluationOutboxConsumerMode(cfg)
+	runtime := NewEvaluationOutboxConsumerRuntime(repository, dispatcher, EvaluationOutboxConsumerRuntimeOptions{Mode: mode})
+	runtime.SetScheduler(scheduler)
+	if cfg != nil && cfg.Radar.Enabled && mode != EvaluationOutboxConsumerModeDisabled {
+		runtime.Start()
+	}
+	return runtime
+}
+
+func ProvideArtifactObjectDeleter(store EvaluationArtifactObjectStore) ArtifactObjectDeleter {
+	if store == nil {
+		return nil
+	}
+	return store
+}
+
+func ProvideEvaluationArtifactCleanupService(repo EvaluationArtifactCleanupRepository, store ArtifactObjectDeleter, scheduler ArtifactCleanupScheduler, cfg *config.Config) *EvaluationArtifactCleanupService {
+	interval := 5 * time.Minute
+	batchSize := 100
+	if cfg != nil {
+		if cfg.RadarArtifactStorage.CleanupInterval > 0 {
+			interval = time.Duration(cfg.RadarArtifactStorage.CleanupInterval) * time.Second
+		}
+		if cfg.RadarArtifactStorage.CleanupBatchSize > 0 {
+			batchSize = cfg.RadarArtifactStorage.CleanupBatchSize
+		}
+	}
+	svc := NewEvaluationArtifactCleanupService(repo, store, interval, batchSize)
+	svc.SetScheduler(scheduler)
+	if cfg != nil && cfg.RadarArtifactStorage.Active() {
+		svc.Start()
+	}
+	return svc
+}
+
 // ProvideAccountExpiryService creates and starts AccountExpiryService.
 func ProvideAccountExpiryService(accountRepo AccountRepository) *AccountExpiryService {
 	svc := NewAccountExpiryService(accountRepo, time.Minute)
@@ -913,6 +961,15 @@ var ProviderSet = wire.NewSet(
 	ProvideTimingWheelService,
 	ProvideDashboardAggregationService,
 	ProvideUsageCleanupService,
+	ProvideRouteEvidenceTerminalizationRuntime,
+	wire.Bind(new(RouteEvidenceTerminalizationScheduler), new(*TimingWheelService)),
+	ProvideEvaluationOutboxConsumerMode,
+	NewEvaluationOutboxDispatcher,
+	wire.Bind(new(EvaluationOutboxDispatchHandler), new(*EvaluationOutboxDispatcher)),
+	ProvideEvaluationOutboxConsumerRuntime,
+	ProvideArtifactObjectDeleter,
+	ProvideEvaluationArtifactCleanupService,
+	wire.Bind(new(ArtifactCleanupScheduler), new(*TimingWheelService)),
 	ProvideDeferredService,
 	NewAntigravityQuotaFetcher,
 	NewGrokQuotaFetcher,

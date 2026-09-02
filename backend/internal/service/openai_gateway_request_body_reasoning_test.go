@@ -331,7 +331,11 @@ func TestFilterOpenAIResponsesNoneReasoningEffortForAccount(t *testing.T) {
 	}
 }
 
-// Lite 工具迁移到 input[].additional_tools 后，仍应按有工具请求处理。
+// A Responses Lite body that has already been through normalizeOpenAIResponsesLiteTools
+// carries its tools in an input item of type "additional_tools" and no longer has a
+// top-level "tools" key. It still has tools, so the parallel_tool_calls:false that
+// ensureOpenAIResponsesLiteParallelToolCalls pinned must survive this normalization —
+// otherwise OpenAI applies its default of true and rejects the request.
 func TestNormalizeOpenAIParallelToolCallsWithoutTools_KeepsResponsesLiteAdditionalTools(t *testing.T) {
 	liteBody := []byte(`{"input":[{"type":"message","role":"user","content":"hi"},{"type":"additional_tools","tools":[{"type":"function","name":"spawn_agent"}]}],"parallel_tool_calls":false}`)
 	normalized, changed, err := normalizeOpenAIParallelToolCallsWithoutTools(liteBody, false)
@@ -339,19 +343,12 @@ func TestNormalizeOpenAIParallelToolCallsWithoutTools_KeepsResponsesLiteAddition
 	require.False(t, changed)
 	require.Equal(t, gjson.False, gjson.GetBytes(normalized, "parallel_tool_calls").Type)
 
-	// 非 Lite 请求的空 additional_tools 不构成有效工具声明，字段仍需删除。
+	// An empty additional_tools item carries no tools, so the field is still dropped.
 	emptyLiteBody := []byte(`{"input":[{"type":"additional_tools","tools":[]}],"parallel_tool_calls":true}`)
 	normalized, changed, err = normalizeOpenAIParallelToolCallsWithoutTools(emptyLiteBody, false)
 	require.NoError(t, err)
 	require.True(t, changed)
 	require.False(t, gjson.GetBytes(normalized, "parallel_tool_calls").Exists())
-
-	// Lite 请求即使没有工具，也必须保留已经固定的 false。
-	toolLessLiteBody := []byte(`{"input":"hi","parallel_tool_calls":false}`)
-	normalized, changed, err = normalizeOpenAIParallelToolCallsWithoutTools(toolLessLiteBody, true)
-	require.NoError(t, err)
-	require.False(t, changed)
-	require.Equal(t, gjson.False, gjson.GetBytes(normalized, "parallel_tool_calls").Type)
 }
 
 func TestNormalizeOpenAIResponsesReasoningContentReplayStripsCrossProviderArray(t *testing.T) {

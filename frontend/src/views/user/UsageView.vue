@@ -628,6 +628,12 @@ const escapeCSVValue = (value: unknown): string => {
   return str
 }
 
+const upstreamModelStatusExport = (log: UsageLog): string => {
+  if (log.upstream_model_status === 'consistent') return t('usage.modelConsistent')
+  if (log.upstream_model_status === 'mismatch') return t('usage.modelMismatch')
+  return t('usage.modelUnknown')
+}
+
 const exportToCSV = async () => {
   if (pagination.total === 0) {
     appStore.showWarning(t('usage.noDataToExport'))
@@ -651,6 +657,8 @@ const exportToCSV = async () => {
       'Time',
       'API Key Name',
       'Model',
+      'Upstream Response Model',
+      'Upstream Model Status',
       'Reasoning Effort',
       'Inbound Endpoint',
       'IP Address',
@@ -670,6 +678,8 @@ const exportToCSV = async () => {
       log.created_at,
       log.api_key?.name || '',
       log.model,
+      log.upstream_response_model || t('usage.upstreamResponseUnknown'),
+      upstreamModelStatusExport(log),
       formatReasoningEffort(log.reasoning_effort),
       log.inbound_endpoint || '',
       log.ip_address || '',

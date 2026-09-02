@@ -116,7 +116,9 @@ func TestUsageLogFromService_IncludesServiceTierForUserAndAdmin(t *testing.T) {
 	require.Equal(t, serviceTier, *userDTO.ServiceTier)
 	require.NotNil(t, userDTO.InboundEndpoint)
 	require.Equal(t, inboundEndpoint, *userDTO.InboundEndpoint)
-	require.Nil(t, userDTO.UpstreamEndpoint)
+	userJSON, err := json.Marshal(userDTO)
+	require.NoError(t, err)
+	require.NotContains(t, string(userJSON), `"upstream_endpoint":`)
 	require.NotNil(t, adminDTO.ServiceTier)
 	require.Equal(t, serviceTier, *adminDTO.ServiceTier)
 	require.NotNil(t, adminDTO.InboundEndpoint)
@@ -127,7 +129,7 @@ func TestUsageLogFromService_IncludesServiceTierForUserAndAdmin(t *testing.T) {
 	require.InDelta(t, 1.5, *adminDTO.AccountRateMultiplier, 1e-12)
 }
 
-func TestUsageLogFromService_UsesRequestedModelAndExposesResponseStatusWithoutUpstreamRouteModel(t *testing.T) {
+func TestUsageLogFromService_UsesRequestedModelAndExposesUpstreamResponseAudit(t *testing.T) {
 	t.Parallel()
 
 	upstreamModel := "claude-sonnet-4-20250514"
@@ -150,15 +152,98 @@ func TestUsageLogFromService_UsesRequestedModelAndExposesResponseStatusWithoutUp
 
 	userJSON, err := json.Marshal(userDTO)
 	require.NoError(t, err)
-	require.Contains(t, string(userJSON), `"upstream_response_model":"claude-sonnet-4-20250513"`)
-	require.Contains(t, string(userJSON), `"upstream_model_mismatch":true`)
 	require.NotContains(t, string(userJSON), `"upstream_model":`)
+	require.Contains(t, string(userJSON), `"upstream_response_model":"claude-sonnet-4-20250513"`)
+	require.Contains(t, string(userJSON), `"upstream_model_status":"mismatch"`)
+	require.NotContains(t, string(userJSON), `"upstream_model_mismatch":`)
+	require.NotContains(t, string(userJSON), `"upstream_endpoint":`)
 
 	adminJSON, err := json.Marshal(adminDTO)
 	require.NoError(t, err)
 	require.Contains(t, string(adminJSON), `"upstream_model":"claude-sonnet-4-20250514"`)
 	require.Contains(t, string(adminJSON), `"upstream_response_model":"claude-sonnet-4-20250513"`)
 	require.Contains(t, string(adminJSON), `"upstream_model_mismatch":true`)
+}
+
+func TestUsageLogFromService_ExposesNormalizedTrafficClassToUserAndAdmin(t *testing.T) {
+	t.Parallel()
+
+	log := &service.UsageLog{
+		RequestID:    "req_traffic_class",
+		Model:        "gpt-5.6-luna",
+		TrafficClass: service.TrafficClassProduction,
+	}
+
+	userDTO := UsageLogFromService(log)
+	adminDTO := UsageLogFromServiceAdmin(log)
+
+	require.Equal(t, "production", userDTO.TrafficClass)
+	require.Equal(t, "production", adminDTO.TrafficClass)
+}
+
+func TestUsageLogFromService_MapsAllUpstreamResponseAuditStatesForUsers(t *testing.T) {
+	t.Parallel()
+
+	model := "gpt-5.6"
+	equalResponse := "gpt-5.6"
+	differentResponse := "gpt-5.5"
+	matched := false
+	mismatched := true
+
+	tests := []struct {
+		name             string
+		responseModel    *string
+		modelMismatch    *bool
+		expectedResponse string
+		expectedStatus   string
+	}{
+		{
+			name:             "matched",
+			responseModel:    &equalResponse,
+			modelMismatch:    &matched,
+			expectedResponse: `"upstream_response_model":"gpt-5.6"`,
+			expectedStatus:   `"upstream_model_status":"consistent"`,
+		},
+		{
+			name:             "unknown",
+			responseModel:    nil,
+			modelMismatch:    nil,
+			expectedResponse: `"upstream_model_status":"unknown"`,
+			expectedStatus:   `"upstream_model_status":"unknown"`,
+		},
+		{
+			name:             "mismatched",
+			responseModel:    &differentResponse,
+			modelMismatch:    &mismatched,
+			expectedResponse: `"upstream_response_model":"gpt-5.5"`,
+			expectedStatus:   `"upstream_model_status":"mismatch"`,
+		},
+		{
+			name:             "response_without_decision_is_unknown",
+			responseModel:    &differentResponse,
+			modelMismatch:    nil,
+			expectedResponse: `"upstream_response_model":"gpt-5.5"`,
+			expectedStatus:   `"upstream_model_status":"unknown"`,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			log := &service.UsageLog{
+				Model:                 model,
+				RequestedModel:        model,
+				UpstreamResponseModel: tt.responseModel,
+				UpstreamModelMismatch: tt.modelMismatch,
+			}
+
+			payload, err := json.Marshal(UsageLogFromService(log))
+			require.NoError(t, err)
+			require.Contains(t, string(payload), tt.expectedResponse)
+			require.Contains(t, string(payload), tt.expectedStatus)
+			require.NotContains(t, string(payload), `"upstream_model":`)
+			require.NotContains(t, string(payload), `"upstream_model_mismatch":`)
+		})
+	}
 }
 
 func TestUsageLogFromService_KeepsUserBillingAndIPWithoutAdminCostFields(t *testing.T) {

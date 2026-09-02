@@ -1,0 +1,96 @@
+# syntax=docker/dockerfile:1.7
+
+ARG NODE_IMAGE
+ARG GOLANG_IMAGE
+ARG ALPINE_IMAGE
+ARG APK_REPOSITORY=https://mirrors.aliyun.com/alpine
+ARG GOPROXY=https://goproxy.cn,direct
+ARG GOSUMDB=sum.golang.org
+
+FROM ${NODE_IMAGE} AS frontend-builder
+
+WORKDIR /app/frontend
+ENV NODE_OPTIONS=--max-old-space-size=4096
+
+RUN corepack enable && corepack prepare pnpm@11.5.2 --activate
+
+COPY frontend/package.json frontend/pnpm-lock.yaml frontend/pnpm-workspace.yaml ./
+RUN --mount=type=cache,id=sub2api-radar-pnpm-v11,target=/root/.local/share/pnpm/store \
+    pnpm install --frozen-lockfile --prefer-offline \
+      --fetch-retries=4 \
+      --fetch-timeout=120000
+
+COPY frontend/ ./
+COPY docs/legal/ /app/docs/legal/
+RUN pnpm run build
+
+FROM ${GOLANG_IMAGE} AS backend-builder
+
+ARG APK_REPOSITORY
+ARG GOPROXY
+ARG GOSUMDB
+
+ENV GOPROXY=${GOPROXY}
+ENV GOSUMDB=${GOSUMDB}
+
+RUN sed -i "s|https://dl-cdn.alpinelinux.org/alpine|${APK_REPOSITORY}|g" /etc/apk/repositories \
+    && apk add --no-cache git ca-certificates tzdata
+
+WORKDIR /app/backend
+COPY backend/go.mod backend/go.sum ./
+RUN --mount=type=cache,id=sub2api-radar-gomod,target=/go/pkg/mod \
+    set -eu; \
+    attempt=1; \
+    until go mod download; do \
+      if [ "$attempt" -ge 4 ]; then \
+        exit 1; \
+      fi; \
+      sleep $((attempt * 2)); \
+      attempt=$((attempt + 1)); \
+    done
+
+COPY backend/ ./
+COPY --from=frontend-builder /app/backend/internal/web/dist ./internal/web/dist
+
+ARG VERSION
+ARG COMMIT
+ARG DATE
+
+RUN --mount=type=cache,id=sub2api-radar-gomod,target=/go/pkg/mod \
+    --mount=type=cache,id=sub2api-radar-gobuild,target=/root/.cache/go-build \
+    CGO_ENABLED=0 GOOS=linux go build \
+    -tags embed \
+    -trimpath \
+    -ldflags="-s -w -X main.Version=${VERSION} -X main.Commit=${COMMIT} -X main.Date=${DATE} -X main.BuildType=release" \
+    -o /app/sub2api \
+    ./cmd/server
+
+FROM ${ALPINE_IMAGE}
+
+ARG APK_REPOSITORY
+
+RUN sed -i "s|https://dl-cdn.alpinelinux.org/alpine|${APK_REPOSITORY}|g" /etc/apk/repositories \
+    && apk add --no-cache ca-certificates tzdata curl su-exec \
+    && rm -rf /var/cache/apk/*
+
+RUN addgroup -g 1000 sub2api \
+    && adduser -u 1000 -G sub2api -s /bin/sh -D sub2api
+
+WORKDIR /app
+
+COPY --from=backend-builder /app/sub2api /app/sub2api
+
+RUN mkdir -p /app/data \
+    && chown -R sub2api:sub2api /app \
+    && chmod 0755 /app/sub2api
+
+COPY deploy/docker-entrypoint.sh /app/docker-entrypoint.sh
+RUN chmod 0755 /app/docker-entrypoint.sh
+
+EXPOSE 8080
+
+HEALTHCHECK --interval=30s --timeout=10s --start-period=10s --retries=3 \
+    CMD wget -q -T 5 -O /dev/null http://localhost:${SERVER_PORT:-8080}/health || exit 1
+
+ENTRYPOINT ["/app/docker-entrypoint.sh"]
+CMD ["/app/sub2api"]

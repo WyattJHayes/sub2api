@@ -4,6 +4,9 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"fmt"
+	"strings"
+	"time"
 
 	entsql "entgo.io/ent/dialect/sql"
 	"github.com/Wei-Shaw/sub2api/ent"
@@ -63,6 +66,56 @@ func ProvideSchedulerCache(rdb *redis.Client, cfg *config.Config) service.Schedu
 	return newSchedulerCacheWithChunkSizes(rdb, mgetChunkSize, writeChunkSize)
 }
 
+func ProvideEvaluationArtifactObjectStore(cfg *config.Config) (service.EvaluationArtifactObjectStore, error) {
+	if cfg == nil || !cfg.RadarArtifactStorage.Active() {
+		return nil, nil
+	}
+	return NewS3EvaluationArtifactObjectStore(context.Background(), &cfg.RadarArtifactStorage)
+}
+
+func ProvideEvaluationArtifactScanner(store service.EvaluationArtifactObjectStore, cfg *config.Config) (service.ArtifactScanner, error) {
+	if cfg == nil || !cfg.RadarArtifactStorage.Active() {
+		return nil, nil
+	}
+	if store == nil {
+		return nil, service.ErrArtifactObjectStoreUnavailable
+	}
+	if strings.TrimSpace(cfg.RadarArtifactStorage.ScanMode) != "clamav" {
+		return nil, fmt.Errorf("unsupported Radar artifact scan mode %q", cfg.RadarArtifactStorage.ScanMode)
+	}
+	return NewClamAVArtifactScanner(store, cfg.RadarArtifactStorage.ClamAVAddress, time.Duration(cfg.RadarArtifactStorage.ScanTimeout)*time.Second)
+}
+
+// ProvideEvaluationGradingRepository wires durable artifact dependencies when
+// Radar is enabled, failing startup instead of accepting unverifiable evidence.
+func ProvideEvaluationGradingRepository(db *sql.DB, cfg *config.Config, store service.EvaluationArtifactObjectStore, scanner service.ArtifactScanner) (service.EvaluationGradingRepository, error) {
+	if cfg == nil || (!cfg.Radar.Enabled && !cfg.RadarArtifactStorage.Active()) {
+		return NewEvaluationGradingRepository(db), nil
+	}
+	if !cfg.RadarArtifactStorage.Active() || store == nil {
+		return nil, service.ErrArtifactObjectStoreUnavailable
+	}
+	if scanner == nil {
+		return nil, service.ErrArtifactScannerUnavailable
+	}
+	return NewEvaluationGradingRepositoryWithArtifactDependencies(db, store, scanner), nil
+}
+
+func ProvideRadarProjectionRepository(governance service.RadarGovernanceRepository) service.RadarProjectionRepository {
+	return governance.(service.RadarProjectionRepository)
+}
+
+func ProvideRadarGovernanceRepository(db *sql.DB, cfg *config.Config) service.RadarGovernanceRepository {
+	routeProfileVersion := ""
+	if cfg != nil {
+		routeProfileVersion = cfg.Radar.RouteProfileVersion
+	}
+	return &radarGovernanceRepository{
+		db:                  db,
+		routeProfileVersion: strings.TrimSpace(routeProfileVersion),
+	}
+}
+
 // ProviderSet is the Wire provider set for all repositories
 var ProviderSet = wire.NewSet(
 	NewUserRepository,
@@ -81,6 +134,17 @@ var ProviderSet = wire.NewSet(
 	NewAnnouncementReadRepository,
 	NewUsageLogRepository,
 	NewUsageBillingRepository,
+	ProvideEvaluationRouteEvidenceRepository,
+	ProvideEvaluationArtifactObjectStore,
+	ProvideEvaluationArtifactScanner,
+	ProvideEvaluationGradingRepository,
+	NewEvaluationArtifactCleanupRepository,
+	NewEvaluationOutboxRepository,
+	NewEvaluationOutboxDomainRepository,
+	ProvideRadarGovernanceRepository,
+	ProvideRadarProjectionRepository,
+	NewModelQualityRepository,
+	NewRadarReliabilityRepository,
 	NewBatchImageRepository,
 	NewIdempotencyRepository,
 	NewUsageCleanupRepository,

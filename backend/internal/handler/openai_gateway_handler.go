@@ -226,6 +226,15 @@ func usageRecordContext(parent context.Context, base context.Context) context.Co
 	if requestID, _ := parent.Value(ctxkey.RequestID).(string); strings.TrimSpace(requestID) != "" {
 		base = context.WithValue(base, ctxkey.RequestID, strings.TrimSpace(requestID))
 	}
+	if evaluation, ok := service.EvaluationContextFromContext(parent); ok {
+		base = service.WithEvaluationContext(base, evaluation)
+	}
+	if repo, ok := service.EvaluationEvidenceRepositoryFromContext(parent); ok {
+		base = service.WithEvaluationEvidenceRepository(base, repo)
+	}
+	if tracker, ok := service.RouteEvidenceRevisionTrackerFromContext(parent); ok {
+		base = service.WithRouteEvidenceRevisionTracker(base, tracker)
+	}
 	return base
 }
 
@@ -715,6 +724,7 @@ func (h *OpenAIGatewayHandler) Responses(c *gin.Context) {
 		sessionHash = ensureOpenAIPoolModeSessionHash(sessionHash, account)
 		reqLog.Debug("openai.account_selected", zap.Int64("account_id", account.ID), zap.String("account_name", account.Name))
 		setOpsSelectedAccount(c, account.ID, account.Platform)
+		recordEvaluationRouteAttempt(c.Request.Context(), h.cfg, account, channelMapping.ChannelID, reqModel)
 
 		accountReleaseFunc, slotResult := h.acquireResponsesAccountSlot(c, apiKey.GroupID, sessionHash, selection, reqStream, &streamStarted, reqLog)
 		if slotResult == openAISlotAcquireProfitVetoed {
@@ -819,6 +829,7 @@ func (h *OpenAIGatewayHandler) Responses(c *gin.Context) {
 			} else {
 				var failoverErr *service.UpstreamFailoverError
 				if errors.As(err, &failoverErr) {
+					recordEvaluationRouteFailover(c.Request.Context(), failoverErr)
 					if failoverClientGone(c) {
 						reqLog.Info("openai.failover_aborted_client_disconnected",
 							zap.Int64("account_id", account.ID),
@@ -1283,6 +1294,7 @@ func (h *OpenAIGatewayHandler) Messages(c *gin.Context) {
 		reqLog.Debug("openai_messages.account_selected", zap.Int64("account_id", account.ID), zap.String("account_name", account.Name))
 		_ = scheduleDecision
 		setOpsSelectedAccount(c, account.ID, account.Platform)
+		recordEvaluationRouteAttempt(c.Request.Context(), h.cfg, account, channelMappingMsg.ChannelID, currentRoutingModel)
 
 		accountReleaseFunc, slotResult := h.acquireResponsesAccountSlot(c, apiKey.GroupID, sessionHash, selection, reqStream, &streamStarted, reqLog)
 		if slotResult == openAISlotAcquireProfitVetoed {
@@ -1384,6 +1396,7 @@ func (h *OpenAIGatewayHandler) Messages(c *gin.Context) {
 			} else {
 				var failoverErr *service.UpstreamFailoverError
 				if errors.As(err, &failoverErr) {
+					recordEvaluationRouteFailover(c.Request.Context(), failoverErr)
 					if failoverClientGone(c) {
 						reqLog.Info("openai_messages.failover_aborted_client_disconnected",
 							zap.Int64("account_id", account.ID),
@@ -2432,6 +2445,7 @@ func (h *OpenAIGatewayHandler) ResponsesWebSocket(c *gin.Context) {
 		if ctx.Err() != nil {
 			return false
 		}
+		recordEvaluationRouteFailover(ctx, failoverErr)
 		if failoverErr.ShouldReportAccountScheduleFailure() {
 			h.gatewayService.ReportOpenAIAccountScheduleResult(account, openAIAccountScheduleModel(c, account, wsForwardModel, false, nil), false, nil, failoverErr)
 		}
@@ -2621,6 +2635,7 @@ func (h *OpenAIGatewayHandler) ResponsesWebSocket(c *gin.Context) {
 			zap.String("schedule_layer", scheduleDecision.Layer),
 			zap.Int("candidate_count", scheduleDecision.CandidateCount),
 		)
+		recordEvaluationRouteAttempt(ctx, h.cfg, account, channelMappingWS.ChannelID, reqModel)
 
 		maxReasoningEffort, reasoningEffortMappings, maxReasoningEffortOverLimit, _ := openAIReasoningEffortPolicyForRequest(c, apiKey)
 		var requestPayloadHash string

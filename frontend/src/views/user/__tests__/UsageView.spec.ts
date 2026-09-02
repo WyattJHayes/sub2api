@@ -49,6 +49,11 @@ const messages: Record<string, string> = {
   'usage.allApiKeys': 'All API Keys',
   'usage.apiKeyFilter': 'API Key',
   'usage.model': 'Model',
+	'usage.upstreamResponseModel': 'Upstream response',
+	'usage.upstreamResponseUnknown': 'Unknown',
+	'usage.modelConsistent': 'Model consistent',
+	'usage.modelUnknown': 'Model unknown',
+	'usage.modelMismatch': 'Model mismatch',
   'usage.type': 'Type',
   'usage.ws': 'WS',
   'usage.stream': 'Stream',
@@ -122,6 +127,8 @@ const usageLog = {
   duration_ms: 345,
   created_at: '2026-03-08T00:00:00Z',
   model: 'gpt-5.4',
+	upstream_response_model: 'gpt-5.4',
+	upstream_model_status: 'consistent',
   reasoning_effort: null,
   ip_address: '203.0.113.10',
   api_key: { name: 'demo-key' },
@@ -289,8 +296,8 @@ describe('user UsageView', () => {
     expect(showSuccess).toHaveBeenCalled()
     expect(csvContent.startsWith('\uFEFF')).toBe(true)
     expect(csvContent.slice(1)).toBe([
-      'Time,API Key Name,Model,Reasoning Effort,Inbound Endpoint,IP Address,Type,Billing Mode,Input Tokens,Output Tokens,Cache Read Tokens,Cache Creation Tokens,Rate Multiplier,Billed Cost,Original Cost,First Token (ms),Duration (ms)',
-      '2026-03-08T00:00:00Z,demo-key,gpt-5.4,"\'-",,203.0.113.10,Sync,Token,4057,101,278272,4,1,0.09288300,0.09288300,12,345',
+      'Time,API Key Name,Model,Upstream Response Model,Upstream Model Status,Reasoning Effort,Inbound Endpoint,IP Address,Type,Billing Mode,Input Tokens,Output Tokens,Cache Read Tokens,Cache Creation Tokens,Rate Multiplier,Billed Cost,Original Cost,First Token (ms),Duration (ms)',
+      '2026-03-08T00:00:00Z,demo-key,gpt-5.4,gpt-5.4,Model consistent,"\'-",,203.0.113.10,Sync,Token,4057,101,278272,4,1,0.09288300,0.09288300,12,345',
     ].join('\n'))
     expect(csvContent).toContain('IP Address')
     expect(csvContent).toContain('203.0.113.10')

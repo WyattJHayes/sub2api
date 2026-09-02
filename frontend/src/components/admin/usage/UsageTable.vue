@@ -78,7 +78,6 @@
             >
               <span class="mr-1">↳ {{ t('usage.upstreamResponseModel') }}:</span>{{ upstreamResponseModel(row) }}
               <span
-                data-testid="upstream-model-status"
                 :data-status="upstreamModelStatus(row)"
                 class="inline-flex rounded px-1 py-px text-[10px] font-medium ring-1 ring-inset"
                 :class="upstreamModelStatusBadgeClass(row)"
@@ -614,10 +613,13 @@ const sentUpstreamModel = (row: AdminUsageLog): string => row.upstream_model?.tr
 type UpstreamModelStatus = 'consistent' | 'unknown' | 'mismatch'
 
 const upstreamModelStatus = (row: AdminUsageLog): UpstreamModelStatus => {
-  if (!row.upstream_response_model?.trim()) return 'unknown'
-  if (row.upstream_model_mismatch === true) return 'mismatch'
-  if (row.upstream_model_mismatch === false) return 'consistent'
-  return 'unknown'
+	if (row.upstream_model_status === 'consistent' || row.upstream_model_status === 'unknown' || row.upstream_model_status === 'mismatch') {
+		return row.upstream_model_status
+	}
+	if (!row.upstream_response_model?.trim()) return 'unknown'
+	if (row.upstream_model_mismatch === true) return 'mismatch'
+	if (row.upstream_model_mismatch === false) return 'consistent'
+	return 'unknown'
 }
 
 const upstreamModelStatusLabel = (row: AdminUsageLog): string => {

@@ -830,6 +830,50 @@ func TestClassifyOpsNoAvailableAccountsExcludedFromSLA(t *testing.T) {
 	require.Equal(t, "gateway", errorSource)
 }
 
+func TestClassifyOpsLocalModelNotFoundExcludedFromSLA(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	rec := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(rec)
+
+	errType := normalizeOpsErrorType("model_not_found", "")
+	phase, isBusinessLimited, errorOwner, errorSource := classifyOpsErrorLog(
+		c,
+		errType,
+		`Model "gpt-5.4" is not supported by any configured account in this group`,
+		"",
+		http.StatusNotFound,
+	)
+
+	require.Equal(t, "model_not_found", errType)
+	require.Equal(t, "request", phase)
+	require.True(t, isBusinessLimited)
+	require.Equal(t, "client", errorOwner)
+	require.Equal(t, "client_request", errorSource)
+	require.Equal(t, "P3", classifyOpsSeverity(errType, http.StatusNotFound))
+}
+
+func TestClassifyOpsUpstreamModelNotFoundStillCountsForSLA(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	rec := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(rec)
+	service.SetOpsUpstreamError(c, http.StatusNotFound, "upstream model not found", "")
+
+	errType := normalizeOpsErrorType("model_not_found", "")
+	phase, isBusinessLimited, errorOwner, errorSource := classifyOpsErrorLog(
+		c,
+		errType,
+		"upstream model not found",
+		"",
+		http.StatusNotFound,
+	)
+
+	require.Equal(t, "model_not_found", errType)
+	require.Equal(t, "upstream", phase)
+	require.False(t, isBusinessLimited)
+	require.Equal(t, "provider", errorOwner)
+	require.Equal(t, "upstream_http", errorSource)
+}
+
 func TestClassifyOpsRoutingCapacityMarkerExcludesMaskedSelectionFailureFromSLA(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	rec := httptest.NewRecorder()

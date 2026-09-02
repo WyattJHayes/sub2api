@@ -14,6 +14,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/spf13/viper"
 	"golang.org/x/net/http/httpguts"
 )
@@ -104,6 +105,8 @@ type Config struct {
 	BatchImage              BatchImageConfig              `mapstructure:"batch_image"`
 	ImageStorage            ImageStorageConfig            `mapstructure:"image_storage"`
 	Plugins                 PluginConfig                  `mapstructure:"plugins"`
+	RadarArtifactStorage    RadarArtifactStorageConfig    `mapstructure:"radar_artifact_storage"`
+	Radar                   RadarConfig                   `mapstructure:"radar"`
 }
 
 // PluginConfig 控制管理员手动上传的本地进程插件。
@@ -116,6 +119,52 @@ type PluginConfig struct {
 	MaxUncompressedBytes int64             `mapstructure:"max_uncompressed_bytes"`
 	StartTimeoutSeconds  int               `mapstructure:"start_timeout_seconds"`
 }
+
+type RadarConfig struct {
+	Enabled                   bool   `mapstructure:"enabled"`
+	OutboxConsumerMode        string `mapstructure:"outbox_consumer_mode"`
+	SigningSecret             string `mapstructure:"signing_secret"`
+	HashingSecret             string `mapstructure:"hashing_secret"`
+	MaxContextTTLSeconds      int    `mapstructure:"max_context_ttl_seconds"`
+	Region                    string `mapstructure:"region"`
+	RouteProfileVersion       string `mapstructure:"route_profile_version"`
+	WriterInstanceID          string `mapstructure:"writer_instance_id"`
+	WriterKind                string `mapstructure:"writer_kind"`
+	WriterProtocolVersion     int64  `mapstructure:"writer_protocol_version"`
+	WriterHeartbeatTTLSeconds int    `mapstructure:"writer_heartbeat_ttl_seconds"`
+}
+
+// RadarArtifactStorageConfig configures the S3-compatible store that holds
+// evaluation evidence. It is intentionally separate from image storage so a
+// tenant's model-evaluation artifacts cannot share lifecycle or public URL
+// policy with user-generated images.
+type RadarArtifactStorageConfig struct {
+	Enabled          bool   `mapstructure:"enabled"`
+	Endpoint         string `mapstructure:"endpoint"`
+	Region           string `mapstructure:"region"`
+	Bucket           string `mapstructure:"bucket"`
+	AccessKeyID      string `mapstructure:"access_key_id"`
+	SecretAccessKey  string `mapstructure:"secret_access_key"`
+	ForcePathStyle   bool   `mapstructure:"force_path_style"`
+	Prefix           string `mapstructure:"prefix"`
+	PresignExpiry    int    `mapstructure:"presign_expiry_seconds"`
+	ScanMode         string `mapstructure:"scan_mode"`
+	ClamAVAddress    string `mapstructure:"clamav_address"`
+	ScanTimeout      int    `mapstructure:"scan_timeout_seconds"`
+	CleanupInterval  int    `mapstructure:"cleanup_interval_seconds"`
+	CleanupBatchSize int    `mapstructure:"cleanup_batch_size"`
+}
+
+func (c *RadarArtifactStorageConfig) IsConfigured() bool {
+	return c != nil && strings.TrimSpace(c.Bucket) != "" &&
+		strings.TrimSpace(c.AccessKeyID) != "" && strings.TrimSpace(c.SecretAccessKey) != ""
+}
+
+func (c *RadarArtifactStorageConfig) Active() bool {
+	return c != nil && c.Enabled && c.IsConfigured()
+}
+
+const currentRadarWriterProtocolVersion = int64(2)
 
 type LogConfig struct {
 	Level           string            `mapstructure:"level"`
@@ -1796,6 +1845,18 @@ func load(allowMissingJWTSecret bool) (*Config, error) {
 	if err := viper.BindEnv("server.enable_server_timing", "ENABLE_SERVER_TIMING"); err != nil {
 		return nil, fmt.Errorf("bind ENABLE_SERVER_TIMING: %w", err)
 	}
+	if err := viper.BindEnv("radar.signing_secret", "RADAR_CONTEXT_SIGNING_KEY", "RADAR_SIGNING_SECRET"); err != nil {
+		return nil, fmt.Errorf("bind RADAR_CONTEXT_SIGNING_KEY: %w", err)
+	}
+	if err := viper.BindEnv("radar.hashing_secret", "RADAR_EVIDENCE_HASH_KEY", "RADAR_HASHING_SECRET"); err != nil {
+		return nil, fmt.Errorf("bind RADAR_EVIDENCE_HASH_KEY: %w", err)
+	}
+	if err := viper.BindEnv("radar.writer_instance_id", "RADAR_WRITER_INSTANCE_ID"); err != nil {
+		return nil, fmt.Errorf("bind RADAR_WRITER_INSTANCE_ID: %w", err)
+	}
+	if err := viper.BindEnv("radar.writer_kind", "RADAR_WRITER_KIND"); err != nil {
+		return nil, fmt.Errorf("bind RADAR_WRITER_KIND: %w", err)
+	}
 
 	// 默认值
 	setDefaults()
@@ -1814,6 +1875,12 @@ func load(allowMissingJWTSecret bool) (*Config, error) {
 	var cfg Config
 	if err := viper.Unmarshal(&cfg); err != nil {
 		return nil, fmt.Errorf("unmarshal config error: %w", err)
+	}
+	if signingSecret, ok := os.LookupEnv("RADAR_CONTEXT_SIGNING_KEY"); ok {
+		cfg.Radar.SigningSecret = signingSecret
+	}
+	if hashingSecret, ok := os.LookupEnv("RADAR_EVIDENCE_HASH_KEY"); ok {
+		cfg.Radar.HashingSecret = hashingSecret
 	}
 	if trustedProxiesEnvConfigured {
 		cfg.Server.TrustedProxies = normalizeStringSlice(strings.Split(trustedProxiesEnv, ","))
@@ -1893,6 +1960,12 @@ func load(allowMissingJWTSecret bool) (*Config, error) {
 	cfg.Log.StacktraceLevel = strings.ToLower(strings.TrimSpace(cfg.Log.StacktraceLevel))
 	cfg.Log.Output.FilePath = strings.TrimSpace(cfg.Log.Output.FilePath)
 	cfg.Gateway.ForcedCodexInstructionsTemplateFile = strings.TrimSpace(cfg.Gateway.ForcedCodexInstructionsTemplateFile)
+	cfg.Radar.SigningSecret = strings.TrimSpace(cfg.Radar.SigningSecret)
+	cfg.Radar.HashingSecret = strings.TrimSpace(cfg.Radar.HashingSecret)
+	cfg.Radar.Region = strings.TrimSpace(cfg.Radar.Region)
+	cfg.Radar.RouteProfileVersion = strings.TrimSpace(cfg.Radar.RouteProfileVersion)
+	cfg.Radar.WriterInstanceID = strings.TrimSpace(cfg.Radar.WriterInstanceID)
+	cfg.Radar.WriterKind = strings.TrimSpace(cfg.Radar.WriterKind)
 	if cfg.Gateway.ForcedCodexInstructionsTemplateFile != "" {
 		content, err := os.ReadFile(cfg.Gateway.ForcedCodexInstructionsTemplateFile)
 		if err != nil {
@@ -1988,6 +2061,34 @@ func configureConfigSource(setConfigFile, addConfigPath func(string)) {
 
 func setDefaults() {
 	viper.SetDefault("run_mode", RunModeStandard)
+	viper.SetDefault("radar.enabled", false)
+	viper.SetDefault("radar.outbox_consumer_mode", "core")
+	viper.SetDefault("radar.signing_secret", "")
+	viper.SetDefault("radar.hashing_secret", "")
+	viper.SetDefault("radar.max_context_ttl_seconds", 900)
+	viper.SetDefault("radar.region", "")
+	viper.SetDefault("radar.route_profile_version", "")
+	viper.SetDefault("radar.writer_instance_id", "")
+	viper.SetDefault("radar.writer_kind", "api")
+	viper.SetDefault("radar.writer_protocol_version", currentRadarWriterProtocolVersion)
+	viper.SetDefault("radar.writer_heartbeat_ttl_seconds", 300)
+
+	// Radar evidence object storage. Keep this disabled by default so local
+	// development cannot accidentally publish evaluation artifacts.
+	viper.SetDefault("radar_artifact_storage.enabled", false)
+	viper.SetDefault("radar_artifact_storage.endpoint", "")
+	viper.SetDefault("radar_artifact_storage.region", "auto")
+	viper.SetDefault("radar_artifact_storage.bucket", "")
+	viper.SetDefault("radar_artifact_storage.access_key_id", "")
+	viper.SetDefault("radar_artifact_storage.secret_access_key", "")
+	viper.SetDefault("radar_artifact_storage.force_path_style", false)
+	viper.SetDefault("radar_artifact_storage.prefix", "evaluation-artifacts/")
+	viper.SetDefault("radar_artifact_storage.presign_expiry_seconds", 900)
+	viper.SetDefault("radar_artifact_storage.scan_mode", "clamav")
+	viper.SetDefault("radar_artifact_storage.clamav_address", "")
+	viper.SetDefault("radar_artifact_storage.scan_timeout_seconds", 60)
+	viper.SetDefault("radar_artifact_storage.cleanup_interval_seconds", 300)
+	viper.SetDefault("radar_artifact_storage.cleanup_batch_size", 100)
 
 	// Server
 	viper.SetDefault("server.host", "0.0.0.0")
@@ -2715,6 +2816,68 @@ func (c *Config) Validate() error {
 	// 选择 bytes 而不是 rune 计数，确保二进制/随机串的长度语义更接近“熵”而非“字符数”。
 	if len([]byte(jwtSecret)) < 32 {
 		return fmt.Errorf("jwt.secret must be at least 32 bytes")
+	}
+	if c.Radar.MaxContextTTLSeconds <= 0 || c.Radar.MaxContextTTLSeconds > 900 {
+		return fmt.Errorf("radar.max_context_ttl_seconds must be between 1 and 900")
+	}
+	switch c.Radar.OutboxConsumerMode {
+	case "disabled", "core", "full":
+	default:
+		return fmt.Errorf("radar.outbox_consumer_mode must be one of: disabled/core/full")
+	}
+	if c.Radar.WriterProtocolVersion != currentRadarWriterProtocolVersion {
+		return fmt.Errorf("radar.writer_protocol_version must be %d", currentRadarWriterProtocolVersion)
+	}
+	if c.Radar.WriterInstanceID != "" {
+		if _, err := uuid.Parse(c.Radar.WriterInstanceID); err != nil {
+			return fmt.Errorf("radar.writer_instance_id must be a UUID")
+		}
+	}
+	if c.Radar.WriterHeartbeatTTLSeconds <= 0 || c.Radar.WriterHeartbeatTTLSeconds > 86400 {
+		return fmt.Errorf("radar.writer_heartbeat_ttl_seconds must be between 1 and 86400")
+	}
+	if strings.TrimSpace(c.Radar.WriterKind) == "" || len(strings.TrimSpace(c.Radar.WriterKind)) > 32 {
+		return fmt.Errorf("radar.writer_kind must be between 1 and 32 characters")
+	}
+	if c.RadarArtifactStorage.Enabled {
+		if !c.RadarArtifactStorage.IsConfigured() {
+			return fmt.Errorf("radar_artifact_storage requires bucket, access_key_id, and secret_access_key")
+		}
+		if c.RadarArtifactStorage.PresignExpiry < 60 || c.RadarArtifactStorage.PresignExpiry > 86400 {
+			return fmt.Errorf("radar_artifact_storage.presign_expiry_seconds must be between 60 and 86400")
+		}
+		if strings.TrimSpace(c.RadarArtifactStorage.Prefix) == "" {
+			return fmt.Errorf("radar_artifact_storage.prefix must be non-empty")
+		}
+		if strings.TrimSpace(c.RadarArtifactStorage.ScanMode) != "clamav" {
+			return fmt.Errorf("radar_artifact_storage.scan_mode must be clamav")
+		}
+		if strings.TrimSpace(c.RadarArtifactStorage.ClamAVAddress) == "" {
+			return fmt.Errorf("radar_artifact_storage.clamav_address is required")
+		}
+		if c.RadarArtifactStorage.ScanTimeout < 1 || c.RadarArtifactStorage.ScanTimeout > 600 {
+			return fmt.Errorf("radar_artifact_storage.scan_timeout_seconds must be between 1 and 600")
+		}
+		if c.RadarArtifactStorage.CleanupInterval < 10 || c.RadarArtifactStorage.CleanupInterval > 86400 {
+			return fmt.Errorf("radar_artifact_storage.cleanup_interval_seconds must be between 10 and 86400")
+		}
+		if c.RadarArtifactStorage.CleanupBatchSize < 1 || c.RadarArtifactStorage.CleanupBatchSize > 1000 {
+			return fmt.Errorf("radar_artifact_storage.cleanup_batch_size must be between 1 and 1000")
+		}
+	}
+	if c.Radar.Enabled {
+		if len([]byte(strings.TrimSpace(c.Radar.SigningSecret))) < 32 {
+			return fmt.Errorf("radar.signing_secret must be at least 32 bytes when radar.enabled=true")
+		}
+		if len([]byte(strings.TrimSpace(c.Radar.HashingSecret))) < 32 {
+			return fmt.Errorf("radar.hashing_secret must be at least 32 bytes when radar.enabled=true")
+		}
+		if strings.TrimSpace(c.Radar.Region) == "" {
+			return fmt.Errorf("radar.region is required when radar.enabled=true")
+		}
+		if strings.TrimSpace(c.Radar.RouteProfileVersion) == "" {
+			return fmt.Errorf("radar.route_profile_version is required when radar.enabled=true")
+		}
 	}
 	switch c.Log.Level {
 	case "debug", "info", "warn", "error":

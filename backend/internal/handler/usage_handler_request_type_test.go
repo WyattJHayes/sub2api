@@ -224,12 +224,12 @@ func TestUserUsageListKeepsUserBillingAndIPWithoutAdminCostFields(t *testing.T) 
 			CacheReadCost:         0.04,
 			TotalCost:             0.10,
 			ActualCost:            0.08,
-			RateMultiplier:        0.8,
-			IPAddress:             &ipAddress,
-			UpstreamModel:         &upstreamModel,
-			UpstreamResponseModel: &upstreamResponseModel,
-			UpstreamModelMismatch: &upstreamModelMismatch,
-			BillingTier:           &billingTier,
+					RateMultiplier:        0.8,
+					IPAddress:             &ipAddress,
+					UpstreamModel:         &upstreamModel,
+					UpstreamResponseModel: &upstreamResponseModel,
+					UpstreamModelMismatch: &upstreamModelMismatch,
+					BillingTier:           &billingTier,
 			ChannelID:             &channelID,
 			AccountRateMultiplier: &accountRateMultiplier,
 			AccountStatsCost:      &accountStatsCost,
@@ -257,7 +257,8 @@ func TestUserUsageListKeepsUserBillingAndIPWithoutAdminCostFields(t *testing.T) 
 	require.NotContains(t, body, "account_stats_cost")
 	require.NotContains(t, body, `"upstream_model":`)
 	require.Contains(t, body, `"upstream_response_model":"claude-sonnet-4-20250513"`)
-	require.Contains(t, body, `"upstream_model_mismatch":true`)
+	require.Contains(t, body, `"upstream_model_status":"mismatch"`)
+	require.NotContains(t, body, `"upstream_model_mismatch":`)
 	require.NotContains(t, body, "billing_tier")
 	require.NotContains(t, body, "channel_id")
 	require.NotContains(t, body, `"account":`)

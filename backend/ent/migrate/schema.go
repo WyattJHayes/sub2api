@@ -18,6 +18,7 @@ var (
 		{Name: "key", Type: field.TypeString, Unique: true, Size: 128},
 		{Name: "name", Type: field.TypeString, Size: 100},
 		{Name: "status", Type: field.TypeString, Size: 20, Default: "active"},
+		{Name: "is_evaluation", Type: field.TypeBool, Default: false},
 		{Name: "last_used_at", Type: field.TypeTime, Nullable: true},
 		{Name: "ip_whitelist", Type: field.TypeJSON, Nullable: true},
 		{Name: "ip_blacklist", Type: field.TypeJSON, Nullable: true},
@@ -44,13 +45,13 @@ var (
 		ForeignKeys: []*schema.ForeignKey{
 			{
 				Symbol:     "api_keys_groups_api_keys",
-				Columns:    []*schema.Column{APIKeysColumns[22]},
+				Columns:    []*schema.Column{APIKeysColumns[23]},
 				RefColumns: []*schema.Column{GroupsColumns[0]},
 				OnDelete:   schema.SetNull,
 			},
 			{
 				Symbol:     "api_keys_users_api_keys",
-				Columns:    []*schema.Column{APIKeysColumns[23]},
+				Columns:    []*schema.Column{APIKeysColumns[24]},
 				RefColumns: []*schema.Column{UsersColumns[0]},
 				OnDelete:   schema.NoAction,
 			},
@@ -59,12 +60,12 @@ var (
 			{
 				Name:    "apikey_user_id",
 				Unique:  false,
-				Columns: []*schema.Column{APIKeysColumns[23]},
+				Columns: []*schema.Column{APIKeysColumns[24]},
 			},
 			{
 				Name:    "apikey_group_id",
 				Unique:  false,
-				Columns: []*schema.Column{APIKeysColumns[22]},
+				Columns: []*schema.Column{APIKeysColumns[23]},
 			},
 			{
 				Name:    "apikey_status",
@@ -79,17 +80,17 @@ var (
 			{
 				Name:    "apikey_last_used_at",
 				Unique:  false,
-				Columns: []*schema.Column{APIKeysColumns[7]},
+				Columns: []*schema.Column{APIKeysColumns[8]},
 			},
 			{
 				Name:    "apikey_quota_quota_used",
 				Unique:  false,
-				Columns: []*schema.Column{APIKeysColumns[10], APIKeysColumns[11]},
+				Columns: []*schema.Column{APIKeysColumns[11], APIKeysColumns[12]},
 			},
 			{
 				Name:    "apikey_expires_at",
 				Unique:  false,
-				Columns: []*schema.Column{APIKeysColumns[12]},
+				Columns: []*schema.Column{APIKeysColumns[13]},
 			},
 		},
 	}
@@ -897,6 +898,232 @@ var (
 				Name:    "errorpassthroughrule_priority",
 				Unique:  false,
 				Columns: []*schema.Column{ErrorPassthroughRulesColumns[5]},
+			},
+		},
+	}
+	// EvaluationCasesColumns holds the columns for the "evaluation_cases" table.
+	EvaluationCasesColumns = []*schema.Column{
+		{Name: "id", Type: field.TypeUUID},
+		{Name: "case_key", Type: field.TypeString, Size: 160},
+		{Name: "capability_domain", Type: field.TypeString, Size: 32},
+		{Name: "priority", Type: field.TypeString, Size: 4},
+		{Name: "weight", Type: field.TypeFloat64, SchemaType: map[string]string{"postgres": "numeric(10,4)"}},
+		{Name: "sample_count", Type: field.TypeInt},
+		{Name: "prompt_spec", Type: field.TypeJSON, Nullable: true, SchemaType: map[string]string{"postgres": "jsonb"}},
+		{Name: "expected_spec", Type: field.TypeJSON, Nullable: true, SchemaType: map[string]string{"postgres": "jsonb"}},
+		{Name: "encrypted_spec", Type: field.TypeString, Nullable: true, SchemaType: map[string]string{"postgres": "text"}},
+		{Name: "execution_spec", Type: field.TypeJSON, SchemaType: map[string]string{"postgres": "jsonb"}},
+		{Name: "quality_dimension", Type: field.TypeString, Nullable: true, SchemaType: map[string]string{"postgres": "text"}},
+		{Name: "quality_probe_spec", Type: field.TypeJSON, SchemaType: map[string]string{"postgres": "jsonb"}},
+		{Name: "grader_id", Type: field.TypeString, Size: 100},
+		{Name: "grader_version", Type: field.TypeString, Size: 100},
+		{Name: "content_sha256", Type: field.TypeString, Size: 64},
+		{Name: "confidentiality", Type: field.TypeString, Size: 20},
+		{Name: "estimated_cost", Type: field.TypeFloat64, Default: 0, SchemaType: map[string]string{"postgres": "numeric(20,8)"}},
+		{Name: "created_at", Type: field.TypeTime, SchemaType: map[string]string{"postgres": "timestamptz"}},
+		{Name: "dataset_version_id", Type: field.TypeUUID},
+	}
+	// EvaluationCasesTable holds the schema information for the "evaluation_cases" table.
+	EvaluationCasesTable = &schema.Table{
+		Name:       "evaluation_cases",
+		Columns:    EvaluationCasesColumns,
+		PrimaryKey: []*schema.Column{EvaluationCasesColumns[0]},
+		ForeignKeys: []*schema.ForeignKey{
+			{
+				Symbol:     "evaluation_cases_evaluation_dataset_versions_cases",
+				Columns:    []*schema.Column{EvaluationCasesColumns[18]},
+				RefColumns: []*schema.Column{EvaluationDatasetVersionsColumns[0]},
+				OnDelete:   schema.NoAction,
+			},
+		},
+		Indexes: []*schema.Index{
+			{
+				Name:    "evaluationcase_dataset_version_id_case_key",
+				Unique:  true,
+				Columns: []*schema.Column{EvaluationCasesColumns[18], EvaluationCasesColumns[1]},
+			},
+			{
+				Name:    "evaluationcase_dataset_version_id_capability_domain_priority",
+				Unique:  false,
+				Columns: []*schema.Column{EvaluationCasesColumns[18], EvaluationCasesColumns[2], EvaluationCasesColumns[3]},
+			},
+		},
+	}
+	// EvaluationDatasetVersionsColumns holds the columns for the "evaluation_dataset_versions" table.
+	EvaluationDatasetVersionsColumns = []*schema.Column{
+		{Name: "id", Type: field.TypeUUID},
+		{Name: "dataset_key", Type: field.TypeString, Size: 100},
+		{Name: "version", Type: field.TypeString, Size: 100},
+		{Name: "manifest_sha256", Type: field.TypeString, Size: 64},
+		{Name: "source_type", Type: field.TypeString, Size: 20},
+		{Name: "status", Type: field.TypeString, Size: 20, Default: "draft"},
+		{Name: "created_by", Type: field.TypeInt64},
+		{Name: "published_at", Type: field.TypeTime, Nullable: true, SchemaType: map[string]string{"postgres": "timestamptz"}},
+		{Name: "retired_at", Type: field.TypeTime, Nullable: true, SchemaType: map[string]string{"postgres": "timestamptz"}},
+		{Name: "created_at", Type: field.TypeTime, SchemaType: map[string]string{"postgres": "timestamptz"}},
+		{Name: "updated_at", Type: field.TypeTime, SchemaType: map[string]string{"postgres": "timestamptz"}},
+	}
+	// EvaluationDatasetVersionsTable holds the schema information for the "evaluation_dataset_versions" table.
+	EvaluationDatasetVersionsTable = &schema.Table{
+		Name:       "evaluation_dataset_versions",
+		Columns:    EvaluationDatasetVersionsColumns,
+		PrimaryKey: []*schema.Column{EvaluationDatasetVersionsColumns[0]},
+		Indexes: []*schema.Index{
+			{
+				Name:    "evaluationdatasetversion_dataset_key_version",
+				Unique:  true,
+				Columns: []*schema.Column{EvaluationDatasetVersionsColumns[1], EvaluationDatasetVersionsColumns[2]},
+			},
+		},
+	}
+	// EvaluationPlansColumns holds the columns for the "evaluation_plans" table.
+	EvaluationPlansColumns = []*schema.Column{
+		{Name: "id", Type: field.TypeUUID},
+		{Name: "name", Type: field.TypeString, Size: 120},
+		{Name: "trigger_type", Type: field.TypeString, Size: 20},
+		{Name: "cron_expression", Type: field.TypeString, Nullable: true, Size: 100},
+		{Name: "model_matrix", Type: field.TypeJSON, SchemaType: map[string]string{"postgres": "jsonb"}},
+		{Name: "max_run_cost", Type: field.TypeFloat64, SchemaType: map[string]string{"postgres": "numeric(20,8)"}},
+		{Name: "daily_cost_limit", Type: field.TypeFloat64, SchemaType: map[string]string{"postgres": "numeric(20,8)"}},
+		{Name: "max_concurrency", Type: field.TypeInt},
+		{Name: "enabled", Type: field.TypeBool, Default: true},
+		{Name: "created_by", Type: field.TypeInt64},
+		{Name: "created_at", Type: field.TypeTime, SchemaType: map[string]string{"postgres": "timestamptz"}},
+		{Name: "updated_at", Type: field.TypeTime, SchemaType: map[string]string{"postgres": "timestamptz"}},
+		{Name: "gateway_api_key_id", Type: field.TypeInt64, Nullable: true},
+		{Name: "dataset_version_id", Type: field.TypeUUID},
+	}
+	// EvaluationPlansTable holds the schema information for the "evaluation_plans" table.
+	EvaluationPlansTable = &schema.Table{
+		Name:       "evaluation_plans",
+		Columns:    EvaluationPlansColumns,
+		PrimaryKey: []*schema.Column{EvaluationPlansColumns[0]},
+		ForeignKeys: []*schema.ForeignKey{
+			{
+				Symbol:     "evaluation_plans_api_keys_evaluation_plans",
+				Columns:    []*schema.Column{EvaluationPlansColumns[12]},
+				RefColumns: []*schema.Column{APIKeysColumns[0]},
+				OnDelete:   schema.SetNull,
+			},
+			{
+				Symbol:     "evaluation_plans_evaluation_dataset_versions_plans",
+				Columns:    []*schema.Column{EvaluationPlansColumns[13]},
+				RefColumns: []*schema.Column{EvaluationDatasetVersionsColumns[0]},
+				OnDelete:   schema.NoAction,
+			},
+		},
+		Indexes: []*schema.Index{
+			{
+				Name:    "evaluationplan_enabled_trigger_type",
+				Unique:  false,
+				Columns: []*schema.Column{EvaluationPlansColumns[8], EvaluationPlansColumns[2]},
+			},
+			{
+				Name:    "idx_evaluation_plans_gateway_api_key",
+				Unique:  false,
+				Columns: []*schema.Column{EvaluationPlansColumns[12]},
+				Annotation: &entsql.IndexAnnotation{
+					Where: "gateway_api_key_id IS NOT NULL",
+				},
+			},
+		},
+	}
+	// EvaluationRouteEvidenceColumns holds the columns for the "evaluation_route_evidence" table.
+	EvaluationRouteEvidenceColumns = []*schema.Column{
+		{Name: "route_trace_id", Type: field.TypeString, Size: 64},
+		{Name: "evaluation_run_id", Type: field.TypeString, SchemaType: map[string]string{"postgres": "uuid"}},
+		{Name: "sample_id", Type: field.TypeString, SchemaType: map[string]string{"postgres": "uuid"}},
+		{Name: "request_id", Type: field.TypeString, Nullable: true, Size: 128},
+		{Name: "requested_model", Type: field.TypeString, Size: 200},
+		{Name: "resolved_model", Type: field.TypeString, Nullable: true, Size: 200},
+		{Name: "route_profile_version", Type: field.TypeString, Size: 100},
+		{Name: "provider", Type: field.TypeString, Nullable: true, Size: 32},
+		{Name: "channel_ref", Type: field.TypeString, Nullable: true, Size: 64},
+		{Name: "account_pool_ref", Type: field.TypeString, Nullable: true, Size: 64},
+		{Name: "region", Type: field.TypeString, Size: 64},
+		{Name: "attempts", Type: field.TypeInt, Default: 0},
+		{Name: "fallback_chain", Type: field.TypeJSON, SchemaType: map[string]string{"postgres": "jsonb"}},
+		{Name: "finish_reason", Type: field.TypeString, Nullable: true, Size: 64},
+		{Name: "input_tokens", Type: field.TypeInt, Nullable: true},
+		{Name: "output_tokens", Type: field.TypeInt, Nullable: true},
+		{Name: "ttft_ms", Type: field.TypeInt, Nullable: true},
+		{Name: "latency_ms", Type: field.TypeInt, Nullable: true},
+		{Name: "billed_amount", Type: field.TypeFloat64, Nullable: true, SchemaType: map[string]string{"postgres": "decimal(20,8)"}},
+		{Name: "transport_status", Type: field.TypeString, Size: 24, Default: "started"},
+		{Name: "error_code", Type: field.TypeString, Nullable: true, Size: 100},
+		{Name: "started_at", Type: field.TypeTime, SchemaType: map[string]string{"postgres": "timestamptz"}},
+		{Name: "finished_at", Type: field.TypeTime, Nullable: true, SchemaType: map[string]string{"postgres": "timestamptz"}},
+		{Name: "created_at", Type: field.TypeTime, SchemaType: map[string]string{"postgres": "timestamptz"}},
+		{Name: "updated_at", Type: field.TypeTime, SchemaType: map[string]string{"postgres": "timestamptz"}},
+		{Name: "api_key_id", Type: field.TypeInt64},
+	}
+	// EvaluationRouteEvidenceTable holds the schema information for the "evaluation_route_evidence" table.
+	EvaluationRouteEvidenceTable = &schema.Table{
+		Name:       "evaluation_route_evidence",
+		Columns:    EvaluationRouteEvidenceColumns,
+		PrimaryKey: []*schema.Column{EvaluationRouteEvidenceColumns[0]},
+		ForeignKeys: []*schema.ForeignKey{
+			{
+				Symbol:     "evaluation_route_evidence_api_keys_evaluation_route_evidence",
+				Columns:    []*schema.Column{EvaluationRouteEvidenceColumns[25]},
+				RefColumns: []*schema.Column{APIKeysColumns[0]},
+				OnDelete:   schema.NoAction,
+			},
+		},
+		Indexes: []*schema.Index{
+			{
+				Name:    "evaluationrouteevidence_evaluation_run_id_sample_id",
+				Unique:  false,
+				Columns: []*schema.Column{EvaluationRouteEvidenceColumns[1], EvaluationRouteEvidenceColumns[2]},
+			},
+			{
+				Name:    "evaluationrouteevidence_requested_model_finished_at",
+				Unique:  false,
+				Columns: []*schema.Column{EvaluationRouteEvidenceColumns[4], EvaluationRouteEvidenceColumns[22]},
+			},
+		},
+	}
+	// EvaluationRunsColumns holds the columns for the "evaluation_runs" table.
+	EvaluationRunsColumns = []*schema.Column{
+		{Name: "id", Type: field.TypeUUID},
+		{Name: "trigger_source", Type: field.TypeString, Size: 20},
+		{Name: "baseline_ref", Type: field.TypeJSON, SchemaType: map[string]string{"postgres": "jsonb"}},
+		{Name: "candidate_ref", Type: field.TypeJSON, SchemaType: map[string]string{"postgres": "jsonb"}},
+		{Name: "status", Type: field.TypeString, Size: 24, Default: "pending"},
+		{Name: "budget_limit", Type: field.TypeFloat64, SchemaType: map[string]string{"postgres": "numeric(20,8)"}},
+		{Name: "reserved_cost", Type: field.TypeFloat64, Default: 0, SchemaType: map[string]string{"postgres": "numeric(20,8)"}},
+		{Name: "actual_cost", Type: field.TypeFloat64, Default: 0, SchemaType: map[string]string{"postgres": "numeric(20,8)"}},
+		{Name: "calibration_mode", Type: field.TypeBool, Default: true},
+		{Name: "created_by", Type: field.TypeInt64, Nullable: true},
+		{Name: "started_at", Type: field.TypeTime, Nullable: true, SchemaType: map[string]string{"postgres": "timestamptz"}},
+		{Name: "finished_at", Type: field.TypeTime, Nullable: true, SchemaType: map[string]string{"postgres": "timestamptz"}},
+		{Name: "created_at", Type: field.TypeTime, SchemaType: map[string]string{"postgres": "timestamptz"}},
+		{Name: "updated_at", Type: field.TypeTime, SchemaType: map[string]string{"postgres": "timestamptz"}},
+		{Name: "plan_id", Type: field.TypeUUID},
+	}
+	// EvaluationRunsTable holds the schema information for the "evaluation_runs" table.
+	EvaluationRunsTable = &schema.Table{
+		Name:       "evaluation_runs",
+		Columns:    EvaluationRunsColumns,
+		PrimaryKey: []*schema.Column{EvaluationRunsColumns[0]},
+		ForeignKeys: []*schema.ForeignKey{
+			{
+				Symbol:     "evaluation_runs_evaluation_plans_runs",
+				Columns:    []*schema.Column{EvaluationRunsColumns[14]},
+				RefColumns: []*schema.Column{EvaluationPlansColumns[0]},
+				OnDelete:   schema.NoAction,
+			},
+		},
+		Indexes: []*schema.Index{
+			{
+				Name:    "evaluationrun_plan_id_created_at",
+				Unique:  false,
+				Columns: []*schema.Column{EvaluationRunsColumns[14], EvaluationRunsColumns[12]},
+			},
+			{
+				Name:    "evaluationrun_status_created_at",
+				Unique:  false,
+				Columns: []*schema.Column{EvaluationRunsColumns[4], EvaluationRunsColumns[12]},
 			},
 		},
 	}
@@ -2104,6 +2331,11 @@ var (
 		ChannelMonitorRequestTemplatesTable,
 		CompositeModelRoutesTable,
 		ErrorPassthroughRulesTable,
+		EvaluationCasesTable,
+		EvaluationDatasetVersionsTable,
+		EvaluationPlansTable,
+		EvaluationRouteEvidenceTable,
+		EvaluationRunsTable,
 		GroupsTable,
 		IdempotencyRecordsTable,
 		IdentityAdoptionDecisionsTable,
@@ -2192,6 +2424,26 @@ func init() {
 	}
 	ErrorPassthroughRulesTable.Annotation = &entsql.Annotation{
 		Table: "error_passthrough_rules",
+	}
+	EvaluationCasesTable.ForeignKeys[0].RefTable = EvaluationDatasetVersionsTable
+	EvaluationCasesTable.Annotation = &entsql.Annotation{
+		Table: "evaluation_cases",
+	}
+	EvaluationDatasetVersionsTable.Annotation = &entsql.Annotation{
+		Table: "evaluation_dataset_versions",
+	}
+	EvaluationPlansTable.ForeignKeys[0].RefTable = APIKeysTable
+	EvaluationPlansTable.ForeignKeys[1].RefTable = EvaluationDatasetVersionsTable
+	EvaluationPlansTable.Annotation = &entsql.Annotation{
+		Table: "evaluation_plans",
+	}
+	EvaluationRouteEvidenceTable.ForeignKeys[0].RefTable = APIKeysTable
+	EvaluationRouteEvidenceTable.Annotation = &entsql.Annotation{
+		Table: "evaluation_route_evidence",
+	}
+	EvaluationRunsTable.ForeignKeys[0].RefTable = EvaluationPlansTable
+	EvaluationRunsTable.Annotation = &entsql.Annotation{
+		Table: "evaluation_runs",
 	}
 	GroupsTable.Annotation = &entsql.Annotation{
 		Table: "groups",

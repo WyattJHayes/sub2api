@@ -180,6 +180,7 @@ export default {
     proxies: 'IP管理',
     redeemCodes: '兑换码',
     ops: '运维监控',
+    qualityRadar: '质量雷达',
     promoCodes: '优惠码',
     settings: '系统设置',
     myAccount: '我的账户',
@@ -206,6 +207,49 @@ export default {
     contentModeration: '内容审核',
     promptAudit: '提示词审计',
     auditLogs: '操作日志',
+  },
+
+  modelHealth: {
+    title: '模型健康',
+    description: '查看可用模型的公开质量与可靠性信号。',
+    updated: '最后更新',
+    p99: 'P99 延迟',
+    errorRate: '错误率',
+    empty: '暂无公开模型健康数据',
+    loadFailed: '加载模型健康数据失败，请稍后重试。',
+    status: {
+      healthy: '健康',
+      degraded: '降级',
+      insufficient_evidence: '证据不足'
+    },
+    quality: {
+      normal: '未见显著异常',
+      observe: '需要观察',
+      suspected: '疑似异常',
+      highRisk: '高风险',
+      insufficient: '检测覆盖不足',
+      adulteration: '掺水风险',
+      degradation: '降智风险'
+    },
+    report: {
+      title: '模型质量报告',
+      notFound: '当前检测覆盖不足，尚无可用质量报告。',
+      loadFailed: '加载质量报告失败，请稍后重试。',
+      declaredModel: '检测模型', overall: '综合结论', source: '来源识别', samples: '样本', confidence: '置信度',
+      behaviorGroup: '模型行为与能力画像', protocolGroup: '调用链路与协议质量', keyEvidence: '本轮关键证据',
+      noEvidence: '暂无可公开的关键证据。', confirmedSource: '已确认来源', inferredSource: '行为推断',
+      sourceUnavailable: '暂无法判断来源', sourceBoundary: '来源识别仅基于受控探针的允许证据编码，不展示调用链原始数据。',
+      generatedAt: '生成时间', freshUntil: '有效至', stale: '报告已过期', coverageInsufficient: '检测覆盖不足', alternateCandidates: '其他候选来源'
+    },
+    dimension: {
+      knowledge_freshness: '知识时效核验', model_fingerprint: '型号指纹匹配', reasoning_stability: '逻辑求解稳定性', structure_compliance: '结构约束遵循',
+      parameter_fidelity: '调用参数保真', instruction_hierarchy: '指令层级遵循', protocol_schema: '协议字段规范', stream_completeness: '流式响应完整性'
+    },
+    evidence: {
+      within_policy_bounds: '检测结果处于当前策略边界内。', coverage_insufficient: '样本覆盖不足，结论仅供观察。', fingerprint_matched: '型号行为指纹与声明来源一致。', fingerprint_mismatch: '型号行为指纹与声明来源存在偏离。',
+      reasoning_variance: '逻辑求解结果出现异常波动。', structure_violation: '结构约束遵循出现偏差。', parameter_deviation: '调用参数保真出现偏差。', instruction_violation: '指令层级遵循出现偏差。',
+      protocol_violation: '协议字段规范出现偏差。', stream_incomplete: '流式响应完整性不足。', source_confirmed: '来源已由受控证据确认。', source_inferred: '来源为行为推断结果。', source_insufficient_evidence: '来源证据尚不足以形成判断。'
+    }
   },
 
   // Auth
