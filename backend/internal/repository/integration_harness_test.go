@@ -211,6 +211,12 @@ func testTx(t *testing.T) *sql.Tx {
 	return tx
 }
 
+func resetUserAndGroupFixtures(t *testing.T) {
+	t.Helper()
+	_, err := integrationDB.ExecContext(context.Background(), `TRUNCATE TABLE users, groups RESTART IDENTITY CASCADE`)
+	require.NoError(t, err, "reset user and group integration fixtures")
+}
+
 // testEntClient 返回全局的 ent client，用于测试需要内部管理事务的代码（如 Create/Update 方法）。
 // 注意：此 client 的操作会真正写入数据库，测试结束后不会自动回滚。
 func testEntClient(t *testing.T) *dbent.Client {
