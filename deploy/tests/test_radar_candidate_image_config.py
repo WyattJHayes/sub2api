@@ -15,9 +15,20 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 COMPOSE_FILE = REPO_ROOT / "deploy" / "docker-compose.radar-staging.yml"
 RELIABILITY_COMPOSE_FILE = REPO_ROOT / "deploy" / "docker-compose.radar-reliability.yml"
 WORKER_COMPOSE_FILE = REPO_ROOT / "radar-worker" / "deploy" / "docker-compose.staging.yml"
+RADAR_DOCKERFILE = REPO_ROOT / "deploy" / "Dockerfile.radar-control-staging"
+PRODUCTION_DOCKERFILE = REPO_ROOT / "deploy" / "Dockerfile"
 
 
 class RadarCandidateImageConfigTest(unittest.TestCase):
+    def test_radar_build_uses_the_production_pnpm_version(self) -> None:
+        version_pattern = re.compile(r"corepack prepare pnpm@([^ ]+) --activate")
+        radar_match = version_pattern.search(RADAR_DOCKERFILE.read_text(encoding="utf-8"))
+        production_match = version_pattern.search(PRODUCTION_DOCKERFILE.read_text(encoding="utf-8"))
+
+        self.assertIsNotNone(radar_match)
+        self.assertIsNotNone(production_match)
+        self.assertEqual(production_match.group(1), radar_match.group(1))
+
     def _render(self, *, include_reliability: bool = False) -> dict:
         if shutil.which("docker") is None:
             raise RuntimeError("Docker Compose is required for candidate image configuration checks")
