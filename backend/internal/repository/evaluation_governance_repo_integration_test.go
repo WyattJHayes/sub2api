@@ -44,8 +44,8 @@ func insertRadarControlPlaneConstraintFixture(t *testing.T, tx *sql.Tx) radarCon
 		RETURNING id`, "radar-control-plane-"+suffix+"@example.com").Scan(&fixture.actorID))
 	require.NoError(t, execRadarFixtureSQL(ctx, tx, `
 		INSERT INTO evaluation_dataset_versions (
-			id, dataset_key, version, manifest_sha256, source_type, status, created_by, published_at
-		) VALUES ($1, $2, 'v1', $3, 'synthetic', 'published', $4, NOW())`,
+			id, dataset_key, version, manifest_sha256, source_type, status, created_by
+		) VALUES ($1, $2, 'v1', $3, 'synthetic', 'draft', $4)`,
 		fixture.datasetID, "radar-constraints-"+suffix, fmt.Sprintf("%064d", 1), fixture.actorID))
 	require.NoError(t, execRadarFixtureSQL(ctx, tx, `
 		INSERT INTO evaluation_cases (
@@ -55,6 +55,10 @@ func insertRadarControlPlaneConstraintFixture(t *testing.T, tx *sql.Tx) radarCon
 		) VALUES ($1, $2, 'case-1', 'protocol', 'P0', 1, 1,
 			'{}'::jsonb, '{}'::jsonb, '{}'::jsonb, 'exact', 'v1', $3, 'synthetic')`,
 		fixture.caseID, fixture.datasetID, fmt.Sprintf("%064d", 2)))
+	require.NoError(t, execRadarFixtureSQL(ctx, tx, `
+		UPDATE evaluation_dataset_versions
+		SET status='published', published_at=NOW()
+		WHERE id=$1`, fixture.datasetID))
 	planID := uuid.New()
 	require.NoError(t, execRadarFixtureSQL(ctx, tx, `
 		INSERT INTO evaluation_plans (

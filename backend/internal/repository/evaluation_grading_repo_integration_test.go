@@ -423,7 +423,7 @@ func TestEvaluationRevisionSchema_RejectsInvalidOriginsAndCrossRunBatch(t *testi
 			INSERT INTO evaluation_revision_batches (
 				id, run_id, status, control_epoch, reason, requested_by, idempotency_key
 			) VALUES ($1, $2, 'running', 1, 'model_regression', $3, $4)`,
-			batch.id, batch.runID, fixture.userID, strings.Repeat(batch.id.String()[:1], 64)))
+			batch.id, batch.runID, fixture.userID, hashString(batch.id.String())))
 	}
 	requireSQLRejectedWithinSavepoint(t, tx, "batch_identity_update", `
 		UPDATE evaluation_revision_batches SET reason = 'mutated' WHERE id = $1`, firstBatchID)
