@@ -5,14 +5,16 @@ import argparse
 import json
 import os
 import re
+import shutil
 import subprocess
 import sys
 import tempfile
 import tomllib
+from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, Iterator
 
 
 CONTROL_REPOSITORY = "ghcr.io/wyattjhayes/sub2api-radar-control-plane"
@@ -184,6 +186,71 @@ def worker_command(inputs: BuildInputs, metadata_path: Path) -> list[str]:
         "--push",
         "radar-worker",
     ]
+
+
+def prepare_worker_build_context(
+    source_snapshot: Path,
+    worker_context: Path,
+    python_base_image: str,
+) -> Path:
+    """Create a derived context with hash-verified wheels for the target runtime."""
+    worker_source = source_snapshot / "radar-worker"
+    if not worker_source.is_dir():
+        raise ValueError("sealed source snapshot is missing radar-worker")
+    if worker_context.exists():
+        raise ValueError("worker build context path must not already exist")
+
+    shutil.copytree(worker_source, worker_context)
+    worker_context.chmod(0o700)
+    requirements_lock = worker_context / "requirements.lock"
+    if not requirements_lock.is_file():
+        raise ValueError("worker build context is missing requirements.lock")
+    wheelhouse = worker_context / "wheelhouse"
+    wheelhouse.mkdir(mode=0o700)
+
+    run_checked(
+        [
+            "docker",
+            "run",
+            "--rm",
+            "--platform",
+            PLATFORM,
+            "--user",
+            f"{os.getuid()}:{os.getgid()}",
+            "--volume",
+            f"{requirements_lock.resolve()}:/requirements.lock:ro",
+            "--volume",
+            f"{wheelhouse.resolve()}:/wheelhouse",
+            python_base_image,
+            "python",
+            "-m",
+            "pip",
+            "download",
+            "--disable-pip-version-check",
+            "--no-cache-dir",
+            "--require-hashes",
+            "--only-binary=:all:",
+            "--dest",
+            "/wheelhouse",
+            "--requirement",
+            "/requirements.lock",
+        ]
+    )
+    wheels = list(wheelhouse.iterdir())
+    if not wheels:
+        raise ValueError("worker wheelhouse is empty")
+    if any(path.is_symlink() or not path.is_file() or path.suffix != ".whl" for path in wheels):
+        raise ValueError("worker wheelhouse must contain only regular .whl files")
+    return worker_context
+
+
+@contextmanager
+def temporary_build_workspace(source_root: Path = REPO_ROOT) -> Iterator[Path]:
+    with tempfile.TemporaryDirectory(
+        prefix="radar-v020-build-",
+        dir=source_root.resolve().parent,
+    ) as directory:
+        yield Path(directory)
 
 
 def validate_digest(value: object, label: str) -> str:
@@ -484,8 +551,7 @@ def main(argv: list[str] | None = None) -> int:
         validate_current_source(inputs)
         if args.output.exists():
             raise ValueError(f"output already exists: {args.output}")
-        with tempfile.TemporaryDirectory(prefix="radar-v020-build-") as directory:
-            workspace = Path(directory)
+        with temporary_build_workspace(REPO_ROOT) as workspace:
             source_snapshot = workspace / "source"
             snapshot_sha256 = create_readonly_source_snapshot(REPO_ROOT, source_snapshot)
             if inputs.source_sha256 != snapshot_sha256:
@@ -493,7 +559,15 @@ def main(argv: list[str] | None = None) -> int:
             control_metadata = workspace / "control.json"
             worker_metadata = workspace / "worker.json"
             run_checked(control_plane_command(inputs, control_metadata), cwd=source_snapshot)
-            run_checked(worker_command(inputs, worker_metadata), cwd=source_snapshot)
+            worker_context = prepare_worker_build_context(
+                source_snapshot,
+                workspace / "worker-build" / "radar-worker",
+                inputs.worker_python_base_image,
+            )
+            run_checked(
+                worker_command(inputs, worker_metadata),
+                cwd=worker_context.parent,
+            )
             control_manifest, control_config = parse_metadata(control_metadata)
             worker_manifest, worker_config = parse_metadata(worker_metadata)
             worker_expected = inputs.version
