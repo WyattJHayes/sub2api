@@ -101,6 +101,29 @@ class MigrationLedgerTests(unittest.TestCase):
         self.assertFalse(blocked["ok"])
         self.assertEqual(blocked["runtime_unknown_files"], ["003_unknown.sql"])
 
+    def test_runtime_allows_explicit_duplicate_alias_with_matching_checksum(self) -> None:
+        baseline = {"001_init.sql": "a" * 64}
+        candidate = {
+            "001_init.sql": "a" * 64,
+            "221_group_model_pricing.sql": "b" * 64,
+        }
+        actual = {
+            **baseline,
+            "221_group_model_pricing.sql": "b" * 64,
+            "225_group_model_pricing.sql": "b" * 64,
+        }
+        result = audit_runtime(
+            baseline,
+            candidate,
+            actual,
+            expected_new=["221_group_model_pricing.sql"],
+            legacy_entries=[],
+            duplicate_aliases={"225_group_model_pricing.sql": "221_group_model_pricing.sql"},
+        )
+        self.assertTrue(result["ok"], result)
+        self.assertEqual(result["duplicate_aliases"], {"225_group_model_pricing.sql": "221_group_model_pricing.sql"})
+        self.assertEqual(result["actual_schema_migrations"], 3)
+
     def test_runtime_audit_emits_manifest_bound_ledger_identities(self) -> None:
         baseline = {
             "001_init.sql": "a" * 64,

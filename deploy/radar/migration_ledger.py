@@ -8,7 +8,7 @@ import hashlib
 import json
 import re
 from pathlib import Path
-from typing import Any, Iterable
+from typing import Any, Iterable, Mapping
 
 
 CHECKSUM_RE = re.compile(r"^[0-9a-f]{64}$")
@@ -170,6 +170,7 @@ def audit_runtime(
     *,
     expected_new: Iterable[str],
     legacy_entries: Iterable[str],
+    duplicate_aliases: Mapping[str, str] | None = None,
 ) -> dict[str, Any]:
     candidate_result = audit_candidate(
         baseline,
@@ -181,10 +182,21 @@ def audit_runtime(
     for name in candidate_result["expected_new_migrations"]:
         if name in candidate:
             expected_runtime[name] = candidate[name]
-    runtime_missing = sorted(set(expected_runtime) - set(actual))
-    runtime_unknown = sorted(set(actual) - set(expected_runtime))
+    aliases = dict(sorted((duplicate_aliases or {}).items()))
+    alias_errors: list[str] = []
+    normalized_actual = dict(actual)
+    for alias, canonical in aliases.items():
+        if alias not in normalized_actual:
+            alias_errors.append(f"missing duplicate alias: {alias}")
+            continue
+        if canonical not in normalized_actual or normalized_actual[alias] != normalized_actual[canonical]:
+            alias_errors.append(f"duplicate alias checksum mismatch: {alias}->{canonical}")
+            continue
+        normalized_actual.pop(alias)
+    runtime_missing = sorted(set(expected_runtime) - set(normalized_actual))
+    runtime_unknown = sorted(set(normalized_actual) - set(expected_runtime))
     runtime_checksum_mismatches = sorted(
-        name for name in expected_runtime.keys() & actual.keys() if expected_runtime[name] != actual[name]
+        name for name in expected_runtime.keys() & normalized_actual.keys() if expected_runtime[name] != normalized_actual[name]
     )
     result = dict(candidate_result)
     result.update(
@@ -196,8 +208,10 @@ def audit_runtime(
             "runtime_missing_files": runtime_missing,
             "runtime_unknown_files": runtime_unknown,
             "runtime_checksum_mismatches": runtime_checksum_mismatches,
+            "duplicate_aliases": aliases,
+            "duplicate_alias_errors": alias_errors,
             "expected_runtime_ledger_sha256": ledger_sha256(expected_runtime),
-            "runtime_ledger_sha256": ledger_sha256(actual),
+            "runtime_ledger_sha256": ledger_sha256(normalized_actual),
         }
     )
     result["ok"] = bool(
@@ -205,7 +219,8 @@ def audit_runtime(
         and not runtime_missing
         and not runtime_unknown
         and not runtime_checksum_mismatches
-        and len(actual) == len(expected_runtime)
+        and not alias_errors
+        and len(normalized_actual) == len(expected_runtime)
     )
     return result
 
@@ -223,6 +238,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--actual", type=Path)
     parser.add_argument("--expected-new", type=Path, required=True)
     parser.add_argument("--legacy-entries", type=Path, required=True)
+    parser.add_argument("--duplicate-aliases", type=Path)
     parser.add_argument("--output", type=Path, required=True)
     args = parser.parse_args(argv)
 
@@ -230,6 +246,9 @@ def main(argv: list[str] | None = None) -> int:
     candidate = candidate_manifest(args.candidate_dir)
     expected_new = read_name_list(args.expected_new)
     legacy_entries = read_name_list(args.legacy_entries)
+    duplicate_aliases: dict[str, str] = {}
+    if args.duplicate_aliases is not None:
+        duplicate_aliases = json.loads(args.duplicate_aliases.read_text(encoding="utf-8"))
     if args.actual is None:
         result = audit_candidate(
             baseline,
@@ -244,6 +263,7 @@ def main(argv: list[str] | None = None) -> int:
             read_runtime_manifest(args.actual),
             expected_new=expected_new,
             legacy_entries=legacy_entries,
+            duplicate_aliases=duplicate_aliases,
         )
     _write_json(args.output, result)
     print(json.dumps(result, ensure_ascii=True, sort_keys=True))
