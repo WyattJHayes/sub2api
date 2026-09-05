@@ -697,6 +697,35 @@ func TestFrontendServer_Middleware(t *testing.T) {
 		assert.Equal(t, "no-store", missingWriter.Header().Get("Cache-Control"))
 		assert.NotContains(t, strings.ToLower(missingWriter.Header().Get("Content-Type")), "text/html")
 	})
+
+	t.Run("returns_not_found_for_missing_static_resource_variants", func(t *testing.T) {
+		provider := &mockSettingsProvider{
+			settings: map[string]string{"test": "value"},
+		}
+
+		server, err := NewFrontendServer(provider)
+		require.NoError(t, err)
+
+		router := gin.New()
+		router.Use(server.Middleware())
+
+		for _, path := range []string{
+			"/assets/missing-AbCd1234.css",
+			"/assets/missing-AbCd1234.js.map",
+			"/assets/chunks/missing",
+			"/static/missing.js",
+		} {
+			t.Run(path, func(t *testing.T) {
+				w := httptest.NewRecorder()
+				req := httptest.NewRequest(http.MethodGet, path, nil)
+				router.ServeHTTP(w, req)
+
+				assert.Equal(t, http.StatusNotFound, w.Code)
+				assert.Equal(t, "no-store", w.Header().Get("Cache-Control"))
+				assert.NotContains(t, strings.ToLower(w.Header().Get("Content-Type")), "text/html")
+			})
+		}
+	})
 }
 
 func TestEmbeddedFrontendBypassesBareVideoAPIRoutes(t *testing.T) {
@@ -824,6 +853,29 @@ func TestServeEmbeddedFrontend(t *testing.T) {
 		assert.Equal(t, http.StatusNotFound, w.Code)
 		assert.Equal(t, "no-store", w.Header().Get("Cache-Control"))
 		assert.NotContains(t, strings.ToLower(w.Header().Get("Content-Type")), "text/html")
+	})
+
+	t.Run("returns_not_found_for_missing_static_resource_variants", func(t *testing.T) {
+		middleware := ServeEmbeddedFrontend()
+		router := gin.New()
+		router.Use(middleware)
+
+		for _, path := range []string{
+			"/assets/missing-AbCd1234.css",
+			"/assets/missing-AbCd1234.js.map",
+			"/assets/chunks/missing",
+			"/static/missing.js",
+		} {
+			t.Run(path, func(t *testing.T) {
+				w := httptest.NewRecorder()
+				req := httptest.NewRequest(http.MethodGet, path, nil)
+				router.ServeHTTP(w, req)
+
+				assert.Equal(t, http.StatusNotFound, w.Code)
+				assert.Equal(t, "no-store", w.Header().Get("Cache-Control"))
+				assert.NotContains(t, strings.ToLower(w.Header().Get("Content-Type")), "text/html")
+			})
+		}
 	})
 
 	t.Run("skips_api_routes", func(t *testing.T) {

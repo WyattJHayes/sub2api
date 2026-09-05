@@ -93,7 +93,7 @@ func validateRadarStagingDockerfile(dockerfile string) []string {
 		"ARG GOLANG_IMAGE",
 		"ARG ALPINE_IMAGE",
 		"FROM ${NODE_IMAGE} AS frontend-builder",
-		"corepack prepare pnpm@11.5.2 --activate",
+		"corepack prepare pnpm@9.15.9 --activate",
 		"COPY frontend/package.json frontend/pnpm-lock.yaml frontend/pnpm-workspace.yaml ./",
 		"--mount=type=cache,id=sub2api-radar-pnpm-v11,target=/root/.local/share/pnpm/store",
 		"pnpm install --frozen-lockfile --prefer-offline",
