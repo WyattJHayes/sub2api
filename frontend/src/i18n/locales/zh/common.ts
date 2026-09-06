@@ -227,9 +227,15 @@ export default {
       observe: '需要观察',
       suspected: '疑似异常',
       highRisk: '高风险',
-      insufficient: '检测覆盖不足',
+      insufficient: '覆盖不足',
       adulteration: '掺水风险',
       degradation: '降智风险'
+    },
+    coverage: {
+      sufficient: '覆盖充分',
+      insufficient: '覆盖不足',
+      none: '暂无覆盖数据',
+      detail: '覆盖维度'
     },
     report: {
       title: '模型质量报告',

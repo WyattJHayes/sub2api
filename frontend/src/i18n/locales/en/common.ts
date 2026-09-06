@@ -231,6 +231,12 @@ export default {
       adulteration: 'Adulteration risk',
       degradation: 'Degradation risk'
     },
+    coverage: {
+      sufficient: 'Coverage sufficient',
+      insufficient: 'Coverage insufficient',
+      none: 'Coverage data unavailable',
+      detail: 'Covered dimensions'
+    },
     report: {
       title: 'Model Quality Report',
       notFound: 'Detection coverage is currently insufficient, so no quality report is available yet.',

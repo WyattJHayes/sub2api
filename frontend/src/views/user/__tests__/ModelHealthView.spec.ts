@@ -2,6 +2,7 @@ import { config, flushPromises, mount } from '@vue/test-utils'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 import ModelHealthView from '../ModelHealthView.vue'
+import zhCommon from '@/i18n/locales/zh/common'
 
 const { getModelHealth } = vi.hoisted(() => ({
   getModelHealth: vi.fn()
@@ -25,7 +26,11 @@ const labels: Record<string, string> = {
   'modelHealth.quality.suspected': '疑似异常',
   'modelHealth.quality.observe': '需要观察',
   'modelHealth.quality.normal': '未见显著异常',
-  'modelHealth.quality.insufficient': '检测覆盖不足'
+  'modelHealth.quality.insufficient': '覆盖不足',
+  'modelHealth.coverage.sufficient': '覆盖充分',
+  'modelHealth.coverage.insufficient': '覆盖不足',
+  'modelHealth.coverage.none': zhCommon.modelHealth.coverage.none,
+  'modelHealth.coverage.detail': '覆盖维度'
 }
 
 vi.mock('@/api/radar', () => ({
@@ -100,5 +105,51 @@ describe('ModelHealthView', () => {
     expect(wrapper.text()).toContain('高风险')
     expect(wrapper.find('[data-test="model-quality-report-gpt-4-1"]').exists()).toBe(true)
     expect(wrapper.text()).not.toContain('Invalid Date')
+  })
+
+  it('renders coverage independently from the health conclusion', async () => {
+    getModelHealth.mockResolvedValueOnce([{
+      model_alias: 'gpt-5.6-sol',
+      health_state: 'healthy',
+      overall_conclusion: 'no_significant_anomaly',
+      coverage: 2 / 3,
+      covered_dimensions: 2,
+      total_dimensions: 3,
+      minimum_samples: 3
+    }])
+
+    const wrapper = mount(ModelHealthView)
+    await flushPromises()
+
+    expect(wrapper.text()).toContain('未见显著异常')
+    expect(wrapper.text()).toContain('覆盖不足')
+    expect(wrapper.text()).toContain('覆盖维度 2/3 (67%)')
+  })
+
+  it('does not infer zero samples from missing dimension statistics', async () => {
+    getModelHealth.mockResolvedValueOnce([{
+      model_alias: 'global',
+      health_state: 'insufficient_evidence',
+      overall_conclusion: 'insufficient_coverage',
+      coverage: 0,
+      covered_dimensions: 0,
+      total_dimensions: 0,
+      minimum_samples: 3
+    }])
+
+    const wrapper = mount(ModelHealthView)
+    await flushPromises()
+
+    expect(wrapper.text()).toContain('暂无覆盖数据')
+    expect(wrapper.text()).not.toContain('暂无样本')
+    expect(wrapper.text()).not.toContain('覆盖维度 0/0')
+  })
+
+  it('does not infer zero samples when an older API omits coverage fields', async () => {
+    const wrapper = mount(ModelHealthView)
+    await flushPromises()
+
+    expect(wrapper.text()).toContain('暂无覆盖数据')
+    expect(wrapper.text()).not.toContain('暂无样本')
   })
 })

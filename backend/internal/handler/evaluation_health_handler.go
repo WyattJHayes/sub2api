@@ -32,6 +32,10 @@ type radarPublicModelHealth struct {
 	AdulterationRisk  service.QualityConclusion `json:"adulteration_risk,omitempty"`
 	DegradationRisk   service.QualityConclusion `json:"degradation_risk,omitempty"`
 	CheckedAt         *time.Time                `json:"checked_at,omitempty"`
+	CoveredDimensions int                       `json:"covered_dimensions"`
+	TotalDimensions   int                       `json:"total_dimensions"`
+	MinimumSamples    int                       `json:"minimum_samples"`
+	Coverage          float64                   `json:"coverage"`
 }
 
 func (h *RadarHealthHandler) List(c *gin.Context) {
@@ -90,6 +94,12 @@ func (h *RadarHealthHandler) List(c *gin.Context) {
 		item.OverallConclusion = summary.OverallConclusion
 		item.AdulterationRisk = summary.AdulterationRisk
 		item.DegradationRisk = summary.DegradationRisk
+		item.CoveredDimensions = summary.CoveredDimensions
+		item.TotalDimensions = summary.TotalDimensions
+		item.MinimumSamples = summary.MinimumSamples
+		if summary.TotalDimensions > 0 {
+			item.Coverage = float64(summary.CoveredDimensions) / float64(summary.TotalDimensions)
+		}
 		if !summary.CheckedAt.IsZero() {
 			value := summary.CheckedAt
 			item.CheckedAt = &value

@@ -74,6 +74,10 @@ export interface RadarPublicHealth {
   freshness?: string
   p99_ms?: number
   error_rate?: number
+  covered_dimensions?: number
+  total_dimensions?: number
+  minimum_samples?: number
+  coverage?: number
 }
 
 export async function getModelHealth(params?: { model?: string }): Promise<RadarPublicHealth[]> {

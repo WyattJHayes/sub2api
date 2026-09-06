@@ -41,6 +41,15 @@
               {{ statusLabel(model.health_state) }}
             </span>
           </div>
+          <div class="mt-3 flex items-center gap-2 text-xs">
+            <span class="rounded-full px-2 py-1 font-medium" :class="coverageClass(model)">
+              {{ coverageLabel(model) }}
+            </span>
+            <span v-if="hasCoverageSamples(model)" class="text-gray-500">
+              {{ t('modelHealth.coverage.detail') }} {{ model.covered_dimensions }}/{{ model.total_dimensions }}
+              ({{ Math.round((model.coverage ?? 0) * 100) }}%)
+            </span>
+          </div>
           <div class="mt-4 flex flex-wrap gap-2">
             <span class="rounded-full px-2 py-1 text-xs font-medium" :class="qualityClass(model.overall_conclusion)">
               {{ qualityLabel(model.overall_conclusion) }}
@@ -123,6 +132,24 @@ function qualityClass(value: RadarPublicHealth['overall_conclusion']): string {
   if (value === 'high_risk' || value === 'suspected') return 'bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-300'
   if (value === 'observe' || value === 'insufficient_coverage') return 'bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-300'
   return 'bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-300'
+}
+
+function hasCoverageSamples(model: RadarPublicHealth): boolean {
+  return (model.total_dimensions ?? 0) > 0
+}
+
+function coverageLabel(model: RadarPublicHealth): string {
+  if (!hasCoverageSamples(model)) return t('modelHealth.coverage.none')
+  return (model.coverage ?? 0) >= 1
+    ? t('modelHealth.coverage.sufficient')
+    : t('modelHealth.coverage.insufficient')
+}
+
+function coverageClass(model: RadarPublicHealth): string {
+  if (!hasCoverageSamples(model)) return 'bg-gray-100 text-gray-700 dark:bg-gray-800 dark:text-gray-300'
+  return (model.coverage ?? 0) >= 1
+    ? 'bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-300'
+    : 'bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-300'
 }
 
 function isValidDate(value?: string): value is string {
