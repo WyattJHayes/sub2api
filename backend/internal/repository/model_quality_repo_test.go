@@ -107,11 +107,12 @@ func TestModelQualityRepositoryListsLatestTenantSummaries(t *testing.T) {
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = db.Close() })
 	checkedAt := time.Date(2026, time.August, 11, 0, 0, 0, 0, time.UTC)
-	mock.ExpectQuery("ORDER BY report.model_alias, report.aggregate_revision DESC, report.generated_at DESC").
+	mock.ExpectQuery("JOIN latest_reports report ON report.id=results.report_id AND report.tenant_id=results.tenant_id").
 		WithArgs(int64(17)).
 		WillReturnRows(sqlmock.NewRows([]string{
 			"model_alias", "overall_conclusion", "adulteration_risk", "degradation_risk", "generated_at", "fresh_until",
-		}).AddRow("model-a", "suspected", "high_risk", "observe", checkedAt, checkedAt.Add(time.Hour)))
+			"covered_dimensions", "total_dimensions", "minimum_samples",
+		}).AddRow("model-a", "suspected", "high_risk", "observe", checkedAt, checkedAt.Add(time.Hour), 2, 3, 3))
 
 	reports, err := NewModelQualityRepository(db).ListPublicQualitySummaries(
 		service.WithRadarTenant(context.Background(), 17),
@@ -121,7 +122,7 @@ func TestModelQualityRepositoryListsLatestTenantSummaries(t *testing.T) {
 	require.Equal(t, []service.PublicQualitySummary{{
 		ModelAlias: "model-a", OverallConclusion: service.QualityConclusionSuspected,
 		AdulterationRisk: service.QualityConclusionHighRisk, DegradationRisk: service.QualityConclusionObserve,
-		CheckedAt: checkedAt, FreshUntil: checkedAt.Add(time.Hour),
+		CheckedAt: checkedAt, FreshUntil: checkedAt.Add(time.Hour), CoveredDimensions: 2, TotalDimensions: 3, MinimumSamples: 3,
 	}}, reports)
 	require.NoError(t, mock.ExpectationsWereMet())
 }

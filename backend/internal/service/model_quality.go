@@ -239,6 +239,9 @@ type PublicQualitySummary struct {
 	DegradationRisk   QualityConclusion `json:"degradation_risk"`
 	CheckedAt         time.Time         `json:"checked_at"`
 	FreshUntil        time.Time         `json:"fresh_until"`
+	CoveredDimensions int               `json:"covered_dimensions"`
+	TotalDimensions   int               `json:"total_dimensions"`
+	MinimumSamples    int               `json:"minimum_samples"`
 }
 
 type PublicQualityEvidence struct {

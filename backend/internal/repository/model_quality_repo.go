@@ -29,12 +29,31 @@ func (r *modelQualityRepository) ListPublicQualitySummaries(ctx context.Context)
 		return nil, errors.New("nil model quality repository")
 	}
 	rows, err := r.db.QueryContext(ctx, `
-		SELECT DISTINCT ON (report.model_alias)
-			report.model_alias, report.overall_conclusion, report.adulteration_risk,
-			report.degradation_risk, report.generated_at, report.fresh_until
-		FROM quality_reports report
-		WHERE report.tenant_id=$1
-		ORDER BY report.model_alias, report.aggregate_revision DESC, report.generated_at DESC`, tenantID)
+		WITH latest_reports AS (
+			SELECT DISTINCT ON (report.model_alias)
+				report.id, report.model_alias, report.overall_conclusion, report.adulteration_risk,
+				report.degradation_risk, report.generated_at, report.fresh_until, report.policy_version,
+				report.tenant_id
+			FROM quality_reports report
+			WHERE report.tenant_id=$1
+			ORDER BY report.model_alias, report.aggregate_revision DESC, report.generated_at DESC
+		), dimension_stats AS (
+			SELECT results.report_id, results.tenant_id,
+				COUNT(*)::int AS total_dimensions,
+				COUNT(*) FILTER (WHERE results.sample_count >= COALESCE((policy.policy->>'minimum_samples_per_dimension')::int, 3))::int AS covered_dimensions
+			FROM quality_dimension_results results
+			JOIN latest_reports report ON report.id=results.report_id AND report.tenant_id=results.tenant_id
+			LEFT JOIN quality_policy_versions policy ON policy.tenant_id=report.tenant_id AND policy.version=report.policy_version
+			GROUP BY results.report_id, results.tenant_id, policy.policy
+		)
+		SELECT latest.model_alias, latest.overall_conclusion, latest.adulteration_risk,
+			latest.degradation_risk, latest.generated_at, latest.fresh_until,
+			COALESCE(stats.covered_dimensions, 0), COALESCE(stats.total_dimensions, 0),
+			COALESCE((policy.policy->>'minimum_samples_per_dimension')::int, 3)
+		FROM latest_reports latest
+		LEFT JOIN dimension_stats stats ON stats.report_id=latest.id AND stats.tenant_id=latest.tenant_id
+		LEFT JOIN quality_policy_versions policy ON policy.tenant_id=latest.tenant_id AND policy.version=latest.policy_version
+		ORDER BY latest.model_alias`, tenantID)
 	if err != nil {
 		return nil, fmt.Errorf("list public quality summaries: %w", err)
 	}
@@ -46,6 +65,7 @@ func (r *modelQualityRepository) ListPublicQualitySummaries(ctx context.Context)
 		if err := rows.Scan(
 			&summary.ModelAlias, &summary.OverallConclusion, &summary.AdulterationRisk,
 			&summary.DegradationRisk, &summary.CheckedAt, &summary.FreshUntil,
+			&summary.CoveredDimensions, &summary.TotalDimensions, &summary.MinimumSamples,
 		); err != nil {
 			return nil, fmt.Errorf("scan public quality summary: %w", err)
 		}
