@@ -33,6 +33,7 @@ class ReleaseBuilderWorkerVersionGuardTests(unittest.TestCase):
             ("build_v01182_ghcr.py", "0.1.182", "0.1.182-radar-v18-20260815T154200Z", "0.1.183"),
             ("build_v01183_ghcr.py", "0.1.183", "0.1.183-radar-v19-20260815T154200Z", "0.1.184"),
             ("build_v020_ghcr.py", "0.2.0", "0.2.0-radar-v20-20260815T154200Z", "0.2.1"),
+            ("build_v021_ghcr.py", "0.2.1", "0.2.1-radar-v21-20260815T154200Z", "0.2.2"),
         )
         for filename, version, image_tag, worker_version in cases:
             with self.subTest(filename=filename):
@@ -45,6 +46,7 @@ class ReleaseBuilderWorkerVersionGuardTests(unittest.TestCase):
                     "build_v01182_ghcr.py",
                     "build_v01183_ghcr.py",
                     "build_v020_ghcr.py",
+                    "build_v021_ghcr.py",
                 }:
                     golang_image = "golang:1.27.0-alpine@sha256:" + "2" * 64
                 inputs = builder.BuildInputs(

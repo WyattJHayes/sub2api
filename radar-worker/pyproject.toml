@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "sub2api-radar-worker"
-version = "0.2.0"
+version = "0.2.1"
 description = "Controlled runner, grader, and statistics workers for Sub2API Radar"
 requires-python = ">=3.12,<3.15"
 dependencies = [

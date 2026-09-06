@@ -375,7 +375,7 @@ def main(argv: list[str] | None = None) -> int:
                 Path(
                     os.environ.get(
                         "RADAR_MIGRATION_MANIFEST_DIR",
-                        str(Path(__file__).resolve().parent / "manifests" / "v0.2.0"),
+                        str(Path(__file__).resolve().parent / "manifests" / "v0.2.1"),
                     )
                 ).resolve()
             )

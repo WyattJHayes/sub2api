@@ -58,7 +58,7 @@ CLOSURE_SCHEMA_VERSION = "radar-local-prerelease-closure-v1"
 MIGRATION_MANIFEST_DIR = Path(
     os.environ.get(
         "RADAR_MIGRATION_MANIFEST_DIR",
-        str(Path(__file__).resolve().parent / "manifests" / "v0.2.0"),
+        str(Path(__file__).resolve().parent / "manifests" / "v0.2.1"),
     )
 ).resolve()
 MANIFEST_EXPECTED_SCHEMA_MIGRATIONS = manifest_expected_schema_migrations(MIGRATION_MANIFEST_DIR)

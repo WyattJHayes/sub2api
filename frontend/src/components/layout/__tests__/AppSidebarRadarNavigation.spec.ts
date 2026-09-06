@@ -45,7 +45,7 @@ describe('AppSidebar radar navigation', () => {
 
   it('keeps child selection exact and lets an active group be collapsed', () => {
     expect(sidebarSource).toContain("route.path === child.path")
-    expect(sidebarSource).toContain('groupExpansionOverrides')
-    expect(sidebarSource).toContain('groupExpansionOverrides.value.get(item.path)')
+    expect(sidebarSource).toContain('groupExpandOverrides')
+    expect(sidebarSource).toContain('groupExpandOverrides.value.get(item.path)')
   })
 })

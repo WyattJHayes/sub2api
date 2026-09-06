@@ -63,9 +63,9 @@ def gate_document(gate: str, bindings: dict[str, object] | None = None) -> dict[
             "result": "passed",
             "migration_224_checksum": checksum,
             "migration_225_checksum": "8" * 64,
-            "expected_schema_migrations": 307,
+            "expected_schema_migrations": 311,
             "baseline_schema_migrations": 285,
-            "actual_migration_count": 307,
+            "actual_migration_count": 311,
             "migration_ledger_ok": True,
             "candidate_pending_migrations": [],
             "legacy_entries": [
@@ -117,9 +117,9 @@ def gate_document(gate: str, bindings: dict[str, object] | None = None) -> dict[
             "result": "passed",
             "migration_224_checksum": checksum,
             "migration_225_checksum": "8" * 64,
-            "expected_schema_migrations": 307,
+            "expected_schema_migrations": 311,
             "baseline_schema_migrations": 285,
-            "actual_migration_count": 307,
+            "actual_migration_count": 311,
             "migration_ledger_ok": True,
             "candidate_pending_migrations": [],
             "legacy_entries": [
@@ -405,10 +405,10 @@ class LocalPrereleaseClosureTests(unittest.TestCase):
             (root / "private" / "gate-2-migration" / "summary.json").write_text(json.dumps({
                 "migration_224_checksum": "a" * 64,
                 "migration_225_checksum": "b" * 64,
-                "migration_count": 307,
+                "migration_count": 311,
                 "baseline_schema_migrations": 285,
-                "actual_schema_migrations": 307,
-                "expected_schema_migrations": 307,
+                "actual_schema_migrations": 311,
+                "expected_schema_migrations": 311,
                 "migration_ledger_ok": True,
                 "candidate_pending_migrations": [],
                 "legacy_entries": [
@@ -435,7 +435,7 @@ class LocalPrereleaseClosureTests(unittest.TestCase):
                 "2026-08-11T00:00:01Z",
             )
             migration = json.loads((root / "gate-2-migration.json").read_text())
-            self.assertEqual(migration["summary"]["actual_migration_count"], 307)
+            self.assertEqual(migration["summary"]["actual_migration_count"], 311)
             self.assertEqual(migration["summary"]["migration_224_checksum"], "a" * 64)
             self.assertEqual(migration["summary"]["migration_225_checksum"], "b" * 64)
 
@@ -474,10 +474,10 @@ class LocalPrereleaseClosureTests(unittest.TestCase):
             (migration_directory / "summary.json").write_text(json.dumps({
                 "migration_224_checksum": "a" * 64,
                 "migration_225_checksum": "b" * 64,
-                "migration_count": 307,
+                "migration_count": 311,
                 "baseline_schema_migrations": 285,
-                "actual_schema_migrations": 307,
-                "expected_schema_migrations": 307,
+                "actual_schema_migrations": 311,
+                "expected_schema_migrations": 311,
                 "migration_ledger_ok": True,
                 "candidate_pending_migrations": [],
                 "legacy_entries": [

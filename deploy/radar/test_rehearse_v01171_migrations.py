@@ -668,9 +668,9 @@ class MigrationRehearsalContractTests(unittest.TestCase):
 
 
 class MigrationManifestSelectionTests(unittest.TestCase):
-    def test_current_rehearsal_defaults_to_the_v020_migration_manifest(self) -> None:
+    def test_current_rehearsal_defaults_to_the_v021_migration_manifest(self) -> None:
         body = IMPLEMENTATION_SCRIPT.read_text(encoding="utf-8")
-        self.assertIn("/deploy/radar/manifests/v0.2.0", body)
+        self.assertIn("/deploy/radar/manifests/v0.2.1", body)
         self.assertNotIn("/deploy/radar/manifests/v0.1.178", body)
         self.assertNotIn("/deploy/radar/manifests/v0.1.181", body)
 

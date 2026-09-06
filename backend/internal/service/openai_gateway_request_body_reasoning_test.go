@@ -331,6 +331,23 @@ func TestFilterOpenAIResponsesNoneReasoningEffortForAccount(t *testing.T) {
 	}
 }
 
+func TestFilterOpenAIResponsesNoneReasoningEffortForAccount_APIKeyAutomaticPassthroughPreservesRequest(t *testing.T) {
+	body := []byte(`{"model":"qwen3.8-27b","input":"hi","max_output_tokens":20,"reasoning":{"effort":"none"},"presence_penalty":1.5}`)
+	account := &Account{
+		Platform: PlatformOpenAI,
+		Type:     AccountTypeAPIKey,
+		Credentials: map[string]any{
+			"base_url": "https://compat.example/v1",
+		},
+		Extra: map[string]any{"openai_passthrough": true},
+	}
+
+	got, err := filterOpenAIResponsesNoneReasoningEffortForAccount(account, body)
+
+	require.NoError(t, err)
+	require.JSONEq(t, string(body), string(got))
+}
+
 // A Responses Lite body that has already been through normalizeOpenAIResponsesLiteTools
 // carries its tools in an input item of type "additional_tools" and no longer has a
 // top-level "tools" key. It still has tools, so the parallel_tool_calls:false that

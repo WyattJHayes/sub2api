@@ -415,7 +415,7 @@ for field in required_fields:
     if left.get(field) is None or left.get(field) != right.get(field):
         raise SystemExit(f"migration replay {field} mismatch")
 if right.get("migration_ledger_ok") is not True:
-    raise SystemExit("migration replay did not close the v0.2.0 ledger")
+    raise SystemExit("migration replay did not close the v0.2.1 ledger")
 if right.get("candidate_pending_migrations") != [] or right.get("checksum_mismatches") != []:
     raise SystemExit("migration replay contains pending or mismatched files")
 if right.get("candidate_ledger_sha256") != right.get("expected_candidate_ledger_sha256"):

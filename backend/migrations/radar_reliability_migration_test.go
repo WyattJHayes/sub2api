@@ -170,20 +170,24 @@ func TestGroupModelPricingMigration221PreservesExistingLongContextPricing(t *tes
 	}
 }
 
-func TestV020RadarMigrationInventoryPreservesAppliedFiles(t *testing.T) {
+func TestV021RadarMigrationInventoryPreservesAppliedFiles(t *testing.T) {
 	paths, err := filepath.Glob("*.sql")
 	if err != nil {
 		t.Fatalf("list SQL migrations: %v", err)
 	}
-	if len(paths) != 305 {
-		t.Fatalf("controlled source must contain 305 SQL migrations, found %d", len(paths))
+	if len(paths) != 309 {
+		t.Fatalf("controlled source must contain 309 SQL migrations for v0.2.1, found %d", len(paths))
 	}
 
 	expected := map[string]string{
-		"221_add_radar_tracked_models.sql":              "a2d328c1940225315478b843690dd74f7e169cf712b64b7e94005c23bdd782b2",
-		"222_add_radar_quality_reports.sql":             "8bbe1a4aef7270cc875cb1f5954e3ed36560b9a9883ac97490c790d14d35ddbf",
-		"223_add_quality_observation_context.sql":       "b553fb40adc85f27397bd7966659043d595bd148245fe7a7d418b4627e853bca",
-		"224_add_quality_report_aggregate_revision.sql": "e882dbddb0ef055e29ba22b60aede1584a381cf9b57a202068dbb170997dc6f6",
+		"221_add_radar_tracked_models.sql":                     "a2d328c1940225315478b843690dd74f7e169cf712b64b7e94005c23bdd782b2",
+		"222_add_radar_quality_reports.sql":                    "8bbe1a4aef7270cc875cb1f5954e3ed36560b9a9883ac97490c790d14d35ddbf",
+		"223_add_quality_observation_context.sql":              "b553fb40adc85f27397bd7966659043d595bd148245fe7a7d418b4627e853bca",
+		"224_add_quality_report_aggregate_revision.sql":        "e882dbddb0ef055e29ba22b60aede1584a381cf9b57a202068dbb170997dc6f6",
+		"232_add_usage_log_upstream_request_id.sql":            "d13ec35cdf8383c769a6a3046d34d7809860601918648def06bf82b8c28bb80b",
+		"233_add_usage_log_upstream_request_id_index_notx.sql": "41c32a383794730d2bfd88514bf999cfb156cb06324c46b54642736ac8f2fff6",
+		"234_channel_max_reasoning_effort_multiplier.sql":      "448b59b3168fe4dfe2417f1abd9657d124708c279e2245d55149087838d8c8d6",
+		"234_group_codex_models_manifest_config.sql":           "8ef9cd9a6a963e79823f8f5d703a6b31fa30ebfca9f8d2337dd451765178e5a0",
 	}
 	for name, want := range expected {
 		contents, err := os.ReadFile(name)

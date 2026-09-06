@@ -226,7 +226,7 @@ def build_bound_backup(
 ) -> dict[str, Any]:
     if expected_schema_migrations is None:
         expected_schema_migrations = manifest_expected_schema_migrations(
-            Path(__file__).resolve().parent / "manifests" / "v0.2.0"
+            Path(__file__).resolve().parent / "manifests" / "v0.2.1"
         )
     candidate = load_candidate_image_record(candidate_image_record_path)
     authorization = load_private_envelope(authorization_path, expected_type="authorization")

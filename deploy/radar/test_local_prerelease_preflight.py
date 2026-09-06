@@ -669,7 +669,7 @@ class LocalPrereleasePreflightTests(unittest.TestCase):
             environment = compose_environment(output)
             self.assertEqual(environment["RADAR_COMPOSE_PROJECT_NAME"], bindings.run_id)
             self.assertEqual(environment["RADAR_CONTROL_PLANE_PORT"], "18080")
-            self.assertEqual(environment["RADAR_RELEASE_VERSION"], "0.1.178-local-rehearsal")
+            self.assertEqual(environment["RADAR_RELEASE_VERSION"], "0.2.1-local-rehearsal")
             self.assertEqual(environment["RADAR_RELEASE_COMMIT"], bindings.source_sha256)
             self.assertEqual(environment["RADAR_RELEASE_DATE"], "1970-01-01T00:00:00Z")
             self.assertNotIn("RADAR_POSTGRES_PASSWORD", environment)

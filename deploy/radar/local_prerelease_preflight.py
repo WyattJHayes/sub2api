@@ -317,7 +317,7 @@ def write_rehearsal_environment(
         database_pgpass_file,
         f"*:*:*:*:{postgres_password}\n",
     )
-    release_version = os.environ.get("RADAR_RELEASE_VERSION", "0.1.178")
+    release_version = os.environ.get("RADAR_RELEASE_VERSION", "0.2.1")
     if not release_version.endswith("-local-rehearsal"):
         release_version += "-local-rehearsal"
     values = {

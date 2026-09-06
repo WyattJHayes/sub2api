@@ -16,7 +16,7 @@ from typing import Any
 
 
 ENVELOPE_SCHEMA_VERSION = "radar-production-evidence-envelope-v1"
-DEFAULT_RELEASE_VERSION = "0.1.178"
+DEFAULT_RELEASE_VERSION = "0.2.1"
 APP_VERSION = os.environ.get("RADAR_RELEASE_VERSION", DEFAULT_RELEASE_VERSION)
 IMAGE_RECORD_SCHEMA_VERSION = f"radar-v{APP_VERSION.replace('.', '')}-image-record-v1"
 PLATFORM = "linux/amd64"

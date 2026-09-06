@@ -253,9 +253,11 @@ const isDark = ref(document.documentElement.classList.contains('dark'))
 
 const homePath = computed(() => (isAdmin.value ? '/admin/dashboard' : '/dashboard'))
 
-// Explicit choices override route-based auto expansion so an active group can
-// still be collapsed by the user.
-const groupExpansionOverrides = ref<Map<string, boolean>>(new Map())
+// Per-group expand/collapse overrides. A group with no entry follows the
+// automatic behavior (expanded while the active route is one of its children);
+// a chevron click records the user's choice, which wins over the automatic
+// state so an active group can still be collapsed manually.
+const groupExpandOverrides = ref<Map<string, boolean>>(new Map())
 
 // Site settings from appStore (cached, no flicker)
 const siteName = computed(() => appStore.siteName)
@@ -938,11 +940,13 @@ function isGroupActive(item: NavItem): boolean {
 }
 
 function isGroupExpanded(item: NavItem): boolean {
-  return groupExpansionOverrides.value.get(item.path) ?? isGroupActive(item)
+  const override = groupExpandOverrides.value.get(item.path)
+  if (override !== undefined) return override
+  return isGroupActive(item)
 }
 
 function toggleGroup(item: NavItem) {
-  groupExpansionOverrides.value.set(item.path, !isGroupExpanded(item))
+  groupExpandOverrides.value.set(item.path, !isGroupExpanded(item))
 }
 
 /**
@@ -962,9 +966,7 @@ function handleGroupClick(item: NavItem) {
   if (route.path !== item.path) {
     router.push(item.path)
   }
-  if (!isGroupExpanded(item)) {
-    groupExpansionOverrides.value.set(item.path, true)
-  }
+  groupExpandOverrides.value.set(item.path, true)
 }
 
 // Initialize theme
