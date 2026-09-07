@@ -93,6 +93,7 @@ func TestForwardEmbeddings_APIKeyPassthroughRecordsUsageAndBatchInput(t *testing
 	require.Equal(t, "nowledge-embedding", result.Model)
 	require.Equal(t, "jina-embeddings-v5-text-small", result.BillingModel)
 	require.Equal(t, "jina-embeddings-v5-text-small", result.UpstreamModel)
+	require.Equal(t, "jina-embeddings-v5-text-small", result.UpstreamResponseModel)
 	require.Equal(t, 13, result.Usage.InputTokens)
 	require.Equal(t, 0, result.Usage.OutputTokens)
 	require.Equal(t, "https://api.jina.ai/v1/embeddings", upstream.lastReq.URL.String())
