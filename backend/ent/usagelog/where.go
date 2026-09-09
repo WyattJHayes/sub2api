@@ -120,6 +120,11 @@ func BillingMode(v string) predicate.UsageLog {
 	return predicate.UsageLog(sql.FieldEQ(FieldBillingMode, v))
 }
 
+// TrafficClass applies equality check predicate on the "traffic_class" field. It's identical to TrafficClassEQ.
+func TrafficClass(v string) predicate.UsageLog {
+	return predicate.UsageLog(sql.FieldEQ(FieldTrafficClass, v))
+}
+
 // GroupID applies equality check predicate on the "group_id" field. It's identical to GroupIDEQ.
 func GroupID(v int64) predicate.UsageLog {
 	return predicate.UsageLog(sql.FieldEQ(FieldGroupID, v))
@@ -993,6 +998,71 @@ func BillingModeEqualFold(v string) predicate.UsageLog {
 // BillingModeContainsFold applies the ContainsFold predicate on the "billing_mode" field.
 func BillingModeContainsFold(v string) predicate.UsageLog {
 	return predicate.UsageLog(sql.FieldContainsFold(FieldBillingMode, v))
+}
+
+// TrafficClassEQ applies the EQ predicate on the "traffic_class" field.
+func TrafficClassEQ(v string) predicate.UsageLog {
+	return predicate.UsageLog(sql.FieldEQ(FieldTrafficClass, v))
+}
+
+// TrafficClassNEQ applies the NEQ predicate on the "traffic_class" field.
+func TrafficClassNEQ(v string) predicate.UsageLog {
+	return predicate.UsageLog(sql.FieldNEQ(FieldTrafficClass, v))
+}
+
+// TrafficClassIn applies the In predicate on the "traffic_class" field.
+func TrafficClassIn(vs ...string) predicate.UsageLog {
+	return predicate.UsageLog(sql.FieldIn(FieldTrafficClass, vs...))
+}
+
+// TrafficClassNotIn applies the NotIn predicate on the "traffic_class" field.
+func TrafficClassNotIn(vs ...string) predicate.UsageLog {
+	return predicate.UsageLog(sql.FieldNotIn(FieldTrafficClass, vs...))
+}
+
+// TrafficClassGT applies the GT predicate on the "traffic_class" field.
+func TrafficClassGT(v string) predicate.UsageLog {
+	return predicate.UsageLog(sql.FieldGT(FieldTrafficClass, v))
+}
+
+// TrafficClassGTE applies the GTE predicate on the "traffic_class" field.
+func TrafficClassGTE(v string) predicate.UsageLog {
+	return predicate.UsageLog(sql.FieldGTE(FieldTrafficClass, v))
+}
+
+// TrafficClassLT applies the LT predicate on the "traffic_class" field.
+func TrafficClassLT(v string) predicate.UsageLog {
+	return predicate.UsageLog(sql.FieldLT(FieldTrafficClass, v))
+}
+
+// TrafficClassLTE applies the LTE predicate on the "traffic_class" field.
+func TrafficClassLTE(v string) predicate.UsageLog {
+	return predicate.UsageLog(sql.FieldLTE(FieldTrafficClass, v))
+}
+
+// TrafficClassContains applies the Contains predicate on the "traffic_class" field.
+func TrafficClassContains(v string) predicate.UsageLog {
+	return predicate.UsageLog(sql.FieldContains(FieldTrafficClass, v))
+}
+
+// TrafficClassHasPrefix applies the HasPrefix predicate on the "traffic_class" field.
+func TrafficClassHasPrefix(v string) predicate.UsageLog {
+	return predicate.UsageLog(sql.FieldHasPrefix(FieldTrafficClass, v))
+}
+
+// TrafficClassHasSuffix applies the HasSuffix predicate on the "traffic_class" field.
+func TrafficClassHasSuffix(v string) predicate.UsageLog {
+	return predicate.UsageLog(sql.FieldHasSuffix(FieldTrafficClass, v))
+}
+
+// TrafficClassEqualFold applies the EqualFold predicate on the "traffic_class" field.
+func TrafficClassEqualFold(v string) predicate.UsageLog {
+	return predicate.UsageLog(sql.FieldEqualFold(FieldTrafficClass, v))
+}
+
+// TrafficClassContainsFold applies the ContainsFold predicate on the "traffic_class" field.
+func TrafficClassContainsFold(v string) predicate.UsageLog {
+	return predicate.UsageLog(sql.FieldContainsFold(FieldTrafficClass, v))
 }
 
 // GroupIDEQ applies the EQ predicate on the "group_id" field.

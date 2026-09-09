@@ -635,6 +635,41 @@ const SignalIcon = {
     )
 }
 
+const RadarIcon = {
+  render: () =>
+    h(
+      'svg',
+      { fill: 'none', viewBox: '0 0 24 24', stroke: 'currentColor', 'stroke-width': '1.5' },
+      [
+        h('path', {
+          'stroke-linecap': 'round',
+          'stroke-linejoin': 'round',
+          d: 'M4.75 12a7.25 7.25 0 0113.115-4.272M4.75 12a7.25 7.25 0 0013.115 4.272M12 19.25a7.25 7.25 0 004.272-13.115'
+        }),
+        h('path', {
+          'stroke-linecap': 'round',
+          'stroke-linejoin': 'round',
+          d: 'm12 12 6.25-6.25M12 12h.008v.008H12V12z'
+        })
+      ]
+    )
+}
+
+const ActivityIcon = {
+  render: () =>
+    h(
+      'svg',
+      { fill: 'none', viewBox: '0 0 24 24', stroke: 'currentColor', 'stroke-width': '1.5' },
+      [
+        h('path', {
+          'stroke-linecap': 'round',
+          'stroke-linejoin': 'round',
+          d: 'M3.75 12h3l2.25-5.25 3.75 10.5L15.75 12h4.5'
+        })
+      ]
+    )
+}
+
 const ShieldIcon = {
   render: () =>
     h(
@@ -714,6 +749,7 @@ function buildSelfNavItems(withDashboard: boolean): NavItem[] {
     { path: '/usage', label: t('nav.usage'), icon: ChartIcon, hideInSimpleMode: true },
     { path: '/available-channels', label: t('nav.availableChannels'), icon: ChannelIcon, hideInSimpleMode: true, featureFlag: flagAvailableChannels },
     { path: '/monitor', label: t('nav.channelStatus'), icon: SignalIcon, featureFlag: flagChannelMonitor },
+    { path: '/model-health', label: t('modelHealth.title'), icon: ActivityIcon },
     { path: '/subscriptions', label: t('nav.mySubscriptions'), icon: CreditCardIcon, hideInSimpleMode: true },
     { path: '/purchase', label: t('nav.buySubscription'), icon: RechargeSubscriptionIcon, hideInSimpleMode: true, featureFlag: flagPayment },
     { path: '/orders', label: t('nav.myOrders'), icon: OrderListIcon, hideInSimpleMode: true, featureFlag: flagPayment },
@@ -763,6 +799,22 @@ const adminNavItems = computed((): NavItem[] => {
   const baseItems: NavItem[] = [
     { path: '/admin/dashboard', label: t('nav.dashboard'), icon: DashboardIcon },
     { path: '/admin/ops', label: t('nav.ops'), icon: ChartIcon, featureFlag: flagOpsMonitoring },
+    {
+      path: '/admin/radar-group',
+      label: t('nav.qualityRadar'),
+      icon: RadarIcon,
+      hideInSimpleMode: true,
+      expandOnly: true,
+      children: [
+        { path: '/admin/radar', label: t('admin.radar.pages.overview'), icon: ChartIcon },
+        { path: '/admin/radar/models', label: t('admin.radar.pages.models'), icon: ChartIcon },
+        { path: '/admin/radar/runs', label: t('admin.radar.pages.runs'), icon: ChartIcon },
+        { path: '/admin/radar/alerts', label: t('admin.radar.pages.alerts'), icon: BellIcon },
+        { path: '/admin/radar/gates', label: t('admin.radar.pages.gates'), icon: ShieldIcon },
+        { path: '/admin/radar/workers', label: t('admin.radar.pages.workers'), icon: ServerIcon },
+        { path: '/admin/radar/datasets', label: t('admin.radar.pages.datasets'), icon: FolderIcon }
+      ]
+    },
     { path: '/admin/users', label: t('nav.users'), icon: UsersIcon, hideInSimpleMode: true },
     { path: '/admin/groups', label: t('nav.groups'), icon: FolderIcon },
     {

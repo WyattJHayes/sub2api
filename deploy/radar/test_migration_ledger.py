@@ -269,9 +269,12 @@ class MigrationLedgerTests(unittest.TestCase):
         self.assertEqual(len(baseline), 285)
         self.assertEqual(len(expected_new), 22)
         self.assertEqual(len(legacy_entries), 2)
+        complete_candidate = candidate_manifest(root / "backend/migrations")
+        historical_names = (set(baseline) | set(expected_new)) - set(legacy_entries)
+        candidate = {name: complete_candidate[name] for name in historical_names}
         result = audit_candidate(
             baseline,
-            candidate_manifest(root / "backend/migrations"),
+            candidate,
             expected_new=expected_new,
             legacy_entries=legacy_entries,
         )
@@ -280,6 +283,28 @@ class MigrationLedgerTests(unittest.TestCase):
         self.assertEqual(result["candidate_file_count"], 305)
         self.assertEqual(result["unknown_candidate_files"], [])
 
+    def test_v021_manifest_contract_has_285_baseline_26_new_and_2_legacy(self) -> None:
+        root = Path(__file__).resolve().parents[2]
+        manifest_dir = root / "deploy/radar/manifests/v0.2.1"
+        baseline = read_manifest(manifest_dir / "migration-baseline.tsv")
+        expected_new = read_name_list(manifest_dir / "expected-new.txt")
+        legacy_entries = read_name_list(manifest_dir / "legacy-entries.txt")
+        self.assertEqual(len(baseline), 285)
+        self.assertEqual(len(expected_new), 26)
+        self.assertEqual(len(legacy_entries), 2)
+        complete_candidate = candidate_manifest(root / "backend/migrations")
+        historical_names = (set(baseline) | set(expected_new)) - set(legacy_entries)
+        candidate = {name: complete_candidate[name] for name in historical_names}
+        result = audit_candidate(
+            baseline,
+            candidate,
+            expected_new=expected_new,
+            legacy_entries=legacy_entries,
+        )
+        self.assertTrue(result["ok"], result)
+        self.assertEqual(result["expected_schema_migrations"], 311)
+        self.assertEqual(result["candidate_file_count"], 309)
+        self.assertEqual(result["unknown_candidate_files"], [])
 
 if __name__ == "__main__":
     unittest.main()

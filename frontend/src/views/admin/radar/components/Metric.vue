@@ -1,0 +1,1 @@
+<template><div class="rounded-lg border border-gray-200 bg-white p-4 dark:border-dark-700 dark:bg-dark-900"><p class="text-xs uppercase tracking-wide text-gray-500">{{ label }}</p><p class="mt-2 text-2xl font-semibold text-gray-900 dark:text-white">{{ value }}</p></div></template><script setup lang="ts">defineProps<{ label: string; value: string | number }>();</script>

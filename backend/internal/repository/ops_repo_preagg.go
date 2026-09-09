@@ -39,6 +39,7 @@ WITH usage_base AS (
   FROM usage_logs ul
   JOIN groups g ON g.id = ul.group_id
   WHERE ul.created_at >= $1 AND ul.created_at < $2
+    AND ul.traffic_class = 'production'
 ),
 usage_agg AS (
   SELECT
@@ -84,6 +85,7 @@ error_base AS (
   -- Exclude count_tokens requests from error metrics as they are informational probes
   WHERE created_at >= $1 AND created_at < $2
     AND is_count_tokens = FALSE
+    AND traffic_class = 'production'
 ),
 error_agg AS (
   SELECT

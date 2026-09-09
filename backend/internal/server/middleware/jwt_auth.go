@@ -95,6 +95,7 @@ func jwtAuth(
 
 		c.Set(string(ContextKeyUser), AuthSubject{
 			UserID:      user.ID,
+			TenantID:    user.ID,
 			Concurrency: user.Concurrency,
 		})
 		c.Set(string(ContextKeyUserRole), user.Role)

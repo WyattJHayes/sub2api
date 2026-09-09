@@ -1,0 +1,147 @@
+name: ${RADAR_COMPOSE_PROJECT_NAME:-sub2api-radar-staging}
+
+# Add docker-compose.reliability.yml explicitly for reliability or chaos drills.
+
+services:
+  radar-runner:
+    build:
+      context: ..
+      dockerfile: Dockerfile
+      args:
+        RADAR_WORKER_BASE_IMAGE: ${RADAR_WORKER_BASE_IMAGE:-sub2api/radar-worker:staging}
+    image: ${RADAR_WORKER_IMAGE:-sub2api/radar-worker:staging}
+    pull_policy: ${RADAR_IMAGE_PULL_POLICY:-build}
+    restart: unless-stopped
+    entrypoint: ["/usr/local/bin/radar-runner"]
+    environment:
+      RADAR_CONTROL_PLANE_URL: ${RADAR_CONTROL_PLANE_URL:-http://sub2api-staging:8080}
+      RADAR_ALLOW_INSECURE_HTTP: ${RADAR_ALLOW_INSECURE_HTTP:-true}
+      RADAR_WORKER_TOKEN: ${RADAR_RUNNER_WORKER_TOKEN:?RADAR_RUNNER_WORKER_TOKEN must be set to a 32+ character staging token}
+      RADAR_WORKER_ID: ${RADAR_RUNNER_WORKER_ID:-radar-runner-staging}
+      RADAR_MODE: runner
+      RADAR_REGION: ${RADAR_REGION:-staging}
+      RADAR_ROUTE_PROFILE_VERSION: ${RADAR_ROUTE_PROFILE_VERSION:-staging-v1}
+      RADAR_LIFECYCLE_PROTOCOL_VERSION: ${RADAR_LIFECYCLE_PROTOCOL_VERSION:-2}
+      RADAR_EXECUTOR: ${RADAR_EXECUTOR:-openai}
+      RADAR_EXECUTOR_URL: ${RADAR_EXECUTOR_URL:-http://sub2api-staging:8080}
+      RADAR_INTERNAL_DOMAINS: ${RADAR_INTERNAL_DOMAINS:-sub2api-staging}
+      RADAR_CAPABILITIES: ${RADAR_CAPABILITIES:-coding,reasoning,instruction,long_context,tool_call,protocol,safety,performance,cost}
+      RADAR_STATE_DIR: /var/lib/sub2api-radar
+      RADAR_METRICS_ENABLED: ${RADAR_METRICS_ENABLED:-false}
+      RADAR_METRICS_HOST: ${RADAR_METRICS_HOST:-0.0.0.0}
+      RADAR_METRICS_PORT: ${RADAR_RUNNER_METRICS_PORT:-9108}
+    volumes:
+      - radar_runner_state:/var/lib/sub2api-radar
+    networks:
+      - radar_worker_internal
+    read_only: true
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,nodev,size=64m
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    healthcheck:
+      test: ["CMD-SHELL", "kill -0 1"]
+      interval: 30s
+      timeout: 5s
+      start_period: 15s
+      retries: 3
+
+  radar-grader:
+    image: ${RADAR_WORKER_IMAGE:-sub2api/radar-worker:staging}
+    pull_policy: ${RADAR_IMAGE_PULL_POLICY:-build}
+    build:
+      context: ..
+      dockerfile: Dockerfile
+      args:
+        RADAR_WORKER_BASE_IMAGE: ${RADAR_WORKER_BASE_IMAGE:-sub2api/radar-worker:staging}
+    restart: unless-stopped
+    entrypoint: ["/usr/local/bin/radar-grader"]
+    environment:
+      RADAR_CONTROL_PLANE_URL: ${RADAR_CONTROL_PLANE_URL:-http://sub2api-staging:8080}
+      RADAR_ALLOW_INSECURE_HTTP: ${RADAR_ALLOW_INSECURE_HTTP:-true}
+      RADAR_WORKER_TOKEN: ${RADAR_GRADER_WORKER_TOKEN:?RADAR_GRADER_WORKER_TOKEN must be set to a 32+ character staging token}
+      RADAR_WORKER_ID: ${RADAR_GRADER_WORKER_ID:-radar-grader-staging}
+      RADAR_MODE: grader
+      RADAR_REGION: ${RADAR_REGION:-staging}
+      RADAR_ROUTE_PROFILE_VERSION: ${RADAR_ROUTE_PROFILE_VERSION:-staging-v1}
+      RADAR_LIFECYCLE_PROTOCOL_VERSION: ${RADAR_LIFECYCLE_PROTOCOL_VERSION:-2}
+      RADAR_GRADER_IDS: ${RADAR_GRADER_IDS:-exact,exact_json,protocol,safety,tool_call}
+      RADAR_STATE_DIR: /var/lib/sub2api-radar
+      RADAR_METRICS_ENABLED: ${RADAR_METRICS_ENABLED:-false}
+      RADAR_METRICS_HOST: ${RADAR_METRICS_HOST:-0.0.0.0}
+      RADAR_METRICS_PORT: ${RADAR_GRADER_METRICS_PORT:-9108}
+    volumes:
+      - radar_grader_state:/var/lib/sub2api-radar
+    networks:
+      - radar_worker_internal
+    read_only: true
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,nodev,size=64m
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    healthcheck:
+      test: ["CMD-SHELL", "kill -0 1"]
+      interval: 30s
+      timeout: 5s
+      start_period: 15s
+      retries: 3
+
+  radar-statistics:
+    image: ${RADAR_WORKER_IMAGE:-sub2api/radar-worker:staging}
+    pull_policy: ${RADAR_IMAGE_PULL_POLICY:-build}
+    build:
+      context: ..
+      dockerfile: Dockerfile
+      args:
+        RADAR_WORKER_BASE_IMAGE: ${RADAR_WORKER_BASE_IMAGE:-sub2api/radar-worker:staging}
+    restart: unless-stopped
+    entrypoint: ["/usr/local/bin/radar-statistics"]
+    environment:
+      RADAR_CONTROL_PLANE_URL: ${RADAR_CONTROL_PLANE_URL:-http://sub2api-staging:8080}
+      RADAR_ALLOW_INSECURE_HTTP: ${RADAR_ALLOW_INSECURE_HTTP:-true}
+      RADAR_WORKER_TOKEN: ${RADAR_STATISTICS_WORKER_TOKEN:?RADAR_STATISTICS_WORKER_TOKEN must be set to a 32+ character staging token}
+      RADAR_WORKER_ID: ${RADAR_STATISTICS_WORKER_ID:-radar-statistics-staging}
+      RADAR_MODE: statistics
+      RADAR_REGION: ${RADAR_REGION:-staging}
+      RADAR_ROUTE_PROFILE_VERSION: ${RADAR_ROUTE_PROFILE_VERSION:-staging-v1}
+      RADAR_LIFECYCLE_PROTOCOL_VERSION: ${RADAR_LIFECYCLE_PROTOCOL_VERSION:-2}
+      RADAR_ANALYSIS_CAPABILITIES: ${RADAR_ANALYSIS_CAPABILITIES:-coding,reasoning,safety,tool_use,protocol}
+      RADAR_ANALYSIS_VERSION: ${RADAR_ANALYSIS_VERSION:-v1}
+      RADAR_STATE_DIR: /var/lib/sub2api-radar
+      RADAR_METRICS_ENABLED: ${RADAR_METRICS_ENABLED:-false}
+      RADAR_METRICS_HOST: ${RADAR_METRICS_HOST:-0.0.0.0}
+      RADAR_METRICS_PORT: ${RADAR_STATISTICS_METRICS_PORT:-9108}
+    volumes:
+      - radar_statistics_state:/var/lib/sub2api-radar
+    networks:
+      - radar_worker_internal
+    read_only: true
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,nodev,size=64m
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    healthcheck:
+      test: ["CMD-SHELL", "kill -0 1"]
+      interval: 30s
+      timeout: 5s
+      start_period: 15s
+      retries: 3
+
+networks:
+  radar_worker_internal:
+    name: ${RADAR_COMPOSE_RESOURCE_PREFIX:-sub2api-radar-staging}-internal
+    internal: true
+
+volumes:
+  radar_runner_state:
+    name: ${RADAR_COMPOSE_RESOURCE_PREFIX:-sub2api-radar-staging}-runner
+  radar_grader_state:
+    name: ${RADAR_COMPOSE_RESOURCE_PREFIX:-sub2api-radar-staging}-grader
+  radar_statistics_state:
+    name: ${RADAR_COMPOSE_RESOURCE_PREFIX:-sub2api-radar-staging}-statistics

@@ -632,6 +632,9 @@ const sentUpstreamModel = (row: AdminUsageLog): string => row.upstream_model?.tr
 type UpstreamModelStatus = 'consistent' | 'unknown' | 'mismatch'
 
 const upstreamModelStatus = (row: AdminUsageLog): UpstreamModelStatus => {
+  if (row.upstream_model_status === 'consistent' || row.upstream_model_status === 'unknown' || row.upstream_model_status === 'mismatch') {
+    return row.upstream_model_status
+  }
   if (!row.upstream_response_model?.trim()) return 'unknown'
   if (row.upstream_model_mismatch === true) return 'mismatch'
   if (row.upstream_model_mismatch === false) return 'consistent'

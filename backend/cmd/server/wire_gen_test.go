@@ -10,6 +10,16 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+type cleanupOutboxSchedulerStub struct {
+	canceled string
+}
+
+func (*cleanupOutboxSchedulerStub) ScheduleRecurring(string, time.Duration, func()) {}
+
+func (s *cleanupOutboxSchedulerStub) Cancel(name string) {
+	s.canceled = name
+}
+
 func TestProvideServiceBuildInfo(t *testing.T) {
 	in := handler.BuildInfo{
 		Version:   "v-test",
@@ -49,6 +59,9 @@ func TestProvideCleanup_WithMinimalDependencies_NoPanic(t *testing.T) {
 	idempotencyCleanupSvc := service.NewIdempotencyCleanupService(nil, cfg)
 	schedulerSnapshotSvc := service.NewSchedulerSnapshotService(nil, nil, nil, nil, cfg)
 	opsSystemLogSinkSvc := service.NewOpsSystemLogSink(nil)
+	outboxScheduler := &cleanupOutboxSchedulerStub{}
+	outboxRuntime := service.NewEvaluationOutboxConsumerRuntime(nil, nil, service.EvaluationOutboxConsumerRuntimeOptions{})
+	outboxRuntime.SetScheduler(outboxScheduler)
 
 	cleanup := provideCleanup(
 		nil, // entClient
@@ -71,6 +84,9 @@ func TestProvideCleanup_WithMinimalDependencies_NoPanic(t *testing.T) {
 		proxyExpirySvc,
 		subscriptionExpirySvc,
 		&service.UsageCleanupService{},
+		&service.RouteEvidenceTerminalizationRuntime{},
+		outboxRuntime,
+		&service.EvaluationArtifactCleanupService{},
 		idempotencyCleanupSvc,
 		&service.BatchImageCleanupService{},
 		nil, // batchImageWorker
@@ -102,4 +118,5 @@ func TestProvideCleanup_WithMinimalDependencies_NoPanic(t *testing.T) {
 	require.NotPanics(t, func() {
 		cleanup()
 	})
+	require.Equal(t, "radar:evaluation-outbox-consumer", outboxScheduler.canceled)
 }

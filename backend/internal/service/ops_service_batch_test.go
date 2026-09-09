@@ -69,6 +69,27 @@ func TestOpsServiceRecordErrorBatch_SanitizesAndBatches(t *testing.T) {
 	require.False(t, second.CreatedAt.IsZero())
 }
 
+func TestOpsServiceRecordError_ClassifiesTrafficAtPersistenceBoundary(t *testing.T) {
+	t.Parallel()
+
+	var captured *OpsInsertErrorLogInput
+	repo := &opsRepoMock{
+		InsertErrorLogFn: func(_ context.Context, input *OpsInsertErrorLogInput) (int64, error) {
+			captured = input
+			return 1, nil
+		},
+	}
+	svc := NewOpsService(repo, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil)
+
+	require.NoError(t, svc.RecordError(context.Background(), &OpsInsertErrorLogInput{
+		RequestPath:   "/v1/models",
+		ErrorMessage:  "metadata failure",
+		IsCountTokens: false,
+	}))
+	require.NotNil(t, captured)
+	require.Equal(t, TrafficClassMetadata, captured.TrafficClass)
+}
+
 func TestOpsServiceRecordErrorBatch_DoesNotFallbackToSingleInsertsWhenBatchFails(t *testing.T) {
 	t.Parallel()
 

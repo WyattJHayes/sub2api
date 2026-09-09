@@ -99,8 +99,17 @@ func (s *FrontendServer) Middleware() gin.HandlerFunc {
 			cleanPath = "index.html"
 		}
 
-		// For index.html or SPA routes, serve with injected settings
-		if cleanPath == "index.html" || !s.fileExists(cleanPath) {
+		// For index.html or route-like SPA paths, serve with injected settings.
+		// A missing asset must fail closed so browsers do not execute index.html as JavaScript.
+		if cleanPath == "index.html" {
+			s.serveIndexHTML(c)
+			return
+		}
+		if !s.fileExists(cleanPath) {
+			if isStaticAssetPath(cleanPath) {
+				serveMissingStaticAsset(c)
+				return
+			}
 			s.serveIndexHTML(c)
 			return
 		}
@@ -332,9 +341,23 @@ func ServeEmbeddedFrontend() gin.HandlerFunc {
 			c.Abort()
 			return
 		}
+		if isStaticAssetPath(cleanPath) {
+			serveMissingStaticAsset(c)
+			return
+		}
 
 		serveIndexHTML(c, distFS)
 	}
+}
+
+func isStaticAssetPath(cleanPath string) bool {
+	return strings.HasPrefix(cleanPath, "assets/") || filepath.Ext(cleanPath) != ""
+}
+
+func serveMissingStaticAsset(c *gin.Context) {
+	c.Header("Cache-Control", "no-store")
+	c.Status(http.StatusNotFound)
+	c.Abort()
 }
 
 // tryServeOverrideFile is a standalone version of tryServeOverride for legacy usage.
@@ -359,6 +382,7 @@ func shouldBypassEmbeddedFrontend(path string) bool {
 		strings.HasPrefix(trimmed, "/v1beta/") ||
 		strings.HasPrefix(trimmed, "/backend-api/") ||
 		strings.HasPrefix(trimmed, "/antigravity/") ||
+		strings.HasPrefix(trimmed, "/internal/") ||
 		strings.HasPrefix(trimmed, "/setup/") ||
 		trimmed == "/health" ||
 		trimmed == "/models" ||

@@ -1,0 +1,57 @@
+{
+  "baseline_ledger_sha256": "897865aa1cdf7b635fed7836d0e410097a93639a4b23138ee16339ae0c188a1c",
+  "baseline_schema_migrations": 285,
+  "baseline_unique_filenames": 285,
+  "candidate_file_count": 298,
+  "candidate_ledger_sha256": "0712a3f3d2d8fa2deff7411dc5ea8282a5351e718e56278016efcd7d6d026a6d",
+  "candidate_pending_migrations": [
+    "221_group_model_pricing.sql",
+    "222_group_usage_daily_rollups.sql",
+    "223_group_usage_rollup_timezone.sql",
+    "224_user_platform_quotas_add_cn_providers.sql",
+    "225_backfill_codex_fingerprint_seed.sql",
+    "225_channel_model_time_pricing.sql",
+    "226_add_usage_log_effective_model_indexes_notx.sql",
+    "226_channel_monitor_quota_mode.sql",
+    "227_composite_routes_add_cn_providers.sql",
+    "227_ops_model_not_found_sla_classification.sql",
+    "228_channel_pricing_multipliers.sql",
+    "229_plugins.sql",
+    "230_plugin_artifacts.sql",
+    "231_add_ops_traffic_class.sql",
+    "232_rebuild_ops_preaggregates_after_traffic_class.sql"
+  ],
+  "checksum_mismatches": [],
+  "expected_candidate_ledger_sha256": "0712a3f3d2d8fa2deff7411dc5ea8282a5351e718e56278016efcd7d6d026a6d",
+  "expected_new_migrations": [
+    "221_group_model_pricing.sql",
+    "222_group_usage_daily_rollups.sql",
+    "223_group_usage_rollup_timezone.sql",
+    "224_user_platform_quotas_add_cn_providers.sql",
+    "225_backfill_codex_fingerprint_seed.sql",
+    "225_channel_model_time_pricing.sql",
+    "226_add_usage_log_effective_model_indexes_notx.sql",
+    "226_channel_monitor_quota_mode.sql",
+    "227_composite_routes_add_cn_providers.sql",
+    "227_ops_model_not_found_sla_classification.sql",
+    "228_channel_pricing_multipliers.sql",
+    "229_plugins.sql",
+    "230_plugin_artifacts.sql",
+    "231_add_ops_traffic_class.sql",
+    "232_rebuild_ops_preaggregates_after_traffic_class.sql"
+  ],
+  "expected_schema_migrations": 300,
+  "legacy_entries": [
+    "202_add_radar_tracked_models.sql",
+    "207_scope_radar_tracked_models_by_tenant.sql"
+  ],
+  "legacy_entries_not_missing": [],
+  "missing_baseline_entries": [
+    "202_add_radar_tracked_models.sql",
+    "207_scope_radar_tracked_models_by_tenant.sql"
+  ],
+  "missing_expected_new": [],
+  "ok": true,
+  "unexpected_missing_baseline": [],
+  "unknown_candidate_files": []
+}

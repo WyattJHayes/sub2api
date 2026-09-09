@@ -65,3 +65,20 @@ func TestBuildUsageLogBatchInsertQuery_UsesConflictDoNothing(t *testing.T) {
 	require.Contains(t, query, "ON CONFLICT (request_id, api_key_id) DO NOTHING")
 	require.NotContains(t, strings.ToUpper(query), "DO UPDATE")
 }
+
+func TestPrepareUsageLogInsertIncludesProductionTrafficClass(t *testing.T) {
+	log := &service.UsageLog{
+		UserID:          1,
+		APIKeyID:        2,
+		AccountID:       3,
+		RequestID:       "req-traffic-class",
+		Model:           "gpt-5",
+		InboundEndpoint: stringPtrForTest("/v1/responses"),
+	}
+	prepared := prepareUsageLogInsert(log)
+
+	require.Equal(t, service.TrafficClassProduction, log.TrafficClass)
+	require.Contains(t, prepared.args, service.TrafficClassProduction)
+}
+
+func stringPtrForTest(value string) *string { return &value }

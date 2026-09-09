@@ -583,6 +583,14 @@ type BatchUpdateRedeemCodesRequest struct {
 	Fields BatchUpdateRedeemCodeFields `json:"fields" binding:"required"`
 }
 
+type UpstreamModelStatus string
+
+const (
+	UpstreamModelStatusConsistent UpstreamModelStatus = "consistent"
+	UpstreamModelStatusUnknown    UpstreamModelStatus = "unknown"
+	UpstreamModelStatusMismatch   UpstreamModelStatus = "mismatch"
+)
+
 // UsageLog 是普通用户接口使用的 usage log DTO（不包含管理员字段）。
 type UsageLog struct {
 	ID        int64  `json:"id"`
@@ -601,6 +609,13 @@ type UsageLog struct {
 	InboundEndpoint *string `json:"inbound_endpoint,omitempty"`
 	// UpstreamEndpoint is the normalized upstream endpoint path, e.g. /v1/responses.
 	UpstreamEndpoint *string `json:"upstream_endpoint,omitempty"`
+	// UpstreamResponseModel is the raw model declared by the upstream response.
+	// It is safe for the owner of the usage record and is omitted when unavailable.
+	UpstreamResponseModel *string `json:"upstream_response_model,omitempty"`
+	// UpstreamModelStatus is a sanitized, evidence-based status for the owner of the record.
+	UpstreamModelStatus UpstreamModelStatus `json:"upstream_model_status"`
+	// TrafficClass is the normalized operational traffic category for this request.
+	TrafficClass string `json:"traffic_class"`
 
 	GroupID        *int64 `json:"group_id"`
 	SubscriptionID *int64 `json:"subscription_id"`
@@ -671,14 +686,15 @@ type UsageLog struct {
 type AdminUsageLog struct {
 	UsageLog
 
+	// UpstreamEndpoint is the normalized upstream endpoint path, e.g. /v1/responses.
+	UpstreamEndpoint *string `json:"upstream_endpoint,omitempty"`
+
 	// UpstreamModel is the actual model sent to the upstream provider after mapping.
 	// Omitted when no mapping was applied (requested model was used as-is).
 	UpstreamModel *string `json:"upstream_model,omitempty"`
 	// UpstreamReasoningEffort is the effort actually forwarded after group policy /
 	// model-family remapping. Omitted when it matches the client-requested value.
 	UpstreamReasoningEffort *string `json:"upstream_reasoning_effort,omitempty"`
-	// UpstreamResponseModel is the raw model declared by the upstream response.
-	UpstreamResponseModel *string `json:"upstream_response_model,omitempty"`
 	// UpstreamModelMismatch is nil when the upstream did not declare a model.
 	UpstreamModelMismatch *bool `json:"upstream_model_mismatch,omitempty"`
 

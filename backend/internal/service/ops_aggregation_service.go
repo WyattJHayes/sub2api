@@ -24,6 +24,9 @@ const (
 
 	// Keep in sync with ops retention target (vNext default 30d).
 	opsAggBackfillWindow = 1 * time.Hour
+	// A newly invalidated/empty pre-aggregation table needs a one-time rebuild
+	// of the retained window. Subsequent runs resume from the latest bucket.
+	opsAggInitialBackfillWindow = 30 * 24 * time.Hour
 
 	// Recompute overlap to absorb late-arriving rows near boundaries.
 	opsAggHourlyOverlap = 2 * time.Hour
@@ -182,24 +185,33 @@ func (s *OpsAggregationService) aggregateHourly() {
 
 	// Aggregate stable full hours only.
 	end := utcFloorToHour(time.Now().UTC().Add(-opsAggSafeDelay))
-	start := end.Add(-opsAggBackfillWindow)
+	var latest time.Time
+	latestFound := false
+	latestQuerySucceeded := false
 
 	// Resume from the latest bucket with overlap.
 	{
 		ctxMax, cancelMax := context.WithTimeout(context.Background(), opsAggMaxQueryTimeout)
-		latest, ok, err := s.opsRepo.GetLatestHourlyBucketStart(ctxMax)
+		latestValue, ok, err := s.opsRepo.GetLatestHourlyBucketStart(ctxMax)
 		cancelMax()
 		if err != nil {
 			logger.LegacyPrintf("service.ops_aggregation", "[OpsAggregation][hourly] failed to read latest bucket: %v", err)
-		} else if ok {
-			candidate := latest.Add(-opsAggHourlyOverlap)
-			if candidate.After(start) {
-				start = candidate
-			}
+		} else {
+			latest = latestValue
+			latestQuerySucceeded = true
+			latestFound = ok
 		}
 	}
 
-	start = utcFloorToHour(start)
+	start := opsAggregationStart(
+		end,
+		latest,
+		latestFound,
+		latestQuerySucceeded && !latestFound,
+		opsAggInitialBackfillWindow,
+		opsAggHourlyOverlap,
+		utcFloorToHour,
+	)
 	if !start.Before(end) {
 		return
 	}
@@ -281,23 +293,32 @@ func (s *OpsAggregationService) aggregateDaily() {
 	runAt := startedAt
 
 	end := utcFloorToDay(time.Now().UTC())
-	start := end.Add(-opsAggBackfillWindow)
+	var latest time.Time
+	latestFound := false
+	latestQuerySucceeded := false
 
 	{
 		ctxMax, cancelMax := context.WithTimeout(context.Background(), opsAggMaxQueryTimeout)
-		latest, ok, err := s.opsRepo.GetLatestDailyBucketDate(ctxMax)
+		latestValue, ok, err := s.opsRepo.GetLatestDailyBucketDate(ctxMax)
 		cancelMax()
 		if err != nil {
 			logger.LegacyPrintf("service.ops_aggregation", "[OpsAggregation][daily] failed to read latest bucket: %v", err)
-		} else if ok {
-			candidate := latest.Add(-opsAggDailyOverlap)
-			if candidate.After(start) {
-				start = candidate
-			}
+		} else {
+			latest = latestValue
+			latestQuerySucceeded = true
+			latestFound = ok
 		}
 	}
 
-	start = utcFloorToDay(start)
+	start := opsAggregationStart(
+		end,
+		latest,
+		latestFound,
+		latestQuerySucceeded && !latestFound,
+		opsAggInitialBackfillWindow,
+		opsAggDailyOverlap,
+		utcFloorToDay,
+	)
 	if !start.Before(end) {
 		return
 	}
@@ -438,6 +459,37 @@ func utcFloorToDay(t time.Time) time.Time {
 	u := t.UTC()
 	y, m, d := u.Date()
 	return time.Date(y, m, d, 0, 0, 0, 0, time.UTC)
+}
+
+// opsAggregationStart chooses a bounded rebuild window for an aggregation run.
+// Empty tables use the retained-window backfill, while an existing latest bucket
+// is recomputed with overlap to absorb late rows. A failed latest-bucket query
+// keeps the normal short window so a transient database issue cannot trigger a
+// full-table scan.
+func opsAggregationStart(
+	end, latest time.Time,
+	latestFound, useInitialBackfill bool,
+	initialWindow, overlap time.Duration,
+	floor func(time.Time) time.Time,
+) time.Time {
+	start := end.Add(-opsAggBackfillWindow)
+	retainedStart := end.Add(-initialWindow)
+	if useInitialBackfill && !latestFound {
+		start = retainedStart
+	}
+	if latestFound && !latest.IsZero() {
+		candidate := latest.Add(-overlap)
+		if candidate.Before(start) {
+			start = candidate
+		}
+	}
+	if start.Before(retainedStart) {
+		start = retainedStart
+	}
+	if floor == nil {
+		return start.UTC()
+	}
+	return floor(start)
 }
 
 func minTime(a, b time.Time) time.Time {

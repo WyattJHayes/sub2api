@@ -86,6 +86,7 @@ var usageLogInsertArgTypes = [...]string{
 	"text",        // session_id
 	"boolean",     // native_compaction_v2
 	"timestamptz", // created_at
+	"text",        // traffic_class
 }
 
 const (
@@ -286,7 +287,8 @@ func (r *usageLogRepository) createSingle(ctx context.Context, sqlq sqlExecutor,
 			upstream_request_id,
 			session_id,
 			native_compaction_v2,
-			created_at
+			created_at,
+			traffic_class
 		) VALUES (
 			$1, $2, $3, $4, $5, $6, $7, $8, $9,
 			$10, $11,
@@ -746,12 +748,13 @@ func buildUsageLogBatchInsertQuery(keys []string, preparedByKey map[string]usage
 			upstream_request_id,
 			session_id,
 			native_compaction_v2,
-			created_at
+			created_at,
+			traffic_class
 		) AS (VALUES `)
 
-	// Each batch row prepends the synthetic input_index before the 60
-	// usage-log column values.
-	args := make([]any, 0, len(keys)*61)
+	// Each batch row prepends the synthetic input_index before the usage-log
+	// column values.
+	args := make([]any, 0, len(keys)*(len(usageLogInsertArgTypes)+1))
 	argPos := 1
 	for idx, key := range keys {
 		if idx > 0 {
@@ -841,7 +844,8 @@ func buildUsageLogBatchInsertQuery(keys []string, preparedByKey map[string]usage
 				upstream_request_id,
 				session_id,
 				native_compaction_v2,
-				created_at
+				created_at,
+				traffic_class
 			)
 			SELECT
 				user_id,
@@ -905,7 +909,8 @@ func buildUsageLogBatchInsertQuery(keys []string, preparedByKey map[string]usage
 				upstream_request_id,
 				session_id,
 				native_compaction_v2,
-				created_at
+				created_at,
+				traffic_class
 			FROM input
 			ON CONFLICT (request_id, api_key_id) DO NOTHING
 			RETURNING request_id, api_key_id, id, created_at
@@ -1009,10 +1014,11 @@ func buildUsageLogBestEffortInsertQuery(preparedList []usageLogInsertPrepared) (
 			upstream_request_id,
 			session_id,
 			native_compaction_v2,
-			created_at
+			created_at,
+			traffic_class
 		) AS (VALUES `)
 
-	args := make([]any, 0, len(preparedList)*60)
+	args := make([]any, 0, len(preparedList)*len(usageLogInsertArgTypes))
 	argPos := 1
 	for idx, prepared := range preparedList {
 		if idx > 0 {
@@ -1099,7 +1105,8 @@ func buildUsageLogBestEffortInsertQuery(preparedList []usageLogInsertPrepared) (
 			upstream_request_id,
 			session_id,
 			native_compaction_v2,
-			created_at
+			created_at,
+			traffic_class
 		)
 		SELECT
 			user_id,
@@ -1163,7 +1170,8 @@ func buildUsageLogBestEffortInsertQuery(preparedList []usageLogInsertPrepared) (
 			upstream_request_id,
 			session_id,
 			native_compaction_v2,
-			created_at
+			created_at,
+			traffic_class
 		FROM input
 		ON CONFLICT (request_id, api_key_id) DO NOTHING
 	`)
@@ -1235,7 +1243,8 @@ func execUsageLogInsertNoResult(ctx context.Context, sqlq sqlExecutor, prepared 
 			upstream_request_id,
 			session_id,
 			native_compaction_v2,
-			created_at
+			created_at,
+			traffic_class
 		) VALUES (
 			$1, $2, $3, $4, $5, $6, $7, $8, $9,
 			$10, $11,
@@ -1293,6 +1302,14 @@ func prepareUsageLogInsert(log *service.UsageLog) usageLogInsertPrepared {
 	upstreamModel := nullString(log.UpstreamModel)
 	upstreamResponseModel := nullString(log.UpstreamResponseModel)
 	upstreamModelMismatch := nullBool(log.UpstreamModelMismatch)
+	trafficClass := service.ClassifyTraffic(service.TrafficClassificationInput{
+		InboundEndpoint:   usageLogStringValue(log.InboundEndpoint),
+		UpstreamEndpoint:  usageLogStringValue(log.UpstreamEndpoint),
+		UserAgent:         usageLogStringValue(log.UserAgent),
+		ExplicitClass:     string(log.TrafficClass),
+		DefaultProduction: true,
+	})
+	log.TrafficClass = trafficClass
 
 	var requestIDArg any
 	if requestID != "" {
@@ -1367,8 +1384,16 @@ func prepareUsageLogInsert(log *service.UsageLog) usageLogInsertPrepared {
 			sessionID,            // session_id
 			log.NativeCompactionV2,
 			createdAt,
+			trafficClass, // traffic_class
 		},
 	}
+}
+
+func usageLogStringValue(value *string) string {
+	if value == nil {
+		return ""
+	}
+	return *value
 }
 
 func usageLogBatchKey(requestID string, apiKeyID int64) string {

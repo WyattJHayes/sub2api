@@ -33,6 +33,8 @@ build/
 
 # Node modules (will be installed in container)
 frontend/node_modules/
+frontend/test-results/
+radar-worker/.venv/
 node_modules/
 
 # Go build cache (will be built in container)

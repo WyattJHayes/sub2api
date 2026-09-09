@@ -5,6 +5,10 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { AdminGroup, CodexModelsManifestConfig } from "@/types";
 import GroupsView from "@/views/admin/GroupsView.vue";
 
+vi.mock("@/stores/auth", () => ({
+  useAuthStore: () => ({ isSimpleMode: false }),
+}));
+
 const {
   listGroups,
   getModelsListCandidates,

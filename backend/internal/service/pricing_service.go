@@ -16,6 +16,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/Wei-Shaw/sub2api/internal/config"
@@ -199,9 +200,16 @@ type PricingService struct {
 	pricingData  map[string]*LiteLLMModelPricing
 	lastUpdated  time.Time
 	localHash    string
+	source       string
+	remoteHash   string
 	// fallback/override 文件在最近一次成功重建时的内容指纹，定时器据此判断是否
 	// 需要从本地目录缓存重建叠加层。
 	customFilesHash string
+
+	lastRefreshAt    time.Time
+	lastRefreshOK    bool
+	lastRefreshError string
+	fallbackTotal    atomic.Uint64
 
 	// 停止信号
 	stopCh chan struct{}

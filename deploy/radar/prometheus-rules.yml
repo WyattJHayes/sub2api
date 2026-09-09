@@ -1,0 +1,113 @@
+groups:
+  - name: radar-reliability-slo
+    interval: 30s
+    rules:
+      - alert: RadarGatewayP99LatencyHigh
+        expr: histogram_quantile(0.99, sum by (stage, le) (rate(radar_gateway_request_latency_ms_bucket{stage="gateway"}[5m]))) > 1000
+        for: 10m
+        labels:
+          severity: page
+          service: radar
+        annotations:
+          summary: Radar Gateway P99 latency exceeds one second
+          description: The controlled Gateway request P99 has exceeded the release SLO for ten minutes.
+          runbook: deploy/radar/production-runbook.md#latency-and-ttft
+
+      - alert: RadarGatewayTTFTP99High
+        expr: histogram_quantile(0.99, sum by (stage, le) (rate(radar_gateway_request_latency_ms_bucket{stage="ttft"}[5m]))) > 500
+        for: 10m
+        labels:
+          severity: page
+          service: radar
+        annotations:
+          summary: Radar first token P99 exceeds 500 milliseconds
+          description: Streaming first token latency is above the release SLO.
+          runbook: deploy/radar/production-runbook.md#latency-and-ttft
+
+      - alert: RadarGatewayErrorBudgetBurn
+        expr: (sum(rate(radar_gateway_requests_total{outcome=~"error|timeout|client_failure"}[5m])) / clamp_min(sum(rate(radar_gateway_requests_total[5m])), 1)) > 0.01
+        for: 10m
+        labels:
+          severity: page
+          service: radar
+        annotations:
+          summary: Radar Gateway error budget is burning rapidly
+          description: Request failures exceed one percent over the five minute window.
+          runbook: deploy/radar/production-runbook.md#gateway-errors
+
+      - alert: RadarQueueLagHigh
+        expr: max_over_time(radar_queue_lag_seconds[5m]) > 30
+        for: 10m
+        labels:
+          severity: ticket
+          service: radar
+        annotations:
+          summary: Radar queue lag exceeds thirty seconds
+          description: Reliability work is waiting too long before lease acquisition.
+          runbook: deploy/radar/production-runbook.md#queue-and-leases
+
+      - alert: RadarLeaseStale
+        expr: max_over_time(radar_lease_age_seconds[5m]) > 60
+        for: 5m
+        labels:
+          severity: page
+          service: radar
+        annotations:
+          summary: Radar lease age is stale
+          description: A controlled worker lease has exceeded the stale lease threshold.
+          runbook: deploy/radar/production-runbook.md#queue-and-leases
+
+      - alert: RadarAnalysisLagHigh
+        expr: max_over_time(radar_analysis_lag_seconds[10m]) > 300
+        for: 10m
+        labels:
+          severity: ticket
+          service: radar
+        annotations:
+          summary: Radar analysis lag exceeds five minutes
+          description: The statistics worker is processing windows too far behind their observation time.
+          runbook: deploy/radar/production-runbook.md#analysis-and-recovery
+
+      - alert: RadarRecoveryDurationHigh
+        expr: max_over_time(radar_recovery_duration_seconds[15m]) > 1800
+        for: 5m
+        labels:
+          severity: page
+          service: radar
+        annotations:
+          summary: Radar recovery duration exceeds the RTO objective
+          description: The latest recovery verification exceeded thirty minutes.
+          runbook: deploy/radar/production-runbook.md#analysis-and-recovery
+
+      - alert: RadarBillingIdempotencyFailure
+        expr: increase(radar_billing_idempotency_failures_total[10m]) > 0
+        for: 1m
+        labels:
+          severity: page
+          service: radar
+        annotations:
+          summary: Radar billing idempotency failure detected
+          description: A replay may have produced duplicate billing or an unverifiable ledger result.
+          runbook: deploy/radar/production-runbook.md#billing-and-evidence
+
+      - alert: RadarWorkerHeartbeatStale
+        expr: max_over_time(radar_worker_heartbeat_age_seconds[5m]) > 90
+        for: 5m
+        labels:
+          severity: page
+          service: radar
+        annotations:
+          summary: Radar worker heartbeat is stale
+          description: A worker has not confirmed a lease heartbeat within the allowed window.
+          runbook: deploy/radar/production-runbook.md#queue-and-leases
+
+      - alert: RadarGPUUtilizationSaturated
+        expr: max_over_time(radar_gpu_utilization_ratio[10m]) > 0.95
+        for: 15m
+        labels:
+          severity: ticket
+          service: radar
+        annotations:
+          summary: Radar GPU utilization is saturated
+          description: GPU utilization is above 95 percent and may increase queue and P99 pressure.
+          runbook: deploy/radar/production-runbook.md#capacity

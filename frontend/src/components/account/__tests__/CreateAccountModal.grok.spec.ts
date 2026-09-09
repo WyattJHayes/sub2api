@@ -15,6 +15,9 @@ describe('CreateAccountModal Grok account types', () => {
     expect(source).toContain("? 'https://api.x.ai/v1'")
     expect(source).toContain("form.platform === 'grok'")
     expect(source).toContain(':placeholder="apiKeyValuePlaceholder"')
+    // The placeholder is resolved in the shared computed value so CN platform
+    // modes can provide their own defaults without duplicating template logic.
+    expect(source).toContain("const apiKeyValuePlaceholder = computed")
     expect(source).toContain("return 'xai-...'")
   })
 

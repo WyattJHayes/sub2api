@@ -674,6 +674,16 @@ func AccountSummaryFromService(a *service.Account) *AccountSummary {
 	}
 }
 
+func upstreamModelStatus(responseModel *string, mismatch *bool) UpstreamModelStatus {
+	if responseModel == nil || strings.TrimSpace(*responseModel) == "" || mismatch == nil {
+		return UpstreamModelStatusUnknown
+	}
+	if *mismatch {
+		return UpstreamModelStatusMismatch
+	}
+	return UpstreamModelStatusConsistent
+}
+
 func usageLogFromServiceUser(l *service.UsageLog) UsageLog {
 	// 普通用户 DTO：严禁包含管理员字段（例如 account_rate_multiplier、account、upstream_model）。
 	requestType := l.EffectiveRequestType()
@@ -692,6 +702,9 @@ func usageLogFromServiceUser(l *service.UsageLog) UsageLog {
 		ServiceTier:               l.ServiceTier,
 		ReasoningEffort:           userFacingReasoningEffort(l),
 		InboundEndpoint:           l.InboundEndpoint,
+		UpstreamResponseModel:     l.UpstreamResponseModel,
+		UpstreamModelStatus:       upstreamModelStatus(l.UpstreamResponseModel, l.UpstreamModelMismatch),
+		TrafficClass:              string(service.NormalizeTrafficClass(string(l.TrafficClass))),
 		GroupID:                   l.GroupID,
 		SubscriptionID:            l.SubscriptionID,
 		InputTokens:               l.InputTokens,
@@ -756,12 +769,11 @@ func UsageLogFromServiceAdmin(l *service.UsageLog) *AdminUsageLog {
 		return nil
 	}
 	usageLog := usageLogFromServiceUser(l)
-	usageLog.UpstreamEndpoint = l.UpstreamEndpoint
 	return &AdminUsageLog{
 		UsageLog:                usageLog,
+		UpstreamEndpoint:        l.UpstreamEndpoint,
 		UpstreamModel:           l.UpstreamModel,
 		UpstreamReasoningEffort: adminUpstreamReasoningEffort(l),
-		UpstreamResponseModel:   l.UpstreamResponseModel,
 		UpstreamModelMismatch:   l.UpstreamModelMismatch,
 		ChannelID:               l.ChannelID,
 		ModelMappingChain:       l.ModelMappingChain,
