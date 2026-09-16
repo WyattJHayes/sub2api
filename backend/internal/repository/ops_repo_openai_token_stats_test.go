@@ -3,6 +3,7 @@ package repository
 import (
 	"context"
 	"database/sql/driver"
+	"fmt"
 	"regexp"
 	"testing"
 	"time"
@@ -45,18 +46,21 @@ func TestOpsRepositoryGetOpenAITokenStats_PlatformScope(t *testing.T) {
 			// model restriction cannot silently narrow the selected platform scope.
 			where := "WHERE ul.created_at >= $1 AND ul.created_at < $2"
 			args := []driver.Value{start, end}
+			next := 3
 			if tt.groupID != nil {
-				where += " AND ul.group_id = $3"
+				where += fmt.Sprintf(" AND ul.group_id = $%d", next)
 				args = append(args, *tt.groupID)
+				next++
 			}
 			if tt.platform != "" {
-				placeholder := "$3"
-				if tt.groupID != nil {
-					placeholder = "$4"
-				}
-				where += " AND COALESCE(NULLIF(g.platform,''), a.platform) = " + placeholder
+				where += fmt.Sprintf(" AND COALESCE(NULLIF(g.platform,''), a.platform) = $%d", next)
 				args = append(args, tt.platform)
+				next++
 			}
+			// The controlled fork classifies every usage row, so the repository
+			// always appends the production traffic-class predicate.
+			where += fmt.Sprintf(" AND ul.traffic_class = $%d", next)
+			args = append(args, string(service.TrafficClassProduction))
 			queryPrefix := regexp.QuoteMeta(where) + `\s+GROUP BY ul.model\s+\)`
 			mock.ExpectQuery(queryPrefix + `\s+SELECT COUNT\(\*\) FROM stats`).
 				WithArgs(args...).

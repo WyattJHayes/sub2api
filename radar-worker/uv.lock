@@ -995,7 +995,7 @@ wheels = [
 
 [[package]]
 name = "sub2api-radar-worker"
-version = "0.2.4"
+version = "0.2.5"
 source = { editable = "." }
 dependencies = [
     { name = "httpx" },

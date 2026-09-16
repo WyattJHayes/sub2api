@@ -119,7 +119,7 @@ func TestGatewayRoutesRetrievePinnedModel(t *testing.T) {
 		}
 		c.Set(string(servermiddleware.ContextKeyAPIKey), &service.APIKey{GroupID: &group.ID, Group: group})
 		c.Next()
-	}), nil, nil, nil, nil, nil, cfg)
+	}), nil, nil, nil, nil, nil, nil, cfg)
 	request := func(path, key, etag string) *httptest.ResponseRecorder {
 		w := httptest.NewRecorder()
 		req := httptest.NewRequest(http.MethodGet, path, nil)

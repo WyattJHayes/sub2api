@@ -13,8 +13,8 @@ REPO_ROOT = RADAR_DIR.parents[1]
 
 
 def load_builder():
-    path = RADAR_DIR / "build_v024_ghcr.py"
-    spec = importlib.util.spec_from_file_location("radar_build_v024", path)
+    path = RADAR_DIR / "build_v025_ghcr.py"
+    spec = importlib.util.spec_from_file_location("radar_build_v025", path)
     if spec is None or spec.loader is None:
         raise RuntimeError(f"cannot load {path.name}")
     module = importlib.util.module_from_spec(spec)
@@ -23,24 +23,25 @@ def load_builder():
     return module
 
 
-class V024ReleaseMetadataTests(unittest.TestCase):
-    def test_v024_builder_stays_pinned_to_its_own_release(self) -> None:
-        builder = (RADAR_DIR / "build_v024_ghcr.py").read_text(encoding="utf-8")
-        self.assertIn('APP_VERSION = "0.2.4"', builder)
-        self.assertIn('SCHEMA_VERSION = "radar-v024-image-record-v1"', builder)
-        self.assertIn("0.2.4-radar-v24-", builder)
+class V025ReleaseMetadataTests(unittest.TestCase):
+    def test_v025_builder_stays_pinned_to_its_own_release(self) -> None:
+        builder = (RADAR_DIR / "build_v025_ghcr.py").read_text(encoding="utf-8")
+        self.assertIn('APP_VERSION = "0.2.5"', builder)
+        self.assertIn('SCHEMA_VERSION = "radar-v025-image-record-v1"', builder)
+        self.assertIn("0.2.5-radar-v25-", builder)
+        self.assertNotIn('APP_VERSION = "0.2.4"', builder)
 
-    def test_v024_builder_has_an_immutable_release_contract(self) -> None:
+    def test_v025_builder_has_an_immutable_release_contract(self) -> None:
         builder = load_builder()
-        self.assertEqual("0.2.4", builder.APP_VERSION)
-        self.assertEqual("radar-v024-image-record-v1", builder.SCHEMA_VERSION)
+        self.assertEqual("0.2.5", builder.APP_VERSION)
+        self.assertEqual("radar-v025-image-record-v1", builder.SCHEMA_VERSION)
         builder.validate_inputs(
             builder.BuildInputs(
-                version="0.2.4",
-                image_tag="0.2.4-radar-v24-20260909T010203Z",
+                version="0.2.5",
+                image_tag="0.2.5-radar-v25-20260916T010203Z",
                 commit="a" * 40,
                 source_sha256="b" * 64,
-                date="2026-09-09T01:02:03Z",
+                date="2026-09-16T01:02:03Z",
                 node_image="node@sha256:" + "1" * 64,
                 golang_image="golang@sha256:" + "2" * 64,
                 alpine_image="alpine@sha256:" + "3" * 64,
@@ -49,15 +50,23 @@ class V024ReleaseMetadataTests(unittest.TestCase):
             )
         )
 
-    def test_v024_manifest_remains_an_immutable_historical_contract(self) -> None:
-        manifest_dir = RADAR_DIR / "manifests" / "v0.2.4"
+    def test_v025_manifest_covers_all_current_schema_migrations(self) -> None:
+        manifest_dir = RADAR_DIR / "manifests" / "v0.2.5"
         baseline = read_manifest(manifest_dir / "migration-baseline.tsv")
         expected_new = read_name_list(manifest_dir / "expected-new.txt")
         legacy_entries = read_name_list(manifest_dir / "legacy-entries.txt")
+        result = audit_candidate(
+            baseline,
+            candidate_manifest(REPO_ROOT / "backend" / "migrations"),
+            expected_new=expected_new,
+            legacy_entries=legacy_entries,
+        )
+        self.assertTrue(result["ok"], result)
         self.assertEqual(285, len(baseline))
-        self.assertEqual(29, len(expected_new))
+        self.assertEqual(31, len(expected_new))
         self.assertEqual(2, len(legacy_entries))
-        self.assertTrue(set(expected_new).isdisjoint(legacy_entries))
+        self.assertEqual(316, result["expected_schema_migrations"])
+        self.assertEqual(314, result["candidate_file_count"])
 
     def test_current_release_tools_default_to_v025(self) -> None:
         for name in (

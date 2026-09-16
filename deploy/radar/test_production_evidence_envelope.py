@@ -25,7 +25,7 @@ RELEASE_A = "019f97ec-a8e1-78f0-b145-390533dff847"
 RELEASE_B = "019f97ec-a8e1-78f0-b145-390533dff848"
 OFFICIAL_V01178_COMMIT = "e0c48a19ed794a565e3858662520afe0a1f9f0ba"
 NOW = datetime(2026, 8, 14, 12, 0, 0, tzinfo=UTC)
-IMAGE_TAG = "0.2.4-radar-v24-20260910T000000Z"
+IMAGE_TAG = "0.2.5-radar-v25-20260916T000000Z"
 
 
 def load_module() -> Any | None:
@@ -54,11 +54,11 @@ def binding(**overrides: str) -> dict[str, str]:
 
 def candidate_record(**overrides: Any) -> dict[str, Any]:
     return {
-        "schema_version": "radar-v024-image-record-v1",
+        "schema_version": "radar-v025-image-record-v1",
         "source_sha256": SHA_D,
         "revision": SHA_D[:40],
         "source_commit": SHA_D[:40],
-        "version": "0.2.4",
+        "version": "0.2.5",
         "image_tag": IMAGE_TAG,
         "build_date": "2026-08-14T11:00:00Z",
         "platform": "linux/amd64",
@@ -67,14 +67,14 @@ def candidate_record(**overrides: Any) -> dict[str, Any]:
             "tag": "ghcr.io/wyattjhayes/sub2api-radar-control-plane:" + IMAGE_TAG,
             "manifest_digest": "sha256:" + "1" * 64,
             "config_digest": "sha256:" + "2" * 64,
-            "version_output": "sub2api 0.2.4",
+            "version_output": "sub2api 0.2.5",
         },
         "worker": {
             "repository": "ghcr.io/wyattjhayes/sub2api-radar-worker",
             "tag": "ghcr.io/wyattjhayes/sub2api-radar-worker:" + IMAGE_TAG,
             "manifest_digest": "sha256:" + "3" * 64,
             "config_digest": "sha256:" + "4" * 64,
-            "version_output": "0.2.4",
+            "version_output": "0.2.5",
         },
         **overrides,
     }
