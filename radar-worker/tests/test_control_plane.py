@@ -126,6 +126,19 @@ def test_analysis_lease_rejects_sensitive_quality_context_fields(sensitive_key: 
         AnalysisLease.model_validate(payload)
 
 
+def test_analysis_lease_accepts_null_source_candidates() -> None:
+    """Older control planes serialized a nil slice as JSON null."""
+
+    payload = analysis_lease_payload()
+    quality_context = payload["quality_context"]
+    assert isinstance(quality_context, dict)
+    quality_context["source_candidates"] = None
+
+    lease = AnalysisLease.model_validate(payload)
+    assert lease.quality_context is not None
+    assert lease.quality_context.source_candidates == ()
+
+
 def test_analysis_lease_accepts_digest_only_source_candidate_evidence() -> None:
     payload = analysis_lease_payload()
     quality_context = payload["quality_context"]

@@ -147,6 +147,33 @@ func TestClaimAnalysisQualityContextWithIncompleteFrozenInputsIsNil(t *testing.T
 	require.Nil(t, buildFrozenQualityAnalysisContext(uuid.New(), "model-a", service.DefaultQualityPolicy(), inputs))
 }
 
+// A run whose cases carry no fingerprint probe produces no source candidates.
+// The frozen context must still encode the field as an empty JSON array so the
+// worker, which types it as a tuple, does not reject the lease.
+func TestClaimAnalysisQualityContextWithoutFingerprintCandidatesEncodesEmptyArray(t *testing.T) {
+	timestamp := time.Date(2026, time.August, 11, 12, 0, 0, 0, time.UTC)
+	inputs := make([]frozenQualityAnalysisInput, 0, len(qualityDimensions))
+	for _, dimension := range qualityDimensions {
+		inputs = append(inputs, frozenQualityAnalysisInput{
+			Dimension: dimension, CaseID: uuid.New(), BaselineScore: decimal.RequireFromString("1.00"),
+			CandidateScore: decimal.RequireFromString("1.00"), BaselineScoreID: uuid.New(), CandidateScoreID: uuid.New(),
+			BaselineCreated: timestamp, CandidateCreated: timestamp, ContentSHA256: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+			ProbeSpec: service.QualityProbeSpec{SchemaVersion: "quality-v1", QualityDimension: dimension, EventClass: service.QualityProbeEventClassResponseShape, MinimumSamples: 1},
+		})
+	}
+
+	context := buildFrozenQualityAnalysisContext(uuid.New(), "model-a", service.DefaultQualityPolicy(), inputs)
+	require.NotNil(t, context)
+	require.NotNil(t, context.SourceCandidates)
+	require.Empty(t, context.SourceCandidates)
+
+	encoded, err := json.Marshal(context)
+	require.NoError(t, err)
+	var payload map[string]json.RawMessage
+	require.NoError(t, json.Unmarshal(encoded, &payload))
+	require.JSONEq(t, "[]", string(payload["source_candidates"]))
+}
+
 func TestClaimAnalysisQualityContextWithMixedDimensionProbeSpecsIsNil(t *testing.T) {
 	timestamp := time.Date(2026, time.August, 11, 12, 0, 0, 0, time.UTC)
 	inputs := make([]frozenQualityAnalysisInput, 0, len(qualityDimensions)+1)

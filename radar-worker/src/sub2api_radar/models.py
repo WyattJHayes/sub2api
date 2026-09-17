@@ -134,6 +134,13 @@ class QualityAnalysisContext(StrictModel):
     dimensions: tuple[QualityAnalysisDimensionInput, ...]
     source_candidates: tuple[QualitySourceCandidate, ...] = ()
 
+    @field_validator("source_candidates", mode="before")
+    @classmethod
+    def coerce_null_source_candidates(cls, value: Any) -> Any:
+        # Older control planes serialize a nil slice as JSON null. Treat it as
+        # "no fingerprint candidates" instead of failing lease validation.
+        return () if value is None else value
+
     @field_validator("dimensions")
     @classmethod
     def validate_required_dimensions(

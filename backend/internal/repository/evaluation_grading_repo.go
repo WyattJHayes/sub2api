@@ -1744,6 +1744,10 @@ func buildFrozenQualityAnalysisContext(runID uuid.UUID, modelAlias string, polic
 	context := &service.QualityAnalysisContext{
 		RunID: runID, ModelAlias: modelAlias, PolicyVersion: "quality-v1", Policy: policy,
 		Dimensions: make([]service.QualityAnalysisDimensionInput, 0, len(qualityDimensions)),
+		// Seed the candidate list so a run without fingerprint probes still
+		// serializes "source_candidates" as [] instead of null. Workers reject
+		// null because the field is typed as a tuple.
+		SourceCandidates: make([]service.QualitySourceCandidateInput, 0),
 	}
 	candidates := map[string]service.SourceCandidate{}
 	candidateInputs := map[string][]frozenQualityAnalysisInput{}
