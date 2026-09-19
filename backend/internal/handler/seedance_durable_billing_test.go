@@ -5,6 +5,7 @@ package handler
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -14,11 +15,14 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Wei-Shaw/sub2api/internal/pkg/logger"
 	middleware "github.com/Wei-Shaw/sub2api/internal/server/middleware"
 	"github.com/Wei-Shaw/sub2api/internal/service"
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
 	"github.com/stretchr/testify/require"
+	"go.uber.org/zap"
+	"go.uber.org/zap/zaptest/observer"
 )
 
 type seedanceEventLog struct {
@@ -341,6 +345,72 @@ func TestSeedanceCreatePersistenceFailureDoesNotReturnUpstreamSuccess(t *testing
 	require.Len(t, creates, 2)
 	require.Equal(t, []int{0, 0}, bodyLengths)
 	require.Equal(t, 1, upstream.calls)
+}
+
+func TestSeedanceCreatePersistenceFailureLogsExcludeSensitivePayloads(t *testing.T) {
+	secrets := []string{
+		"sk-secret-value",
+		"Bearer abc",
+		"private prompt",
+		"https://cdn.example/private.mp4",
+	}
+	repositoryErr := errors.New(strings.Join(secrets, " "))
+	repo := &seedanceDurableTaskRepoStub{errors: []error{repositoryErr, repositoryErr}}
+	h, c, recorder, _ := newSeedanceDurableCreateRequest(t, repo)
+	core, observed := observer.New(zap.DebugLevel)
+	body := `{"model":"doubao-seedance","content":[{"type":"text","text":"private prompt"}],"url":"https://cdn.example/private.mp4"}`
+	request := httptest.NewRequest(http.MethodPost, "/api/v3/contents/generations/tasks", strings.NewReader(body))
+	request.Header.Set("Content-Type", "application/json")
+	request.Header.Set("Authorization", "Bearer abc")
+	request = request.WithContext(logger.IntoContext(request.Context(), zap.New(core)))
+	c.Request = request
+
+	h.SeedanceTasks(c)
+
+	require.Equal(t, http.StatusServiceUnavailable, recorder.Code, recorder.Body.String())
+	entries := observed.FilterMessage("seedance_task_persistence_failed").All()
+	require.Len(t, entries, 1)
+	require.Equal(t, zap.ErrorLevel, entries[0].Level)
+	fields := entries[0].ContextMap()
+	require.Equal(t, service.AsyncVideoBillingProviderSeedance, fields["provider"])
+	require.Equal(t, "seedance:task-durable", fields["task_id"])
+	require.Equal(t, "persistence_failed", fields["status"])
+	require.Equal(t, "seedance_task_persistence_failed", fields["error_code"])
+	require.Equal(t, int64(2), fields["attempt_count"])
+	require.Contains(t, fields, "elapsed_ms")
+	text := fmt.Sprint(entries[0].Message, " ", fields)
+	for _, secret := range secrets {
+		require.NotContains(t, text, secret)
+	}
+
+	t.Run("cancelled retry records the actual attempt count", func(t *testing.T) {
+		repo := &seedanceDurableTaskRepoStub{errors: []error{repositoryErr}}
+		h, c, _, _ := newSeedanceDurableCreateRequest(t, repo)
+		core, observed := observer.New(zap.DebugLevel)
+		ctx, cancel := context.WithCancel(context.Background())
+		cancel()
+
+		err := h.persistSeedanceCreate(
+			ctx,
+			c,
+			zap.New(core),
+			&service.Account{ID: 7, Platform: service.PlatformOpenAI},
+			&service.APIKey{ID: 8},
+			middleware.AuthSubject{UserID: 9},
+			nil,
+			time.Now(),
+			"doubao-seedance",
+			[]byte(`{"model":"doubao-seedance","content":[{"type":"text","text":"private prompt"}]}`),
+			&service.OpenAIForwardResult{ResponseID: "seedance:task-durable"},
+		)
+
+		require.ErrorIs(t, err, errSeedanceTaskPersistence)
+		creates, _ := repo.snapshot()
+		require.Len(t, creates, 1)
+		entries := observed.FilterMessage("seedance_task_persistence_failed").All()
+		require.Len(t, entries, 1)
+		require.Equal(t, int64(1), entries[0].ContextMap()["attempt_count"])
+	})
 }
 
 func TestSeedanceCreateDuplicatePersistenceReturnsSuccess(t *testing.T) {

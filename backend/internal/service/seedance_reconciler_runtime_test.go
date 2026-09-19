@@ -5,6 +5,8 @@ package service
 import (
 	"context"
 	"errors"
+	"fmt"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -12,6 +14,8 @@ import (
 	"github.com/Wei-Shaw/sub2api/internal/config"
 	"github.com/google/uuid"
 	"github.com/stretchr/testify/require"
+	"go.uber.org/zap"
+	"go.uber.org/zap/zaptest/observer"
 )
 
 type seedanceReconcilerTaskRepoStub struct {
@@ -19,6 +23,7 @@ type seedanceReconcilerTaskRepoStub struct {
 
 	mu             sync.Mutex
 	claimBatches   [][]AsyncVideoBillingTask
+	claimErr       error
 	claimCalls     int
 	retryCalls     []seedanceSettlementRetryCall
 	terminalCalls  []seedanceSettlementTerminalCall
@@ -33,6 +38,9 @@ func (s *seedanceReconcilerTaskRepoStub) ClaimDue(_ context.Context, _ string, _
 	s.claimCalls++
 	if s.claimStarted != nil {
 		s.claimStartOnce.Do(func() { close(s.claimStarted) })
+	}
+	if s.claimErr != nil {
+		return nil, s.claimErr
 	}
 	if len(s.claimBatches) == 0 {
 		return nil, nil
@@ -304,6 +312,182 @@ func newSeedanceReconcilerTestRuntime(
 	accounts := &seedanceReconcilerAccountRepoStub{account: settlementHarness.accounts.value}
 	runtime := NewSeedanceReconcilerRuntime(tasks, accounts, client, settlementHarness.service, options)
 	return runtime, settlementHarness, accounts
+}
+
+func TestSeedanceReconcilerLogsExcludeSensitivePayloads(t *testing.T) {
+	now := time.Date(2026, time.September, 20, 10, 0, 0, 0, time.UTC)
+	secrets := []string{
+		"sk-secret-value",
+		"Bearer abc",
+		"private prompt",
+		"https://cdn.example/private.mp4",
+	}
+	type scenario struct {
+		name         string
+		event        string
+		level        zap.AtomicLevel
+		status       string
+		errorCode    string
+		configure    func(*seedanceReconcilerClientStub, *seedanceSettlementHarness, *AsyncVideoBillingTask)
+		assertResult func(*testing.T, SeedanceReconcilerRunResult)
+	}
+	scenarios := []scenario{
+		{
+			name:      "retry",
+			event:     "seedance_task_retried",
+			level:     zap.NewAtomicLevelAt(zap.WarnLevel),
+			status:    AsyncVideoBillingStatusPending,
+			errorCode: "seedance_upstream_temporary",
+			configure: func(client *seedanceReconcilerClientStub, _ *seedanceSettlementHarness, _ *AsyncVideoBillingTask) {
+				client.errors = []error{errors.New(strings.Join(secrets, " "))}
+			},
+			assertResult: func(t *testing.T, result SeedanceReconcilerRunResult) {
+				require.Equal(t, 1, result.Retried)
+			},
+		},
+		{
+			name:   "settled",
+			event:  "seedance_task_settled",
+			level:  zap.NewAtomicLevelAt(zap.InfoLevel),
+			status: AsyncVideoBillingStatusSettled,
+			configure: func(client *seedanceReconcilerClientStub, harness *seedanceSettlementHarness, _ *AsyncVideoBillingTask) {
+				client.responses = []*SeedanceUpstreamResponse{seedanceSettlementSucceeded(90)}
+				harness.service.recordUsage = func(context.Context, *OpenAIRecordUsageInput) error { return nil }
+			},
+			assertResult: func(t *testing.T, result SeedanceReconcilerRunResult) {
+				require.Equal(t, 1, result.Settled)
+			},
+		},
+		{
+			name:   "terminal",
+			event:  "seedance_task_terminal",
+			level:  zap.NewAtomicLevelAt(zap.InfoLevel),
+			status: AsyncVideoBillingStatusFailed,
+			configure: func(client *seedanceReconcilerClientStub, _ *seedanceSettlementHarness, _ *AsyncVideoBillingTask) {
+				client.responses = []*SeedanceUpstreamResponse{{State: SeedanceObservedFailed}}
+			},
+			assertResult: func(t *testing.T, result SeedanceReconcilerRunResult) {
+				require.Equal(t, 1, result.Terminal)
+			},
+		},
+		{
+			name:      "dead_lettered",
+			event:     "seedance_task_dead_lettered",
+			level:     zap.NewAtomicLevelAt(zap.ErrorLevel),
+			status:    AsyncVideoBillingStatusDeadLetter,
+			errorCode: "seedance_not_found_persistent",
+			configure: func(client *seedanceReconcilerClientStub, _ *seedanceSettlementHarness, task *AsyncVideoBillingTask) {
+				task.CreatedAt = now.Add(-2 * time.Minute)
+				client.errors = []error{&SeedanceUpstreamError{
+					Kind:       SeedanceUpstreamErrorNotFound,
+					StatusCode: 404,
+					SafeCode:   strings.Join(secrets, " "),
+				}}
+			},
+			assertResult: func(t *testing.T, result SeedanceReconcilerRunResult) {
+				require.Equal(t, 1, result.DeadLettered)
+			},
+		},
+	}
+
+	for _, tc := range scenarios {
+		t.Run(tc.name, func(t *testing.T) {
+			task := seedanceReconcilerClaimedTask(now)
+			task.UpstreamEndpoint = secrets[3]
+			client := &seedanceReconcilerClientStub{}
+			tasks := &seedanceReconcilerTaskRepoStub{}
+			runtime, harness, accounts := newSeedanceReconcilerTestRuntime(tasks, client, SeedanceReconcilerOptions{
+				Enabled:        true,
+				RequestTimeout: time.Second,
+				LeaseDuration:  time.Minute,
+				NotFoundGrace:  time.Minute,
+				ClaimBatch:     8,
+				MaxConcurrency: 1,
+			})
+			accounts.account.Credentials = map[string]any{"access_token": secrets[0]}
+			tc.configure(client, harness, &task)
+			tasks.claimBatches = [][]AsyncVideoBillingTask{{task}}
+			core, observed := observer.New(zap.DebugLevel)
+			runtime.log = zap.New(core)
+			runtime.now = func() time.Time { return now }
+			runtime.jitter = func() float64 { return 0 }
+
+			result, err := runtime.ProcessDue(context.Background())
+
+			require.NoError(t, err)
+			tc.assertResult(t, result)
+			entries := observed.All()
+			for _, entry := range entries {
+				text := fmt.Sprint(entry.Message, " ", entry.ContextMap())
+				for _, secret := range secrets {
+					require.NotContains(t, text, secret)
+				}
+			}
+			claimed := observed.FilterMessage("seedance_task_claimed").All()
+			require.Len(t, claimed, 1)
+			require.Equal(t, zap.InfoLevel, claimed[0].Level)
+			transition := observed.FilterMessage(tc.event).All()
+			require.Len(t, transition, 1)
+			require.Equal(t, tc.level.Level(), transition[0].Level)
+			fields := transition[0].ContextMap()
+			require.Equal(t, AsyncVideoBillingProviderSeedance, fields["provider"])
+			require.Equal(t, task.TaskKey, fields["task_id"])
+			require.Equal(t, task.UserID, fields["user_id"])
+			require.Equal(t, task.APIKeyID, fields["api_key_id"])
+			require.Equal(t, task.AccountID, fields["account_id"])
+			require.Equal(t, int64(task.AttemptCount), fields["attempt_count"])
+			require.Equal(t, tc.status, fields["status"])
+			require.Equal(t, tc.errorCode, fields["error_code"])
+			require.Contains(t, fields, "elapsed_ms")
+			poll := observed.FilterMessage("seedance_reconciler_poll").All()
+			require.Len(t, poll, 1)
+			require.Equal(t, zap.InfoLevel, poll[0].Level)
+		})
+	}
+
+	t.Run("empty poll is debug", func(t *testing.T) {
+		runtime, _, _ := newSeedanceReconcilerTestRuntime(
+			&seedanceReconcilerTaskRepoStub{},
+			&seedanceReconcilerClientStub{},
+			SeedanceReconcilerOptions{Enabled: true, ClaimBatch: 8, MaxConcurrency: 1},
+		)
+		core, observed := observer.New(zap.DebugLevel)
+		runtime.log = zap.New(core)
+		runtime.now = func() time.Time { return now }
+
+		result, err := runtime.ProcessDue(context.Background())
+
+		require.NoError(t, err)
+		require.Zero(t, result.Selected)
+		poll := observed.FilterMessage("seedance_reconciler_poll").All()
+		require.Len(t, poll, 1)
+		require.Equal(t, zap.DebugLevel, poll[0].Level)
+	})
+
+	t.Run("poll failure excludes repository error text", func(t *testing.T) {
+		tasks := &seedanceReconcilerTaskRepoStub{claimErr: errors.New(strings.Join(secrets, " "))}
+		runtime, _, _ := newSeedanceReconcilerTestRuntime(
+			tasks,
+			&seedanceReconcilerClientStub{},
+			SeedanceReconcilerOptions{Enabled: true, ClaimBatch: 8, MaxConcurrency: 1},
+		)
+		core, observed := observer.New(zap.DebugLevel)
+		runtime.log = zap.New(core)
+
+		_, err := runtime.ProcessDue(context.Background())
+
+		require.Error(t, err)
+		poll := observed.FilterMessage("seedance_reconciler_poll").All()
+		require.Len(t, poll, 1)
+		require.Equal(t, zap.ErrorLevel, poll[0].Level)
+		fields := poll[0].ContextMap()
+		require.Equal(t, "failed", fields["status"])
+		require.Equal(t, "seedance_reconciler_failed", fields["error_code"])
+		text := fmt.Sprint(poll[0].Message, " ", fields)
+		for _, secret := range secrets {
+			require.NotContains(t, text, secret)
+		}
+	})
 }
 
 func TestSeedanceReconcilerTransient404UsesGraceThenDeadLetters(t *testing.T) {

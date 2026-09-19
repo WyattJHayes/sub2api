@@ -142,6 +142,7 @@ func (h *OpenAIGatewayHandler) persistSeedanceCreate(
 	body []byte,
 	result *service.OpenAIForwardResult,
 ) error {
+	persistenceStarted := time.Now()
 	if h == nil || h.seedanceTasks == nil || result == nil || account == nil || apiKey == nil {
 		return errSeedanceTaskPersistence
 	}
@@ -175,7 +176,9 @@ func (h *OpenAIGatewayHandler) persistSeedanceCreate(
 		UpstreamEndpoint:    firstNonEmptyString(result.UpstreamEndpoint, GetUpstreamEndpoint(c, account.Platform)),
 	}
 
+	attemptCount := 0
 	for attempt := 1; attempt <= 2; attempt++ {
+		attemptCount++
 		if _, err := h.seedanceTasks.Create(ctx, input); err == nil {
 			return nil
 		}
@@ -196,11 +199,15 @@ func (h *OpenAIGatewayHandler) persistSeedanceCreate(
 	}
 
 	reqLog.Error("seedance_task_persistence_failed",
+		zap.String("provider", service.AsyncVideoBillingProviderSeedance),
 		zap.String("error_code", "seedance_task_persistence_failed"),
-		zap.String("task_key", result.ResponseID),
+		zap.String("task_id", result.ResponseID),
 		zap.Int64("account_id", account.ID),
 		zap.Int64("user_id", subject.UserID),
 		zap.Int64("api_key_id", apiKey.ID),
+		zap.Int("attempt_count", attemptCount),
+		zap.Int64("elapsed_ms", max(time.Since(persistenceStarted).Milliseconds(), 0)),
+		zap.String("status", "persistence_failed"),
 	)
 	return errSeedanceTaskPersistence
 }
