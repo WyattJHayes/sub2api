@@ -80,9 +80,22 @@ export interface RadarRun {
   status: string
   budget_limit?: string
   reserved_cost?: string
+  actual_cost?: string | null
+  evidence_count?: number
+  billed_evidence_count?: number
+  pause_reason?: string | null
   created_at?: string
   started_at?: string
   finished_at?: string
+}
+export interface RadarRunControlResult {
+  run_id: string
+  from_status: string
+  to_status: string
+  previous_epoch: number
+  current_epoch: number
+  affected_work_count: number
+  event_id: string
 }
 export interface CreateRadarCasePayload {
   case_key: string
@@ -163,6 +176,9 @@ export const radarAdminAPI = {
   createPlan: (payload: CreateRadarPlanPayload) => apiClient.post<RadarPlan>('/admin/radar/plans', payload).then((response) => response.data),
   enableEvaluationKey: (id: number) => apiClient.post(`/admin/radar/evaluation-keys/${id}/enable`).then((response) => response.data),
   startRun: (payload: StartRadarRunPayload) => apiClient.post<RadarRun>('/admin/radar/runs', payload).then((response) => response.data),
+  pauseRun: (id: string, idempotencyKey: string) => apiClient.post<RadarRunControlResult>(`/admin/radar/runs/${encodeURIComponent(id)}/pause`, { reason: 'operator' }, {
+    headers: { 'Idempotency-Key': idempotencyKey }
+  }).then((response) => response.data),
   evaluateGate: (payload: Record<string, unknown>) => apiClient.post<RadarGate>('/admin/radar/gates/evaluate', payload).then((response) => response.data)
 }
 

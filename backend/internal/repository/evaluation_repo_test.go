@@ -1,12 +1,35 @@
 package repository
 
 import (
+	"context"
 	"crypto/sha256"
 	"fmt"
 	"testing"
 
+	"github.com/DATA-DOG/go-sqlmock"
+	"github.com/Wei-Shaw/sub2api/internal/service"
+	"github.com/google/uuid"
 	"github.com/shopspring/decimal"
+	"github.com/stretchr/testify/require"
 )
+
+func TestCreateRunRejectsParametersNotPresentInFrozenCaseBeforeInsertion(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = db.Close() })
+	planID := uuid.New()
+	expectRadarWorkerWriter(t, mock)
+	mock.ExpectQuery(`(?s)SELECT d.status, p.model_matrix.*FOR UPDATE OF p`).WithArgs(planID).
+		WillReturnRows(sqlmock.NewRows([]string{"dataset_status", "model_matrix", "max_run_cost", "enabled", "daily_cost_limit", "key_usable", "daily_cost"}).
+			AddRow("published", `[{"route":"gpt-6-astra","baseline":{"route":"gpt-5.6-sol","max_tokens":256},"candidate":{"route":"gpt-6-astra","temperature":0}}]`, "2", true, "2", true, "0"))
+	mock.ExpectQuery(`(?s)SELECT c.id, p.dataset_version_id.*FROM evaluation_cases`).WithArgs(planID).
+		WillReturnRows(sqlmock.NewRows([]string{"id", "dataset_id", "priority", "sample_count", "estimated_cost", "prompt_spec", "execution_spec", "grader_id", "grader_version"}).
+			AddRow(uuid.New(), uuid.New(), "P0", 3, "0.0001", `{"input":"Return answer","max_output_tokens":64}`, `{"url":"/v1/responses"}`, "exact", "v1"))
+	mock.ExpectRollback()
+	_, err = NewEvaluationRepository(db).CreateRunWithMatrix(context.Background(), service.CreateRunInput{PlanID: planID, TriggerSource: "manual", CreatedBy: 1})
+	require.ErrorContains(t, err, "request parameters")
+	require.NoError(t, mock.ExpectationsWereMet())
+}
 
 func TestEvaluationMatrixEntriesPreservesNumericLexemes(t *testing.T) {
 	entries, err := evaluationMatrixEntries([]byte(`[{

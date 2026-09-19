@@ -28,6 +28,44 @@ func TestProvideRadarGovernanceRepositoryUsesConfiguredRouteProfile(t *testing.T
 	require.Equal(t, configuredProfile, configured.routeProfileVersion)
 }
 
+func TestListRunsProjectsRecordedBillingWithoutTreatingMissingAsZero(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = db.Close() })
+	runID, pendingID, planID := uuid.New(), uuid.New(), uuid.New()
+	createdAt := time.Date(2026, 9, 19, 0, 0, 0, 0, time.UTC)
+	mock.ExpectQuery(`(?s)SELECT r.id, r.plan_id.*WHERE r.tenant_id=\$1`).WithArgs(int64(77)).
+		WillReturnRows(sqlmock.NewRows([]string{
+			"id", "plan_id", "trigger_source", "status", "contract_status", "created_at", "started_at", "finished_at",
+			"budget_limit", "reserved_cost", "actual_cost", "evidence_count", "billed_evidence_count", "pause_reason",
+		}).AddRow(runID, planID, "manual", "completed", "bound", createdAt, nil, createdAt,
+			"2", "0.0048", "0.25401000", 48, 48, nil).
+			AddRow(pendingID, planID, "manual", "pending", "bound", createdAt, nil, nil,
+				"2", "0.0048", nil, 0, 0, nil))
+	items, err := (&radarGovernanceRepository{db: db}).ListRuns(service.WithRadarTenant(context.Background(), 77))
+	require.NoError(t, err)
+	encoded, err := json.Marshal(items)
+	require.NoError(t, err)
+	var result []map[string]any
+	require.NoError(t, json.Unmarshal(encoded, &result))
+	require.Equal(t, "0.25401", result[0]["actual_cost"])
+	require.Equal(t, "0.0048", result[0]["reserved_cost"])
+	require.Equal(t, float64(48), result[0]["billed_evidence_count"])
+	require.Contains(t, result[1], "actual_cost")
+	require.Nil(t, result[1]["actual_cost"])
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestListRunsPropagatesBillingQueryFailure(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = db.Close() })
+	mock.ExpectQuery(`(?s)SELECT r.id, r.plan_id`).WillReturnError(sql.ErrConnDone)
+	_, err = (&radarGovernanceRepository{db: db}).ListRuns(context.Background())
+	require.ErrorIs(t, err, sql.ErrConnDone)
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
 func expectRadarWorkerWriter(t *testing.T, mock sqlmock.Sqlmock) {
 	t.Helper()
 	identity := defaultEvaluationWriterIdentity("api")

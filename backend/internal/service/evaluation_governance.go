@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/shopspring/decimal"
 )
 
 var (
@@ -155,14 +156,20 @@ type RadarModelHealthProjection struct {
 }
 
 type RadarRunProjection struct {
-	ID             uuid.UUID  `json:"id"`
-	PlanID         uuid.UUID  `json:"plan_id"`
-	TriggerSource  string     `json:"trigger_source"`
-	Status         string     `json:"status"`
-	ContractStatus string     `json:"contract_status"`
-	CreatedAt      time.Time  `json:"created_at"`
-	StartedAt      *time.Time `json:"started_at,omitempty"`
-	FinishedAt     *time.Time `json:"finished_at,omitempty"`
+	ID                  uuid.UUID        `json:"id"`
+	PlanID              uuid.UUID        `json:"plan_id"`
+	TriggerSource       string           `json:"trigger_source"`
+	Status              string           `json:"status"`
+	ContractStatus      string           `json:"contract_status"`
+	CreatedAt           time.Time        `json:"created_at"`
+	StartedAt           *time.Time       `json:"started_at,omitempty"`
+	FinishedAt          *time.Time       `json:"finished_at,omitempty"`
+	BudgetLimit         decimal.Decimal  `json:"budget_limit"`
+	ReservedCost        decimal.Decimal  `json:"reserved_cost"`
+	ActualCost          *decimal.Decimal `json:"actual_cost"`
+	EvidenceCount       int              `json:"evidence_count"`
+	BilledEvidenceCount int              `json:"billed_evidence_count"`
+	PauseReason         *string          `json:"pause_reason,omitempty"`
 }
 
 type RadarAlertProjection struct {

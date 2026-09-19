@@ -17,6 +17,8 @@
       </div>
     </div>
 
+    <p class="border-b border-gray-200 px-4 py-3 text-xs text-amber-700 dark:border-dark-700 dark:text-amber-300">{{ t('admin.radar.runs.budgetHint') }}</p>
+
     <div class="overflow-x-auto">
       <table class="min-w-[800px] w-full text-left text-sm">
         <thead>
@@ -25,18 +27,36 @@
             <th class="px-4 py-3">{{ t('admin.radar.runs.table.plan') }}</th>
             <th class="px-4 py-3">{{ t('admin.radar.runs.table.trigger') }}</th>
             <th class="px-4 py-3">{{ t('admin.radar.table.status') }}</th>
+            <th class="px-4 py-3">{{ t('admin.radar.runs.table.budgetLimit') }}</th>
             <th class="px-4 py-3">{{ t('admin.radar.runs.table.reservedCost') }}</th>
+            <th class="px-4 py-3">{{ t('admin.radar.runs.table.actualCost') }}</th>
             <th class="px-4 py-3">{{ t('admin.radar.runs.table.createdAt') }}</th>
+            <th class="px-4 py-3">{{ t('common.actions') }}</th>
           </tr>
         </thead>
         <tbody>
-          <tr v-for="run in store.runs" :key="run.id" class="border-b border-gray-100 last:border-0 dark:border-dark-800">
+          <tr v-for="run in store.runs" :key="run.id" :data-test="`run-${run.id}`" class="border-b border-gray-100 last:border-0 dark:border-dark-800">
             <td class="px-4 py-3 font-mono text-xs text-gray-900 dark:text-white">{{ run.id }}</td>
             <td class="px-4 py-3 font-mono text-xs text-gray-600 dark:text-dark-200">{{ run.plan_id }}</td>
             <td class="px-4 py-3 text-gray-600 dark:text-dark-200">{{ triggerLabel(run.trigger_source) }}</td>
-            <td class="px-4 py-3"><Status :value="run.status" /></td>
-            <td class="px-4 py-3 text-gray-600 dark:text-dark-200">{{ run.reserved_cost ?? '0' }}</td>
+            <td class="px-4 py-3">
+              <Status :value="run.status" />
+              <p v-if="run.status === 'paused' && run.pause_reason" class="mt-1 text-xs text-gray-500">{{ pauseReasonLabel(run.pause_reason) }}</p>
+            </td>
+            <td class="px-4 py-3 text-gray-600 dark:text-dark-200">{{ run.budget_limit ?? t('common.notAvailable') }}</td>
+            <td class="px-4 py-3 text-gray-600 dark:text-dark-200">{{ run.reserved_cost ?? t('common.notAvailable') }}</td>
+            <td :data-test="`cost-${run.id}`" class="px-4 py-3 text-gray-600 dark:text-dark-200">
+              <template v-if="run.actual_cost != null">
+                {{ run.actual_cost }}
+                <p v-if="run.evidence_count != null && run.billed_evidence_count != null" class="mt-1 text-xs text-gray-500">{{ t('admin.radar.runs.billingProgress', { billed: run.billed_evidence_count, total: run.evidence_count }) }}</p>
+                <p v-if="(run.billed_evidence_count ?? 0) < (run.evidence_count ?? 0)" class="mt-1 text-xs text-amber-700 dark:text-amber-300">{{ t('admin.radar.runs.costPartial') }}</p>
+              </template>
+              <template v-else>{{ t('admin.radar.runs.costPending') }}</template>
+            </td>
             <td class="px-4 py-3 text-gray-500">{{ formatDate(run.created_at) }}</td>
+            <td class="px-4 py-3">
+              <button v-if="canPause(run)" :data-test="`pause-${run.id}`" type="button" class="btn btn-secondary whitespace-nowrap" :disabled="pausingRun" @click="openPause(run)">{{ t('admin.radar.runs.pause') }}</button>
+            </td>
           </tr>
         </tbody>
       </table>
@@ -73,6 +93,7 @@
 
       <div class="border-t border-gray-200 pt-5 dark:border-dark-700">
         <h3 class="mb-4 text-sm font-semibold text-gray-900 dark:text-white">{{ t('admin.radar.runs.planDialog.modelMatrix') }}</h3>
+        <p class="mb-4 text-xs text-gray-500">{{ t('admin.radar.runs.planDialog.parametersHint') }}</p>
         <div class="grid gap-4 sm:grid-cols-3">
           <label class="block">
             <span class="input-label">{{ t('admin.radar.runs.planDialog.logicalRoute') }}</span>
@@ -134,12 +155,22 @@
       </button>
     </template>
   </BaseDialog>
+
+  <BaseDialog :show="pauseTarget !== null" :title="t('admin.radar.runs.pauseDialog.title')" :close-on-escape="!pausingRun" :show-close-button="!pausingRun" @close="closePause">
+    <p class="text-sm text-gray-600 dark:text-dark-200">{{ t('admin.radar.runs.pauseDialog.description') }}</p>
+    <p class="mt-3 break-all font-mono text-xs text-gray-900 dark:text-white">{{ pauseTarget?.id }}</p>
+    <p v-if="pauseError" role="alert" class="mt-3 text-sm text-red-600 dark:text-red-400">{{ pauseError }}</p>
+    <template #footer>
+      <button data-test="pause-cancel" type="button" class="btn btn-secondary" :disabled="pausingRun" @click="closePause">{{ t('common.cancel') }}</button>
+      <button data-test="pause-confirm" type="button" class="btn btn-primary" :disabled="pausingRun" @click="pauseRun">{{ pausingRun ? t('admin.radar.runs.pausing') : t('admin.radar.runs.pause') }}</button>
+    </template>
+  </BaseDialog>
 </template>
 
 <script setup lang="ts">
 import { computed, onMounted, reactive, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
-import radarAdminAPI from '@/api/admin/radar'
+import radarAdminAPI, { type RadarRun } from '@/api/admin/radar'
 import BaseDialog from '@/components/common/BaseDialog.vue'
 import Icon from '@/components/icons/Icon.vue'
 import { useAppStore } from '@/stores/app'
@@ -154,6 +185,10 @@ const showRun = ref(false)
 const savingPlan = ref(false)
 const startingRun = ref(false)
 const enablingKey = ref(false)
+const pauseTarget = ref<RadarRun | null>(null)
+const pauseError = ref('')
+const pausingRun = ref(false)
+let pauseIdempotencyKey = ''
 const publishedDatasets = computed(() => store.datasets.filter((dataset) => dataset.status === 'published'))
 
 const planForm = reactive({
@@ -190,6 +225,55 @@ function openRun(planId = ''): void {
   showRun.value = true
 }
 
+function canPause(run: RadarRun): boolean {
+  return ['pending', 'running', 'budget_paused'].includes(run.status)
+}
+
+function pauseReasonLabel(reason: string): string {
+  const key = `admin.radar.runs.pauseReasons.${reason}`
+  return te(key) ? t(key) : reason
+}
+
+function openPause(run: RadarRun): void {
+  if (pausingRun.value || !canPause(run)) return
+  pauseIdempotencyKey = Array.from(crypto.getRandomValues(new Uint8Array(32)), (byte) => byte.toString(16).padStart(2, '0')).join('')
+  pauseError.value = ''
+  pauseTarget.value = run
+}
+
+function closePause(): void {
+  if (pausingRun.value) return
+  pauseTarget.value = null
+  pauseError.value = ''
+}
+
+async function pauseRun(): Promise<void> {
+  if (!pauseTarget.value || pausingRun.value) return
+  const target = pauseTarget.value
+  pausingRun.value = true
+  pauseError.value = ''
+  try {
+    const result = await radarAdminAPI.pauseRun(target.id, pauseIdempotencyKey)
+    if (result.run_id !== target.id || result.to_status !== 'paused') {
+      throw new Error(t('admin.radar.messages.runPauseUnconfirmed'))
+    }
+    // Apply the authoritative transition directly. A failed list refresh must
+    // not overwrite or misrepresent a successful pause.
+    const row = store.runs.find((run) => run.id === result.run_id)
+    if (row) {
+      row.status = result.to_status
+      row.pause_reason = 'operator'
+    }
+    pauseTarget.value = null
+    appStore.showSuccess(t('admin.radar.messages.runPaused'))
+  } catch (error) {
+    pauseError.value = errorMessage(error, t('admin.radar.messages.runPauseFailed'))
+    appStore.showError(pauseError.value)
+  } finally {
+    pausingRun.value = false
+  }
+}
+
 async function enableKey(): Promise<void> {
   if (planForm.gatewayAPIKeyId <= 0) {
     appStore.showError(t('admin.radar.messages.evaluationKeyRequired'))
@@ -220,8 +304,8 @@ async function createPlan(): Promise<void> {
       trigger_type: 'manual',
       model_matrix: [{
         route: planForm.modelRoute,
-        baseline: { route: planForm.baselineRoute, temperature: 0, max_tokens: 256 },
-        candidate: { route: planForm.candidateRoute, temperature: 0, max_tokens: 256 }
+        baseline: { route: planForm.baselineRoute },
+        candidate: { route: planForm.candidateRoute }
       }],
       max_run_cost: planForm.maxRunCost,
       daily_cost_limit: planForm.dailyCostLimit,

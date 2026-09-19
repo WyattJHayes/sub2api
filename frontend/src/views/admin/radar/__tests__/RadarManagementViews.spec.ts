@@ -19,6 +19,7 @@ const { radarAPI, showError, showSuccess } = vi.hoisted(() => ({
     createPlan: vi.fn(),
     enableEvaluationKey: vi.fn(),
     startRun: vi.fn(),
+    pauseRun: vi.fn(),
     evaluateGate: vi.fn()
   },
   showError: vi.fn(),
@@ -35,7 +36,13 @@ vi.mock('vue-i18n', async (importOriginal) => {
     useI18n: () => ({
       t: (key: string) => ({
         'admin.radar.messages.datasetPublished': '数据集已发布',
-        'admin.radar.messages.runStarted': '评测运行已启动'
+        'admin.radar.messages.runStarted': '评测运行已启动',
+        'admin.radar.runs.costPending': '待记录',
+        'admin.radar.runs.costPartial': '部分请求尚未计费',
+        'admin.radar.runs.pauseReasons.budget': '已记录费用到限',
+        'admin.radar.runs.pauseReasons.operator': '管理员暂停',
+        'admin.radar.runs.pauseDialog.description': '停止领取新任务，在途请求继续完成',
+        'admin.radar.messages.runPaused': '评测运行已暂停'
       }[key] ?? key),
       te: () => true,
       locale: { value: 'zh' }
@@ -142,8 +149,8 @@ describe('Radar management views', () => {
       trigger_type: 'manual',
       model_matrix: [{
         route: 'deepseek-chat',
-        baseline: { route: 'deepseek-chat-v1', temperature: 0, max_tokens: 256 },
-        candidate: { route: 'deepseek-chat-v2', temperature: 0, max_tokens: 256 }
+        baseline: { route: 'deepseek-chat-v1' },
+        candidate: { route: 'deepseek-chat-v2' }
       }],
       max_run_cost: '10',
       daily_cost_limit: '50',
@@ -163,5 +170,86 @@ describe('Radar management views', () => {
       candidate_ref: { release: 'candidate-2026-07-27' }
     })
     expect(showSuccess).toHaveBeenCalledWith('评测运行已启动')
+  })
+
+  it('shows recorded cost, pending billing and a budget pause without inventing a free run', async () => {
+    radarAPI.runs.mockResolvedValue([
+      { id: 'billed', plan_id: 'plan-1', status: 'completed', budget_limit: '2', reserved_cost: '0.0048', actual_cost: '0.25401', evidence_count: 48, billed_evidence_count: 48 },
+      { id: 'pending-cost', plan_id: 'plan-1', status: 'pending', actual_cost: null, evidence_count: 0, billed_evidence_count: 0 },
+      { id: 'partial', plan_id: 'plan-1', status: 'running', actual_cost: '0', evidence_count: 48, billed_evidence_count: 20 },
+      { id: 'budget', plan_id: 'plan-1', status: 'paused', pause_reason: 'budget', actual_cost: '2', evidence_count: 48, billed_evidence_count: 48 }
+    ])
+    const wrapper = mountView(RadarRunsView)
+    await flushPromises()
+    expect(wrapper.get('[data-test="run-billed"]').text()).toContain('0.25401')
+    expect(wrapper.get('[data-test="run-billed"]').text()).toContain('0.0048')
+    expect(wrapper.get('[data-test="cost-pending-cost"]').text()).toBe('待记录')
+    expect(wrapper.get('[data-test="cost-partial"]').text()).toContain('部分请求尚未计费')
+    expect(wrapper.get('[data-test="run-budget"]').text()).toContain('已记录费用到限')
+  })
+
+  it('requires confirmation of the exact run and updates its paused state after success', async () => {
+    radarAPI.runs.mockResolvedValue([{ id: 'run-1', plan_id: 'plan-1', status: 'running' }])
+    radarAPI.pauseRun.mockResolvedValue({ run_id: 'run-1', from_status: 'running', to_status: 'paused' })
+    const wrapper = mountView(RadarRunsView)
+    await flushPromises()
+    await wrapper.get('[data-test="pause-run-1"]').trigger('click')
+    expect(radarAPI.pauseRun).not.toHaveBeenCalled()
+    expect(wrapper.get('[role="dialog"]').text()).toContain('run-1')
+    expect(wrapper.get('[role="dialog"]').text()).toContain('在途请求继续完成')
+    await wrapper.get('[data-test="pause-confirm"]').trigger('click')
+    await flushPromises()
+    expect(radarAPI.pauseRun).toHaveBeenCalledWith('run-1', expect.stringMatching(/^[a-f0-9]{64}$/))
+    expect(wrapper.find('[role="dialog"]').exists()).toBe(false)
+    expect(wrapper.get('[data-test="run-run-1"]').text()).toContain('paused')
+    expect(wrapper.get('[data-test="run-run-1"]').text()).toContain('管理员暂停')
+    expect(wrapper.find('[data-test="pause-run-1"]').exists()).toBe(false)
+    expect(showSuccess).toHaveBeenCalledWith('评测运行已暂停')
+  })
+
+  it('does not pause on cancellation or offer pause for terminal or already paused runs', async () => {
+    radarAPI.runs.mockResolvedValue(['running', 'completed', 'failed', 'cancelled', 'paused'].map((status) => ({ id: status, plan_id: 'plan-1', status })))
+    const wrapper = mountView(RadarRunsView)
+    await flushPromises()
+    expect(wrapper.findAll('[data-test^="pause-"]')).toHaveLength(1)
+    await wrapper.get('[data-test="pause-running"]').trigger('click')
+    await wrapper.get('[data-test="pause-cancel"]').trigger('click')
+    expect(wrapper.find('[role="dialog"]').exists()).toBe(false)
+    expect(radarAPI.pauseRun).not.toHaveBeenCalled()
+  })
+
+  it('preserves a failed confirmation and reuses the same key for retry', async () => {
+    radarAPI.runs.mockResolvedValue([{ id: 'run-1', plan_id: 'plan-1', status: 'running' }])
+    radarAPI.pauseRun.mockRejectedValueOnce({ response: { data: { detail: 'Pause unavailable' } } })
+      .mockResolvedValueOnce({ run_id: 'run-1', from_status: 'running', to_status: 'paused' })
+    const wrapper = mountView(RadarRunsView)
+    await flushPromises()
+    await wrapper.get('[data-test="pause-run-1"]').trigger('click')
+    await wrapper.get('[data-test="pause-confirm"]').trigger('click')
+    await flushPromises()
+    expect(wrapper.get('[role="alert"]').text()).toContain('Pause unavailable')
+    expect(wrapper.get('[data-test="run-run-1"]').text()).toContain('running')
+    expect(showSuccess).not.toHaveBeenCalled()
+    await wrapper.get('[data-test="pause-confirm"]').trigger('click')
+    await flushPromises()
+    const firstKey = radarAPI.pauseRun.mock.calls[0][1]
+    expect(radarAPI.pauseRun).toHaveBeenNthCalledWith(2, 'run-1', firstKey)
+    expect(wrapper.get('[data-test="run-run-1"]').text()).toContain('paused')
+  })
+
+  it('blocks duplicate confirmation while a pause request is in flight', async () => {
+    radarAPI.runs.mockResolvedValue([{ id: 'run-1', plan_id: 'plan-1', status: 'pending' }])
+    let completePause!: (value: unknown) => void
+    radarAPI.pauseRun.mockImplementationOnce(() => new Promise((resolve) => { completePause = resolve }))
+    const wrapper = mountView(RadarRunsView)
+    await flushPromises()
+    await wrapper.get('[data-test="pause-run-1"]').trigger('click')
+    await wrapper.get('[data-test="pause-confirm"]').trigger('click')
+    expect(wrapper.get('[data-test="pause-confirm"]').attributes('disabled')).toBeDefined()
+    await wrapper.get('[data-test="pause-confirm"]').trigger('click')
+    expect(radarAPI.pauseRun).toHaveBeenCalledTimes(1)
+    completePause({ run_id: 'run-1', from_status: 'pending', to_status: 'paused' })
+    await flushPromises()
+    expect(wrapper.get('[data-test="run-run-1"]').text()).toContain('paused')
   })
 })

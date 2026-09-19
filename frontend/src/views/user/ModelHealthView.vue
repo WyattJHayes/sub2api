@@ -97,7 +97,7 @@ async function loadModels() {
   loading.value = true
   loadError.value = null
   try {
-    models.value = await getModelHealth()
+    models.value = (await getModelHealth()).filter(model => model.model_alias !== 'global')
   } catch {
     models.value = []
     loadError.value = t('modelHealth.loadFailed')

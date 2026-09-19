@@ -137,7 +137,8 @@ describe('Radar localized views', () => {
     expect(datasets.text()).toContain('创建数据集')
 
     expect(runs.text()).toContain('评测运行')
-    expect(runs.text()).toContain('保留成本')
+    expect(runs.text()).toContain('预留费用（估算）')
+    expect(runs.text()).toContain('已记录费用')
     expect(runs.text()).toContain('手动')
     expect(runs.text()).toContain('等待中')
     await runs.get('[data-test="new-plan"]').trigger('click')

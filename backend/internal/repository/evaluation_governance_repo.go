@@ -1981,8 +1981,15 @@ func (r *radarGovernanceRepository) ListRuns(ctx context.Context) ([]service.Rad
 				AND (SELECT COUNT(*) FROM evaluation_side_specs s JOIN evaluation_pair_specs p ON p.id = s.pair_spec_id WHERE p.run_id = r.id) =
 					2 * (SELECT COUNT(*) FROM evaluation_pair_specs p WHERE p.run_id = r.id)
 				THEN 'bound' ELSE 'legacy-unbound' END AS contract_status,
-			r.created_at, r.started_at, r.finished_at
-		FROM evaluation_runs r`
+			r.created_at, r.started_at, r.finished_at,
+			r.budget_limit, r.reserved_cost, billing.actual_cost,
+			billing.evidence_count, billing.billed_evidence_count, r.pause_reason
+		FROM evaluation_runs r
+		CROSS JOIN LATERAL (
+			SELECT SUM(e.billed_amount) AS actual_cost, COUNT(*) AS evidence_count,
+				COUNT(e.billed_amount) AS billed_evidence_count
+			FROM evaluation_route_evidence e WHERE e.evaluation_run_id=r.id
+		) billing`
 	args := []any{}
 	if tenantID, scoped := radarTenant(ctx); scoped {
 		query += ` WHERE r.tenant_id=$1`
@@ -1997,7 +2004,9 @@ func (r *radarGovernanceRepository) ListRuns(ctx context.Context) ([]service.Rad
 	var out []service.RadarRunProjection
 	for rows.Next() {
 		var item service.RadarRunProjection
-		if err := rows.Scan(&item.ID, &item.PlanID, &item.TriggerSource, &item.Status, &item.ContractStatus, &item.CreatedAt, &item.StartedAt, &item.FinishedAt); err != nil {
+		if err := rows.Scan(&item.ID, &item.PlanID, &item.TriggerSource, &item.Status, &item.ContractStatus,
+			&item.CreatedAt, &item.StartedAt, &item.FinishedAt, &item.BudgetLimit, &item.ReservedCost,
+			&item.ActualCost, &item.EvidenceCount, &item.BilledEvidenceCount, &item.PauseReason); err != nil {
 			return nil, err
 		}
 		out = append(out, item)

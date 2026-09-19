@@ -89,11 +89,7 @@ func (r *evaluationRepository) CreateRunWithMatrix(ctx context.Context, input se
 		           AND u.status = 'active' AND u.deleted_at IS NULL
 		           AND (g.id IS NULL OR (g.status = 'active' AND g.deleted_at IS NULL))
 		       ),
-		       COALESCE((
-		         SELECT SUM(existing.reserved_cost) FROM evaluation_runs existing
-		         WHERE existing.plan_id = p.id
-		           AND existing.created_at >= date_trunc('day', NOW())
-		       ), 0)
+		       `+evaluationDailyCommittedCostSQL+`
 		FROM evaluation_plans p
 		JOIN evaluation_dataset_versions d ON d.id = p.dataset_version_id
 		WHERE p.id = $1
@@ -121,6 +117,9 @@ func (r *evaluationRepository) CreateRunWithMatrix(ctx context.Context, input se
 	}
 	if len(cases) == 0 {
 		return nil, errors.New("evaluation dataset has no cases")
+	}
+	if err := validateEvaluationMatrixParameters(matrix, cases); err != nil {
+		return nil, err
 	}
 
 	totalReservation := decimal.Zero
@@ -973,6 +972,16 @@ func lockRunLeaseEligibility(ctx context.Context, tx *sql.Tx, runID uuid.UUID, p
 	}
 	if !assignmentLeaseEligible(state) {
 		return false, nil
+	}
+	if status != service.RunStatusPending && status != service.RunStatusRunning && status != service.RunStatusBudgetPaused {
+		return false, nil
+	}
+	usage, err := loadEvaluationBudgetUsage(ctx, tx, runID, planID)
+	if err != nil {
+		return false, err
+	}
+	if !usage.runCost.LessThan(budgetLimit) || !usage.dailyCost.LessThan(usage.dailyLimit) {
+		return false, pauseEvaluationRunForBudget(ctx, tx, runID, status, usage)
 	}
 	if (status == service.RunStatusPending || status == service.RunStatusRunning) && reservedCost.LessThan(budgetLimit) {
 		return true, nil

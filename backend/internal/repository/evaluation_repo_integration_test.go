@@ -436,7 +436,7 @@ func TestEvaluationRepository_RegisteredCapabilitiesBoundClaims(t *testing.T) {
 func TestEvaluationRepository_FreezesModelConfigurationInLease(t *testing.T) {
 	ctx := context.Background()
 	fixture := createEvaluationRepositoryFixtureWithCases(t, []evaluationCaseFixtureSpec{
-		{capability: "coding", priority: "P0", sampleCount: 1, estimatedCost: decimal.RequireFromString("0.01")},
+		{capability: "coding", priority: "P0", sampleCount: 1, estimatedCost: decimal.RequireFromString("0.01"), promptSpec: `{"input":"ping","temperature":0.2,"max_output_tokens":64}`},
 	}, []map[string]any{{
 		"route": "route-a", "temperature": 0.2, "max_tokens": 64,
 	}}, decimal.RequireFromString("100"))
@@ -473,7 +473,7 @@ func TestEvaluationRepository_FreezesModelConfigurationInLease(t *testing.T) {
 func TestEvaluationRepository_ClaimReturnsCompleteExecutionContract(t *testing.T) {
 	ctx := context.Background()
 	fixture := createEvaluationRepositoryFixtureWithCases(t, []evaluationCaseFixtureSpec{
-		{capability: "coding", priority: "P0", sampleCount: 1, estimatedCost: decimal.RequireFromString("0.01")},
+		{capability: "coding", priority: "P0", sampleCount: 1, estimatedCost: decimal.RequireFromString("0.01"), promptSpec: `{"input":"ping","temperature":0,"max_output_tokens":32}`},
 	}, []map[string]any{{
 		"route": "route-a", "temperature": 0, "max_tokens": 32,
 	}}, decimal.RequireFromString("100"))
@@ -489,7 +489,7 @@ func TestEvaluationRepository_ClaimReturnsCompleteExecutionContract(t *testing.T
 	require.NotNil(t, lease.Case)
 	require.Equal(t, "case-0", lease.Case.CaseKey)
 	require.Equal(t, "coding", lease.Case.CapabilityDomain)
-	require.JSONEq(t, `{"input":"ping"}`, string(lease.Case.PromptSpec))
+	require.JSONEq(t, `{"input":"ping","temperature":0,"max_output_tokens":32}`, string(lease.Case.PromptSpec))
 	require.JSONEq(t, `{"output":"pong"}`, string(lease.Case.ExpectedSpec))
 	require.JSONEq(t, `{"url":"/v1/responses"}`, string(lease.Case.ExecutionSpec))
 	require.Equal(t, fixture.apiKeyID, lease.GatewayAPIKeyID)
@@ -563,7 +563,7 @@ func TestEvaluationRepository_EnforcesPlanMaxConcurrencyAcrossWorkers(t *testing
 func TestEvaluationRepository_FreezesLosslessNumericModelConfiguration(t *testing.T) {
 	ctx := context.Background()
 	fixture := createEvaluationRepositoryFixtureWithCases(t, []evaluationCaseFixtureSpec{
-		{capability: "coding", priority: "P0", sampleCount: 1, estimatedCost: decimal.RequireFromString("0.01")},
+		{capability: "coding", priority: "P0", sampleCount: 1, estimatedCost: decimal.RequireFromString("0.01"), promptSpec: `{"input":"ping","seed":9007199254740993,"temperature":0.12345678901234567890123456789}`},
 	}, []map[string]any{{
 		"route":       "route-a",
 		"seed":        json.Number("9007199254740993"),
@@ -594,7 +594,7 @@ func TestEvaluationRepository_FreezesLosslessNumericModelConfiguration(t *testin
 func TestEvaluationRepository_RejectsMismatchedStoredModelConfigDigest(t *testing.T) {
 	ctx := context.Background()
 	fixture := createEvaluationRepositoryFixtureWithCases(t, []evaluationCaseFixtureSpec{
-		{capability: "coding", priority: "P0", sampleCount: 1, estimatedCost: decimal.RequireFromString("0.01")},
+		{capability: "coding", priority: "P0", sampleCount: 1, estimatedCost: decimal.RequireFromString("0.01"), promptSpec: `{"input":"ping","seed":9007199254740993}`},
 	}, []map[string]any{{"route": "route-a", "seed": json.Number("9007199254740993")}}, decimal.RequireFromString("100"))
 	repo := NewEvaluationRepository(integrationDB)
 	run, err := repo.CreateRunWithMatrix(ctx, service.CreateRunInput{
@@ -824,6 +824,7 @@ type evaluationCaseFixtureSpec struct {
 	priority      string
 	sampleCount   int
 	estimatedCost decimal.Decimal
+	promptSpec    string
 }
 
 func createEvaluationRepositoryFixture(t *testing.T, caseCount int, routes []string, sampleCount int) evaluationRepositoryFixture {
@@ -867,6 +868,10 @@ func createEvaluationRepositoryFixtureWithCases(
 		datasetID, "evaluation-repository-"+uuid.NewString(), "v1", fmt.Sprintf("%064d", 1), user.ID)
 	require.NoError(t, err)
 	for i, evaluationCase := range cases {
+		promptSpec := evaluationCase.promptSpec
+		if promptSpec == "" {
+			promptSpec = `{"input":"ping"}`
+		}
 		_, err = integrationDB.ExecContext(ctx, `
 			INSERT INTO evaluation_cases (
 				id, dataset_version_id, case_key, capability_domain, priority, weight, sample_count,
@@ -874,11 +879,11 @@ func createEvaluationRepositoryFixtureWithCases(
 				content_sha256, confidentiality, estimated_cost
 			) VALUES (
 					$1, $2, $3, $4, $5, 1, $6,
-					'{"input":"ping"}'::jsonb, '{"output":"pong"}'::jsonb,
+					$9::jsonb, '{"output":"pong"}'::jsonb,
 					'{"url":"/v1/responses"}'::jsonb, 'grader', 'v1',
 					$7, 'synthetic', $8
 				)`, uuid.New(), datasetID, fmt.Sprintf("case-%d", i), evaluationCase.capability,
-			evaluationCase.priority, evaluationCase.sampleCount, fmt.Sprintf("%064d", i+10), evaluationCase.estimatedCost)
+			evaluationCase.priority, evaluationCase.sampleCount, fmt.Sprintf("%064d", i+10), evaluationCase.estimatedCost, promptSpec)
 		require.NoError(t, err)
 	}
 	_, err = integrationDB.ExecContext(ctx, `

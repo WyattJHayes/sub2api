@@ -1,11 +1,13 @@
 from __future__ import annotations
 
+import json
 from datetime import UTC, datetime, timedelta
 from uuid import uuid4
 
 import httpx
 import pytest
 
+from sub2api_radar.executors.base import ProtocolError
 from sub2api_radar.executors.openai import OpenAIExecutor, extract_final_output
 from sub2api_radar.models import AssignmentLease, CaseSpec
 
@@ -93,3 +95,82 @@ def test_extract_final_output_supports_responses_message_content() -> None:
             ]
         }
     ) == "first second"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("config", [{"max_tokens": 256}, {"temperature": 0}, {"top_p": None}])
+async def test_openai_executor_rejects_unfrozen_parameters_before_http(config: dict) -> None:
+    lease = responses_lease()
+    lease = lease.model_copy(update={
+        "case": lease.case.model_copy(
+            update={"prompt_spec": {"input": "Return answer", "max_output_tokens": 64}}
+        ),
+        "route_config": {**lease.route_config, **config},
+    })
+    requests: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        return httpx.Response(200, json={"output_text": "answer"})
+
+    async with httpx.AsyncClient(
+        transport=httpx.MockTransport(handler), base_url="https://gateway.example.test"
+    ) as client:
+        with pytest.raises(ProtocolError) as error:
+            await OpenAIExecutor(client).execute(lease)
+    assert error.value.code == "unfrozen_request_parameters"
+    assert requests == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("endpoint", ["/v1/responses", "/v1/responses?trace=1", "/v1/responses/"])
+async def test_openai_executor_uses_case_output_limit_without_mutation(endpoint: str) -> None:
+    lease = responses_lease()
+    original = {"input": "Return answer", "max_output_tokens": 64}
+    lease = lease.model_copy(update={
+        "case": lease.case.model_copy(update={
+            "prompt_spec": original.copy(),
+            "execution_spec": {"url": endpoint},
+        }),
+        "route_config": {**lease.route_config, "route": "gpt-6-astra", "max_tokens": 64},
+    })
+    requests: list[dict] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(json.loads(request.content))
+        return httpx.Response(200, json={"output_text": "answer"})
+
+    async with httpx.AsyncClient(
+        transport=httpx.MockTransport(handler), base_url="https://gateway.example.test"
+    ) as client:
+        evidence = await OpenAIExecutor(client).execute(lease)
+    assert evidence.final_output == "answer"
+    assert requests == [{"input": "Return answer", "max_output_tokens": 64, "model": "gpt-6-astra"}]
+    assert lease.case.prompt_spec == original
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("config_value,frozen_value", [(True, 1), (0, False), (0, 0.0)])
+async def test_openai_executor_rejects_parameter_type_mismatch(
+    config_value: object, frozen_value: object
+) -> None:
+    lease = responses_lease()
+    lease = lease.model_copy(update={
+        "case": lease.case.model_copy(
+            update={"prompt_spec": {"input": "Return answer", "seed": frozen_value}}
+        ),
+        "route_config": {**lease.route_config, "seed": config_value},
+    })
+    requests: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        return httpx.Response(200, json={"output_text": "answer"})
+
+    async with httpx.AsyncClient(
+        transport=httpx.MockTransport(handler), base_url="https://gateway.example.test"
+    ) as client:
+        with pytest.raises(ProtocolError) as error:
+            await OpenAIExecutor(client).execute(lease)
+    assert error.value.code == "unfrozen_request_parameters"
+    assert requests == []

@@ -169,11 +169,27 @@ export default {
       enableEvaluationKey: '启用雷达评测',
       enablingEvaluationKey: '启用中...',
       empty: '暂无评测运行记录',
+      budgetHint: '费用单位 USD。预留费用是估算；预算为软保护，已记录费用到限后停止领取新任务，在途请求及延迟计费仍可能超限。单计划预算不等于账户总额度。',
+      costPending: '待记录',
+      costPartial: '部分请求尚未计费',
+      billingProgress: '已计费证据 {billed}/{total}',
+      pause: '暂停',
+      pausing: '暂停中...',
+      pauseReasons: {
+        budget: '已记录费用到限',
+        operator: '管理员暂停'
+      },
+      pauseDialog: {
+        title: '暂停该评测运行？',
+        description: '暂停后停止领取新任务，在途请求继续完成且仍可能产生费用。请核对运行 ID。'
+      },
       table: {
         run: '运行',
         plan: '计划',
         trigger: '触发方式',
-        reservedCost: '保留成本',
+        budgetLimit: '预算上限',
+        reservedCost: '预留费用（估算）',
+        actualCost: '已记录费用',
         createdAt: '创建时间'
       },
       triggers: {
@@ -191,6 +207,7 @@ export default {
         selectDataset: '选择数据集',
         gatewayAPIKey: '网关 API 密钥 ID',
         modelMatrix: '成对模型矩阵',
+        parametersHint: '请求参数继承已发布用例的 prompt_spec；计划只选择路由，不覆盖温度或输出长度。',
         logicalRoute: '逻辑路由',
         logicalRoutePlaceholder: '例如 deepseek-chat',
         baselineRoute: '基线路由',
@@ -238,7 +255,10 @@ export default {
       planCreateFailed: '创建评测计划失败',
       runReferencesRequired: '请填写所有运行引用',
       runStarted: '评测运行已启动',
-      runStartFailed: '启动评测运行失败'
+      runStartFailed: '启动评测运行失败',
+      runPaused: '评测运行已暂停',
+      runPauseFailed: '暂停评测运行失败，可重试本次确认',
+      runPauseUnconfirmed: '暂停结果尚未确认，请重试或刷新核对运行状态'
     }
   }
 }

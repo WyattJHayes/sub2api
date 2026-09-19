@@ -86,6 +86,16 @@ describe('radar admin API', () => {
     expect(apiClient.post).toHaveBeenCalledWith('/admin/radar/runs', payload)
   })
 
+  it('pauses the exact run using the caller idempotency key and returns its transition', async () => {
+    const transition = { run_id: 'run-1', from_status: 'running', to_status: 'paused' }
+    vi.mocked(apiClient.post).mockResolvedValueOnce({ data: transition })
+    const result = await radarAdminAPI.pauseRun('run-1', 'a'.repeat(64))
+    expect(apiClient.post).toHaveBeenCalledWith('/admin/radar/runs/run-1/pause', { reason: 'operator' }, {
+      headers: { 'Idempotency-Key': 'a'.repeat(64) }
+    })
+    expect(result).toEqual(transition)
+  })
+
   it('enables an existing API key for signed evaluation traffic', async () => {
     vi.mocked(apiClient.post).mockResolvedValueOnce({ data: { id: 42, is_evaluation: true } })
 

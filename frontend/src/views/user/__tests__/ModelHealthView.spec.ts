@@ -87,6 +87,58 @@ describe('ModelHealthView', () => {
     expect(wrapper.text()).not.toContain('暂无公开模型健康数据')
   })
 
+  it('hides the global aggregate while preserving individual model cards', async () => {
+    getModelHealth.mockResolvedValueOnce(
+      ['global', 'gpt-6-astra', 'gpt-5.6-luna', 'gpt-5.6-terra', 'global-preview'].map(model_alias => ({
+        model_alias,
+        health_state: 'healthy',
+        overall_conclusion: 'no_significant_anomaly',
+        covered_dimensions: 8,
+        total_dimensions: 8,
+        minimum_samples: 3,
+        coverage: 1
+      }))
+    )
+
+    const wrapper = mount(ModelHealthView)
+    await flushPromises()
+
+    expect(wrapper.find('[data-test="model-quality-report-global"]').exists()).toBe(false)
+    expect(wrapper.findAll('article h2').map(heading => heading.text())).toEqual([
+      'gpt-6-astra', 'gpt-5.6-luna', 'gpt-5.6-terra', 'global-preview'
+    ])
+  })
+
+  it('shows the empty state when the inventory only contains the global aggregate', async () => {
+    getModelHealth.mockResolvedValueOnce([{
+      model_alias: 'global',
+      health_state: 'insufficient_evidence',
+      overall_conclusion: 'insufficient_coverage'
+    }])
+
+    const wrapper = mount(ModelHealthView)
+    await flushPromises()
+
+    expect(wrapper.findAll('article')).toHaveLength(0)
+    expect(wrapper.text()).toContain('暂无公开模型健康数据')
+    expect(wrapper.find('[role="alert"]').exists()).toBe(false)
+  })
+
+  it('keeps the global aggregate hidden after refreshing the inventory', async () => {
+    const wrapper = mount(ModelHealthView)
+    await flushPromises()
+    getModelHealth.mockResolvedValueOnce([
+      { model_alias: 'global', health_state: 'healthy' },
+      { model_alias: 'gpt-5.6-luna', health_state: 'healthy' }
+    ])
+
+    await wrapper.get('button').trigger('click')
+    await flushPromises()
+
+    expect(wrapper.find('[data-test="model-quality-report-global"]').exists()).toBe(false)
+    expect(wrapper.findAll('article h2').map(heading => heading.text())).toEqual(['gpt-5.6-luna'])
+  })
+
   it('shows a quality conclusion and links to the report without rendering an invalid timestamp', async () => {
     getModelHealth.mockResolvedValueOnce([{
       model_alias: 'gpt-4-1',
@@ -128,7 +180,7 @@ describe('ModelHealthView', () => {
 
   it('does not infer zero samples from missing dimension statistics', async () => {
     getModelHealth.mockResolvedValueOnce([{
-      model_alias: 'global',
+      model_alias: 'gpt-6-astra',
       health_state: 'insufficient_evidence',
       overall_conclusion: 'insufficient_coverage',
       coverage: 0,

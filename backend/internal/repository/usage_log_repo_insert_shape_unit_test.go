@@ -19,6 +19,7 @@ import (
 var (
 	usageLogStaticInsertShapeRe = regexp.MustCompile(`(?s)INSERT INTO usage_logs \((.*?)\) VALUES \((.*?)\)`)
 	usageLogPlaceholderRe       = regexp.MustCompile(`\$(\d+)`)
+	usageLogBatchInsertShapeRe  = regexp.MustCompile(`(?s)INSERT INTO usage_logs \((.*?)\)\s*SELECT\s*(.*?)\s*FROM input`)
 )
 
 // newSQLCapturingMock 返回把实际下发 SQL 记录到 captured 的 sqlmock；语句一律视为匹配，
@@ -115,6 +116,42 @@ func TestUsageLogStaticInsertShape_PlaceholdersMatchArgTypes(t *testing.T) {
 	})
 }
 
+func TestUsageLogBatchInsertShape_SelectMatchesTargetColumns(t *testing.T) {
+	log := &service.UsageLog{
+		UserID:    1,
+		APIKeyID:  2,
+		RequestID: "client:batch-shape",
+		Model:     "gpt-5",
+		CreatedAt: time.Now().UTC(),
+	}
+	prepared := prepareUsageLogInsert(log)
+	key := usageLogBatchKey(log.RequestID, log.APIKeyID)
+	query, _ := buildUsageLogBatchInsertQuery([]string{key}, map[string]usageLogInsertPrepared{
+		key: prepared,
+	})
+
+	m := usageLogBatchInsertShapeRe.FindStringSubmatch(query)
+	require.Len(t, m, 3, "unrecognised batch INSERT shape:\n%s", query)
+
+	countColumns := func(raw string) int {
+		count := 0
+		for _, item := range strings.Split(raw, ",") {
+			if strings.TrimSpace(item) != "" {
+				count++
+			}
+		}
+		return count
+	}
+	require.Equal(t, len(usageLogInsertArgTypes), countColumns(m[1]), "batch target columns must match usageLogInsertArgTypes")
+	require.Equal(t, len(usageLogInsertArgTypes), countColumns(m[2]), "batch SELECT expressions must match usageLogInsertArgTypes")
+
+	bestEffortQuery, _ := buildUsageLogBestEffortInsertQuery([]usageLogInsertPrepared{prepared})
+	bestEffortMatch := usageLogBatchInsertShapeRe.FindStringSubmatch(bestEffortQuery)
+	require.Len(t, bestEffortMatch, 3, "unrecognised best-effort INSERT shape:\n%s", bestEffortQuery)
+	require.Equal(t, len(usageLogInsertArgTypes), countColumns(bestEffortMatch[1]), "best-effort target columns must match usageLogInsertArgTypes")
+	require.Equal(t, len(usageLogInsertArgTypes), countColumns(bestEffortMatch[2]), "best-effort SELECT expressions must match usageLogInsertArgTypes")
+}
+
 // TestPrepareUsageLogInsert_UpstreamRequestIDArgWiring 把 upstream_request_id 钉在
 // session_id 之前，与参数类型表保持同位；缺失时落 NULL 而不是空串。
 func TestPrepareUsageLogInsert_UpstreamRequestIDArgWiring(t *testing.T) {
@@ -129,7 +166,9 @@ func TestPrepareUsageLogInsert_UpstreamRequestIDArgWiring(t *testing.T) {
 	})
 	require.Len(t, prepared.args, len(usageLogInsertArgTypes))
 
-	idx := len(prepared.args) - 4
+	// Tail order is upstream_request_id, session_id, native_compaction_v2,
+	// created_at, traffic_class.
+	idx := len(prepared.args) - 5
 	arg, ok := prepared.args[idx].(sql.NullString)
 	require.True(t, ok, "upstream_request_id arg should be sql.NullString, got %T", prepared.args[idx])
 	require.True(t, arg.Valid)

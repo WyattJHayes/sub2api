@@ -169,11 +169,27 @@ export default {
       enableEvaluationKey: 'Enable for Radar',
       enablingEvaluationKey: 'Enabling...',
       empty: 'No evaluation runs recorded',
+      budgetHint: 'Costs are in USD. Reserved cost is an estimate. Budgets are soft guards: new claims stop when recorded costs reach the limit, but in-flight requests and delayed billing may exceed it. A plan budget is not an account-wide cap.',
+      costPending: 'Not yet recorded',
+      costPartial: 'Some requests have not been billed',
+      billingProgress: 'Billed evidence {billed}/{total}',
+      pause: 'Pause',
+      pausing: 'Pausing...',
+      pauseReasons: {
+        budget: 'Recorded cost limit reached',
+        operator: 'Paused by administrator'
+      },
+      pauseDialog: {
+        title: 'Pause this evaluation run?',
+        description: 'Stop claiming new tasks. In-flight requests will finish and may still incur charges. Verify the run ID.'
+      },
       table: {
         run: 'Run',
         plan: 'Plan',
         trigger: 'Trigger',
-        reservedCost: 'Reserved cost',
+        budgetLimit: 'Budget limit',
+        reservedCost: 'Reserved cost (estimate)',
+        actualCost: 'Recorded cost',
         createdAt: 'Created'
       },
       triggers: {
@@ -191,6 +207,7 @@ export default {
         selectDataset: 'Select a dataset',
         gatewayAPIKey: 'Gateway API key ID',
         modelMatrix: 'Paired model matrix',
+        parametersHint: 'Request parameters come from the published case prompt_spec. Plans select routes without overriding temperature or output limits.',
         logicalRoute: 'Logical route',
         logicalRoutePlaceholder: 'For example deepseek-chat',
         baselineRoute: 'Baseline route',
@@ -238,7 +255,10 @@ export default {
       planCreateFailed: 'Failed to create evaluation plan',
       runReferencesRequired: 'Complete all run references',
       runStarted: 'Evaluation run started',
-      runStartFailed: 'Failed to start evaluation run'
+      runStartFailed: 'Failed to start evaluation run',
+      runPaused: 'Evaluation run paused',
+      runPauseFailed: 'Failed to pause evaluation run; retry this confirmation',
+      runPauseUnconfirmed: 'Pause not confirmed; retry or refresh to verify the run status'
     }
   }
 }
