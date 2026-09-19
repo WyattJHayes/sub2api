@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Wei-Shaw/sub2api/internal/config"
 	pluginv1 "github.com/Wei-Shaw/sub2api/pkg/pluginapi/v1"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -328,4 +329,14 @@ func TestBuildHostServicesGatesDirectoryByCapability(t *testing.T) {
 	require.True(t, ok)
 	require.Nil(t, srv2.directory, "unauthorized plugin must not receive the account directory")
 	require.NotNil(t, srv2.store, "but KV remains available")
+}
+
+func TestProvidePluginManagerWiresAccountDirectory(t *testing.T) {
+	store := newFakePluginKVStore()
+	directory := &fakeAccountDirectory{}
+
+	manager := ProvidePluginManager(nil, nil, &config.Config{}, PluginHostInfo{}, store, directory)
+
+	require.Same(t, store, manager.kvStore)
+	require.Same(t, directory, manager.accountDirectory)
 }

@@ -273,6 +273,19 @@ func ProvideAccountTestService(
 	return service
 }
 
+func ProvidePluginManager(
+	repo PluginRepository,
+	encryptor SecretEncryptor,
+	cfg *config.Config,
+	hostInfo PluginHostInfo,
+	kvStore PluginKVStore,
+	accountDirectory PluginAccountDirectory,
+) *PluginManager {
+	manager := NewPluginManager(repo, encryptor, cfg, hostInfo, kvStore)
+	manager.SetAccountDirectory(accountDirectory)
+	return manager
+}
+
 func ProvideGrokQuotaService(
 	accountRepo AccountRepository,
 	proxyRepo ProxyRepository,
@@ -392,6 +405,65 @@ func ProvideEvaluationOutboxConsumerMode(cfg *config.Config) EvaluationOutboxCon
 		return EvaluationOutboxConsumerModeCore
 	}
 	return EvaluationOutboxConsumerMode(cfg.Radar.OutboxConsumerMode)
+}
+
+func ProvideSeedanceTaskSettlementService(
+	tasks AsyncVideoBillingTaskRepository,
+	apiKeys APIKeyRepository,
+	users UserRepository,
+	accounts AccountRepository,
+	subscriptions UserSubscriptionRepository,
+	usage *OpenAIGatewayService,
+	apiKeyService *APIKeyService,
+	cfg *config.Config,
+) *SeedanceTaskSettlementService {
+	leaseDuration := defaultSeedanceReconcilerLeaseDuration
+	if cfg != nil && cfg.Gateway.SeedanceReconciler.LeaseSeconds > 0 {
+		leaseDuration = time.Duration(cfg.Gateway.SeedanceReconciler.LeaseSeconds) * time.Second
+	}
+	settlement := &SeedanceTaskSettlementService{
+		tasks:         tasks,
+		apiKeys:       apiKeys,
+		users:         users,
+		accounts:      accounts,
+		subscriptions: subscriptions,
+		usage:         usage,
+		quotaUpdater:  apiKeyService,
+		leaseDuration: leaseDuration,
+	}
+	if usage != nil {
+		settlement.recordUsage = usage.RecordUsage
+	}
+	return settlement
+}
+
+func ProvideSeedanceReconcilerRuntime(
+	tasks AsyncVideoBillingTaskRepository,
+	settlement *SeedanceTaskSettlementService,
+	client *OpenAIGatewayService,
+	scheduler RouteEvidenceTerminalizationScheduler,
+	cfg *config.Config,
+) *SeedanceReconcilerRuntime {
+	options := SeedanceReconcilerOptions{}
+	if cfg != nil {
+		reconciler := cfg.Gateway.SeedanceReconciler
+		options = SeedanceReconcilerOptions{
+			Enabled:        reconciler.Enabled,
+			PollInterval:   time.Duration(reconciler.PollIntervalSeconds) * time.Second,
+			ClaimBatch:     reconciler.ClaimBatch,
+			MaxConcurrency: reconciler.MaxConcurrency,
+			RequestTimeout: time.Duration(reconciler.RequestTimeoutSeconds) * time.Second,
+			LeaseDuration:  time.Duration(reconciler.LeaseSeconds) * time.Second,
+		}
+	}
+	var accounts AccountRepository
+	if settlement != nil {
+		accounts = settlement.accounts
+	}
+	runtime := NewSeedanceReconcilerRuntime(tasks, accounts, client, settlement, options)
+	runtime.SetScheduler(scheduler)
+	runtime.Start()
+	return runtime
 }
 
 func ProvideEvaluationOutboxConsumerRuntime(
@@ -964,6 +1036,8 @@ var ProviderSet = wire.NewSet(
 	ProvideTimingWheelService,
 	ProvideDashboardAggregationService,
 	ProvideUsageCleanupService,
+	ProvideSeedanceTaskSettlementService,
+	ProvideSeedanceReconcilerRuntime,
 	ProvideRouteEvidenceTerminalizationRuntime,
 	wire.Bind(new(RouteEvidenceTerminalizationScheduler), new(*TimingWheelService)),
 	ProvideEvaluationOutboxConsumerMode,
@@ -981,7 +1055,8 @@ var ProviderSet = wire.NewSet(
 	NewTotpService,
 	NewErrorPassthroughService,
 	NewTLSFingerprintProfileService,
-	NewPluginManager,
+	ProvidePluginManager,
+	wire.Bind(new(PluginAccountDirectory), new(*OpenAIGatewayService)),
 	NewDigestSessionStore,
 	ProvideIdempotencyCoordinator,
 	ProvideSystemOperationLockService,

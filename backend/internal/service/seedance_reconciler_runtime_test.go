@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Wei-Shaw/sub2api/internal/config"
 	"github.com/google/uuid"
 	"github.com/stretchr/testify/require"
 )
@@ -171,6 +172,7 @@ type seedanceReconcilerSchedulerStub struct {
 	mu sync.Mutex
 
 	name        string
+	canceled    string
 	interval    time.Duration
 	callback    func()
 	scheduleCnt int
@@ -186,9 +188,10 @@ func (s *seedanceReconcilerSchedulerStub) ScheduleRecurring(name string, interva
 	s.scheduleCnt++
 }
 
-func (s *seedanceReconcilerSchedulerStub) Cancel(string) {
+func (s *seedanceReconcilerSchedulerStub) Cancel(name string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	s.canceled = name
 	s.cancelCnt++
 }
 
@@ -196,6 +199,93 @@ func (s *seedanceReconcilerSchedulerStub) Callback() func() {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.callback
+}
+
+func TestProvideSeedanceTaskSettlementServiceWiresDependencies(t *testing.T) {
+	tasks := &seedanceReconcilerTaskRepoStub{}
+	apiKeys := &seedanceSettlementAPIKeyRepoStub{}
+	users := &seedanceSettlementUserRepoStub{}
+	accounts := &seedanceSettlementAccountRepoStub{}
+	subscriptions := &seedanceSettlementSubscriptionRepoStub{}
+	usage := &OpenAIGatewayService{}
+	apiKeyService := &APIKeyService{}
+	cfg := &config.Config{Gateway: config.GatewayConfig{SeedanceReconciler: config.GatewaySeedanceReconcilerConfig{
+		LeaseSeconds: 75,
+	}}}
+
+	settlement := ProvideSeedanceTaskSettlementService(
+		tasks,
+		apiKeys,
+		users,
+		accounts,
+		subscriptions,
+		usage,
+		apiKeyService,
+		cfg,
+	)
+
+	require.Same(t, tasks, settlement.tasks)
+	require.Same(t, apiKeys, settlement.apiKeys)
+	require.Same(t, users, settlement.users)
+	require.Same(t, accounts, settlement.accounts)
+	require.Same(t, subscriptions, settlement.subscriptions)
+	require.Same(t, usage, settlement.usage)
+	require.Same(t, apiKeyService, settlement.quotaUpdater)
+	require.Equal(t, 75*time.Second, settlement.leaseDuration)
+	require.NotNil(t, settlement.recordUsage)
+}
+
+func TestProvideSeedanceReconcilerRuntimeDisabledDoesNotSchedule(t *testing.T) {
+	harness := newSeedanceSettlementHarness()
+	tasks := &seedanceReconcilerTaskRepoStub{}
+	harness.service.tasks = tasks
+	scheduler := &seedanceReconcilerSchedulerStub{}
+	client := &OpenAIGatewayService{}
+	cfg := &config.Config{Gateway: config.GatewayConfig{SeedanceReconciler: config.GatewaySeedanceReconcilerConfig{
+		Enabled:               false,
+		PollIntervalSeconds:   17,
+		ClaimBatch:            9,
+		MaxConcurrency:        2,
+		RequestTimeoutSeconds: 23,
+		LeaseSeconds:          71,
+	}}}
+
+	runtime := ProvideSeedanceReconcilerRuntime(tasks, harness.service, client, scheduler, cfg)
+
+	require.NotNil(t, runtime)
+	require.Zero(t, scheduler.scheduleCnt)
+	require.Equal(t, 17*time.Second, runtime.options.PollInterval)
+	require.Equal(t, 9, runtime.options.ClaimBatch)
+	require.Equal(t, 2, runtime.options.MaxConcurrency)
+	require.Equal(t, 23*time.Second, runtime.options.RequestTimeout)
+	require.Equal(t, 71*time.Second, runtime.options.LeaseDuration)
+	runtime.Stop()
+	require.Zero(t, scheduler.cancelCnt)
+}
+
+func TestProvideSeedanceReconcilerRuntimeEnabledSchedulesAndStops(t *testing.T) {
+	harness := newSeedanceSettlementHarness()
+	tasks := &seedanceReconcilerTaskRepoStub{}
+	harness.service.tasks = tasks
+	scheduler := &seedanceReconcilerSchedulerStub{}
+	client := &OpenAIGatewayService{}
+	cfg := &config.Config{Gateway: config.GatewayConfig{SeedanceReconciler: config.GatewaySeedanceReconcilerConfig{
+		Enabled:               true,
+		PollIntervalSeconds:   11,
+		ClaimBatch:            7,
+		MaxConcurrency:        3,
+		RequestTimeoutSeconds: 19,
+		LeaseSeconds:          61,
+	}}}
+
+	runtime := ProvideSeedanceReconcilerRuntime(tasks, harness.service, client, scheduler, cfg)
+	require.Eventually(t, func() bool { return tasks.ClaimCalls() == 1 }, time.Second, 10*time.Millisecond)
+	require.Equal(t, seedanceReconcilerTimerName, scheduler.name)
+	require.Equal(t, 11*time.Second, scheduler.interval)
+
+	runtime.Stop()
+	require.Equal(t, 1, scheduler.cancelCnt)
+	require.Equal(t, seedanceReconcilerTimerName, scheduler.canceled)
 }
 
 func seedanceReconcilerClaimedTask(now time.Time) AsyncVideoBillingTask {

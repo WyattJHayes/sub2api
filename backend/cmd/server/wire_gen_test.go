@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"testing"
 	"time"
 
@@ -18,6 +19,32 @@ func (*cleanupOutboxSchedulerStub) ScheduleRecurring(string, time.Duration, func
 
 func (s *cleanupOutboxSchedulerStub) Cancel(name string) {
 	s.canceled = name
+}
+
+type cleanupSeedanceTaskRepoStub struct {
+	service.AsyncVideoBillingTaskRepository
+}
+
+func (*cleanupSeedanceTaskRepoStub) ClaimDue(context.Context, string, time.Time, int, time.Duration) ([]service.AsyncVideoBillingTask, error) {
+	return nil, nil
+}
+
+type cleanupSeedanceAccountRepoStub struct {
+	service.AccountRepository
+}
+
+type cleanupSeedanceClientStub struct{}
+
+func (*cleanupSeedanceClientStub) CreateSeedanceTask(context.Context, *service.Account, []byte) (*service.SeedanceUpstreamResponse, error) {
+	return nil, nil
+}
+
+func (*cleanupSeedanceClientStub) GetSeedanceTask(context.Context, *service.Account, string) (*service.SeedanceUpstreamResponse, error) {
+	return nil, nil
+}
+
+func (*cleanupSeedanceClientStub) DeleteSeedanceTask(context.Context, *service.Account, string) (*service.SeedanceUpstreamResponse, error) {
+	return nil, nil
 }
 
 func TestProvideServiceBuildInfo(t *testing.T) {
@@ -62,6 +89,16 @@ func TestProvideCleanup_WithMinimalDependencies_NoPanic(t *testing.T) {
 	outboxScheduler := &cleanupOutboxSchedulerStub{}
 	outboxRuntime := service.NewEvaluationOutboxConsumerRuntime(nil, nil, service.EvaluationOutboxConsumerRuntimeOptions{})
 	outboxRuntime.SetScheduler(outboxScheduler)
+	seedanceScheduler := &cleanupOutboxSchedulerStub{}
+	seedanceRuntime := service.NewSeedanceReconcilerRuntime(
+		&cleanupSeedanceTaskRepoStub{},
+		&cleanupSeedanceAccountRepoStub{},
+		&cleanupSeedanceClientStub{},
+		&service.SeedanceTaskSettlementService{},
+		service.SeedanceReconcilerOptions{Enabled: true},
+	)
+	seedanceRuntime.SetScheduler(seedanceScheduler)
+	seedanceRuntime.Start()
 
 	cleanup := provideCleanup(
 		nil, // entClient
@@ -86,6 +123,7 @@ func TestProvideCleanup_WithMinimalDependencies_NoPanic(t *testing.T) {
 		&service.UsageCleanupService{},
 		&service.RouteEvidenceTerminalizationRuntime{},
 		outboxRuntime,
+		seedanceRuntime,
 		&service.EvaluationArtifactCleanupService{},
 		idempotencyCleanupSvc,
 		&service.BatchImageCleanupService{},
@@ -119,4 +157,5 @@ func TestProvideCleanup_WithMinimalDependencies_NoPanic(t *testing.T) {
 		cleanup()
 	})
 	require.Equal(t, "radar:evaluation-outbox-consumer", outboxScheduler.canceled)
+	require.Equal(t, "gateway:seedance-reconciler", seedanceScheduler.canceled)
 }
