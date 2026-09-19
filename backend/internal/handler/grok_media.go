@@ -81,7 +81,7 @@ func (h *OpenAIGatewayHandler) handleGrokMedia(c *gin.Context, endpoint service.
 		zap.Any("group_id", apiKey.GroupID),
 		zap.String("endpoint", string(endpoint)),
 	)
-	if (endpoint == service.SeedanceEndpointCreate || endpoint == service.SeedanceEndpointStatus) &&
+	if (endpoint == service.SeedanceEndpointCreate || endpoint == service.SeedanceEndpointStatus || endpoint == service.SeedanceEndpointDelete) &&
 		(h.seedanceTasks == nil || h.seedanceSettlement == nil) {
 		h.errorResponse(c, http.StatusServiceUnavailable, "api_error", "Seedance task tracking is temporarily unavailable")
 		return
@@ -188,7 +188,7 @@ func (h *OpenAIGatewayHandler) handleGrokMedia(c *gin.Context, endpoint service.
 	legacySeedanceFallback := false
 	if endpoint.IsVideoLookupRequest() {
 		sessionHash = service.GrokMediaVideoRequestSessionHash(requestID, subject.UserID, apiKey.ID)
-		if endpoint == service.SeedanceEndpointStatus {
+		if endpoint == service.SeedanceEndpointStatus || endpoint == service.SeedanceEndpointDelete {
 			upstreamTaskID := strings.TrimPrefix(strings.TrimSpace(requestID), "seedance:")
 			durableSeedanceTask, err = h.seedanceTasks.GetOwned(
 				c.Request.Context(),
@@ -213,7 +213,7 @@ func (h *OpenAIGatewayHandler) handleGrokMedia(c *gin.Context, endpoint service.
 					return
 				}
 				boundLookupAccountID = durableSeedanceTask.AccountID
-			} else if err == nil || errors.Is(err, service.ErrAsyncVideoBillingTaskNotFound) {
+			} else if endpoint == service.SeedanceEndpointStatus && (err == nil || errors.Is(err, service.ErrAsyncVideoBillingTaskNotFound)) {
 				durableSeedanceTask = nil
 				boundLookupAccountID, err = h.gatewayService.ResolveGrokMediaVideoRequestAccount(
 					c.Request.Context(), apiKey.GroupID, requestID, subject.UserID, apiKey.ID,
@@ -226,6 +226,10 @@ func (h *OpenAIGatewayHandler) handleGrokMedia(c *gin.Context, endpoint service.
 						zap.Int64("account_id", boundLookupAccountID),
 					)
 				}
+			} else if err == nil || errors.Is(err, service.ErrAsyncVideoBillingTaskNotFound) {
+				reqLog.Info("grok_media.video_lookup_owner_binding_missing")
+				h.errorResponse(c, http.StatusNotFound, "not_found_error", "Video request not found")
+				return
 			} else {
 				reqLog.Warn("seedance_task_owner_lookup_failed",
 					zap.Int64("user_id", subject.UserID),
@@ -447,6 +451,9 @@ func (h *OpenAIGatewayHandler) handleGrokMedia(c *gin.Context, endpoint service.
 				var result *service.OpenAIForwardResult
 				result, seedanceObserved, err = h.forwardSeedanceStatusObserved(requestCtx, c, account, requestID)
 				return result, err
+			}
+			if endpoint == service.SeedanceEndpointDelete {
+				return h.forwardSeedanceDeleteProtected(requestCtx, c, reqLog, account, durableSeedanceTask, requestID)
 			}
 			if endpoint.IsSeedance() {
 				return h.gatewayService.ForwardSeedance(requestCtx, c, account, endpoint, requestID, body)

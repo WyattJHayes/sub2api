@@ -17,8 +17,32 @@ import (
 	middleware "github.com/Wei-Shaw/sub2api/internal/server/middleware"
 	"github.com/Wei-Shaw/sub2api/internal/service"
 	"github.com/gin-gonic/gin"
+	"github.com/google/uuid"
 	"github.com/stretchr/testify/require"
 )
+
+type seedanceEventLog struct {
+	mu     sync.Mutex
+	events []string
+}
+
+func (l *seedanceEventLog) add(event string) {
+	if l == nil {
+		return
+	}
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	l.events = append(l.events, event)
+}
+
+func (l *seedanceEventLog) snapshot() []string {
+	if l == nil {
+		return nil
+	}
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return append([]string(nil), l.events...)
+}
 
 type seedanceDurableTaskRepoStub struct {
 	service.AsyncVideoBillingTaskRepository
@@ -32,11 +56,32 @@ type seedanceDurableTaskRepoStub struct {
 	owned         *service.AsyncVideoBillingTask
 	getOwnedErr   error
 	getOwnedCalls []seedanceGetOwnedCall
+	claimErr      error
+	claimCalls    []seedanceClaimOwnedCall
+	retryCalls    []seedanceMarkRetryCall
+	terminalCalls []seedanceMarkTerminalCall
+	events        *seedanceEventLog
 }
 
 type seedanceGetOwnedCall struct {
 	provider, upstreamTaskID string
 	userID, apiKeyID         int64
+}
+
+type seedanceClaimOwnedCall struct {
+	taskID, userID, apiKeyID int64
+}
+
+type seedanceMarkRetryCall struct {
+	lease              service.AsyncVideoBillingLease
+	errorCode          string
+	missingTokenChecks int
+}
+
+type seedanceMarkTerminalCall struct {
+	lease     service.AsyncVideoBillingLease
+	status    string
+	errorCode string
 }
 
 func (s *seedanceDurableTaskRepoStub) Create(_ context.Context, input service.CreateAsyncVideoBillingTaskInput) (*service.AsyncVideoBillingTask, error) {
@@ -57,7 +102,35 @@ func (s *seedanceDurableTaskRepoStub) Create(_ context.Context, input service.Cr
 		copy := *s.existing
 		return &copy, nil
 	}
-	return &service.AsyncVideoBillingTask{ID: 1, TaskKey: input.TaskKey}, nil
+	created := &service.AsyncVideoBillingTask{
+		ID:                  1,
+		Provider:            input.Provider,
+		UpstreamTaskID:      input.UpstreamTaskID,
+		TaskKey:             input.TaskKey,
+		UserID:              input.UserID,
+		APIKeyID:            input.APIKeyID,
+		AccountID:           input.AccountID,
+		GroupID:             input.GroupID,
+		SubscriptionID:      input.SubscriptionID,
+		Model:               input.Model,
+		BillingModel:        input.BillingModel,
+		UpstreamModel:       input.UpstreamModel,
+		OriginalModel:       input.OriginalModel,
+		QuotaPlatform:       input.QuotaPlatform,
+		SubscriptionBilling: input.SubscriptionBilling,
+		PricingAt:           input.PricingAt,
+		RequestPayloadHash:  input.RequestPayloadHash,
+		InboundEndpoint:     input.InboundEndpoint,
+		UpstreamEndpoint:    input.UpstreamEndpoint,
+		Status:              service.AsyncVideoBillingStatusPending,
+		NextPollAt:          input.NextPollAt,
+		PollDeadlineAt:      input.PollDeadlineAt,
+		CreatedAt:           input.PricingAt,
+		UpdatedAt:           input.PricingAt,
+	}
+	owned := *created
+	s.owned = &owned
+	return created, nil
 }
 
 func (s *seedanceDurableTaskRepoStub) snapshot() ([]service.CreateAsyncVideoBillingTaskInput, []int) {
@@ -88,6 +161,48 @@ func (s *seedanceDurableTaskRepoStub) getOwnedSnapshot() []seedanceGetOwnedCall 
 	return append([]seedanceGetOwnedCall(nil), s.getOwnedCalls...)
 }
 
+func (s *seedanceDurableTaskRepoStub) ClaimOwned(_ context.Context, taskID, userID, apiKeyID int64, _ time.Time, _ time.Duration) (*service.AsyncVideoBillingTask, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.claimCalls = append(s.claimCalls, seedanceClaimOwnedCall{taskID: taskID, userID: userID, apiKeyID: apiKeyID})
+	if s.claimErr != nil {
+		return nil, s.claimErr
+	}
+	if s.owned == nil {
+		return nil, service.ErrAsyncVideoBillingTaskNotFound
+	}
+	claimed := *s.owned
+	token := uuid.MustParse("11111111-1111-4111-8111-111111111111")
+	claimed.LeaseToken = &token
+	claimed.LeaseEpoch = max(claimed.LeaseEpoch+1, 1)
+	return &claimed, nil
+}
+
+func (s *seedanceDurableTaskRepoStub) MarkRetry(_ context.Context, lease service.AsyncVideoBillingLease, _ time.Time, errorCode string, missingTokenChecks int) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.retryCalls = append(s.retryCalls, seedanceMarkRetryCall{lease: lease, errorCode: errorCode, missingTokenChecks: missingTokenChecks})
+	return nil
+}
+
+func (s *seedanceDurableTaskRepoStub) MarkTerminal(_ context.Context, lease service.AsyncVideoBillingLease, status, errorCode string, _ time.Time) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.terminalCalls = append(s.terminalCalls, seedanceMarkTerminalCall{lease: lease, status: status, errorCode: errorCode})
+	if status == service.AsyncVideoBillingStatusCancelled {
+		s.events.add("cancelled")
+	}
+	return nil
+}
+
+func (s *seedanceDurableTaskRepoStub) transitionSnapshot() ([]seedanceClaimOwnedCall, []seedanceMarkRetryCall, []seedanceMarkTerminalCall) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return append([]seedanceClaimOwnedCall(nil), s.claimCalls...),
+		append([]seedanceMarkRetryCall(nil), s.retryCalls...),
+		append([]seedanceMarkTerminalCall(nil), s.terminalCalls...)
+}
+
 type seedanceSettlementObservation struct {
 	owner          service.SeedanceTaskOwner
 	upstreamTaskID string
@@ -103,6 +218,13 @@ type seedanceSettlementObserverStub struct {
 	bills        int32
 	once         sync.Once
 	result       service.SeedanceSettlementResult
+	processCalls []seedanceSettlementProcessCall
+	events       *seedanceEventLog
+}
+
+type seedanceSettlementProcessCall struct {
+	task     service.AsyncVideoBillingTask
+	observed *service.SeedanceUpstreamResponse
 }
 
 func (s *seedanceSettlementObserverStub) ObserveOwned(
@@ -134,10 +256,32 @@ func (s *seedanceSettlementObserverStub) ObserveOwned(
 	return s.result
 }
 
+func (s *seedanceSettlementObserverStub) ProcessClaimed(
+	_ context.Context,
+	task service.AsyncVideoBillingTask,
+	observed *service.SeedanceUpstreamResponse,
+	_ time.Time,
+) service.SeedanceSettlementResult {
+	s.mu.Lock()
+	s.processCalls = append(s.processCalls, seedanceSettlementProcessCall{task: task, observed: observed})
+	s.mu.Unlock()
+	s.events.add("billing")
+	if s.result.Settled {
+		s.events.add("settled")
+	}
+	return s.result
+}
+
 func (s *seedanceSettlementObserverStub) snapshot() []seedanceSettlementObservation {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return append([]seedanceSettlementObservation(nil), s.observations...)
+}
+
+func (s *seedanceSettlementObserverStub) processSnapshot() []seedanceSettlementProcessCall {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return append([]seedanceSettlementProcessCall(nil), s.processCalls...)
 }
 
 func newSeedanceDurableCreateRequest(
@@ -376,4 +520,202 @@ func TestSeedanceGetLegacyRedisPendingStillSettles(t *testing.T) {
 	require.Equal(t, 2, upstream.calls)
 	require.Zero(t, atomic.LoadInt32(&settlement.calls))
 	require.Len(t, bindings.billed, 1)
+}
+
+func newSeedanceDurableDeleteRequest(
+	t *testing.T,
+	repo *seedanceDurableTaskRepoStub,
+	settlement *seedanceSettlementObserverStub,
+	statusCode int,
+	statusBody string,
+) (*OpenAIGatewayHandler, *gin.Context, *httptest.ResponseRecorder, *grokMediaSlotUpstream, *seedanceEventLog) {
+	t.Helper()
+	events := &seedanceEventLog{}
+	repo.events = events
+	settlement.events = events
+	h, _, _, upstream := newGrokMediaSlotHandler(t, false, false, service.PlatformOpenAI)
+	h.seedanceTasks = repo
+	h.seedanceSettlement = settlement
+	upstream.call = func(req *http.Request, accountID int64) (*http.Response, error) {
+		require.Equal(t, int64(2), accountID)
+		switch req.Method {
+		case http.MethodGet:
+			events.add("status")
+			header := http.Header{"Content-Type": []string{"application/json"}}
+			if statusCode >= http.StatusInternalServerError {
+				header.Set("Retry-After", "2")
+			}
+			return &http.Response{
+				StatusCode: statusCode,
+				Header:     header,
+				Body:       io.NopCloser(strings.NewReader(statusBody)),
+			}, nil
+		case http.MethodDelete:
+			events.add("delete")
+			return &http.Response{
+				StatusCode: http.StatusNoContent,
+				Header: http.Header{
+					"Content-Type": []string{"application/json"},
+					"X-Request-Id": []string{"seedance-delete"},
+				},
+				Body: io.NopCloser(strings.NewReader("")),
+			}, nil
+		default:
+			require.FailNow(t, "unexpected Seedance method", req.Method)
+			return nil, nil
+		}
+	}
+	c, recorder := grokMediaSlotContext(context.Background(), false)
+	key, ok := middleware.GetAPIKeyFromContext(c)
+	require.True(t, ok)
+	key.Group.Platform = service.PlatformOpenAI
+	c.Request = httptest.NewRequest(http.MethodDelete, "/api/v3/contents/generations/tasks/task", nil)
+	c.Params = gin.Params{{Key: "task_id", Value: "task"}}
+	return h, c, recorder, upstream, events
+}
+
+func pendingSeedanceDeleteTask() *service.AsyncVideoBillingTask {
+	return &service.AsyncVideoBillingTask{
+		ID: 41, Provider: service.AsyncVideoBillingProviderSeedance, UpstreamTaskID: "task",
+		TaskKey: "seedance:task", UserID: 10, APIKeyID: 20, AccountID: 2,
+		Model: "doubao-seedance", BillingModel: "doubao-seedance",
+		Status: service.AsyncVideoBillingStatusPending, CreatedAt: time.Now().Add(-time.Minute),
+		PollDeadlineAt: time.Now().Add(time.Hour),
+	}
+}
+
+func TestSeedanceDeleteSucceededTaskSettlesBeforeDelete(t *testing.T) {
+	repo := &seedanceDurableTaskRepoStub{owned: pendingSeedanceDeleteTask()}
+	settlement := &seedanceSettlementObserverStub{result: service.SeedanceSettlementResult{Settled: true}}
+	h, c, recorder, upstream, events := newSeedanceDurableDeleteRequest(
+		t,
+		repo,
+		settlement,
+		http.StatusOK,
+		`{"id":"task","status":"succeeded","model":"doubao-seedance","usage":{"completion_tokens":20}}`,
+	)
+
+	h.SeedanceTasks(c)
+
+	require.Equal(t, http.StatusNoContent, recorder.Code, recorder.Body.String())
+	require.Equal(t, "seedance-delete", recorder.Header().Get("X-Request-Id"))
+	require.Equal(t, []string{"status", "billing", "settled", "delete"}, events.snapshot())
+	require.Equal(t, 2, upstream.calls)
+	processCalls := settlement.processSnapshot()
+	require.Len(t, processCalls, 1)
+	require.Equal(t, service.SeedanceObservedSucceeded, processCalls[0].observed.State)
+	require.Equal(t, 20, processCalls[0].observed.Result.Usage.OutputTokens)
+	require.True(t, service.AsyncVideoBillingLease{
+		TaskID: processCalls[0].task.ID, Token: *processCalls[0].task.LeaseToken, Epoch: processCalls[0].task.LeaseEpoch,
+	}.Valid())
+}
+
+func TestSeedanceDeleteStatusFailureDoesNotDelete(t *testing.T) {
+	repo := &seedanceDurableTaskRepoStub{owned: pendingSeedanceDeleteTask()}
+	settlement := &seedanceSettlementObserverStub{}
+	h, c, recorder, upstream, events := newSeedanceDurableDeleteRequest(
+		t,
+		repo,
+		settlement,
+		http.StatusServiceUnavailable,
+		`{"error":{"code":"temporarily_unavailable"}}`,
+	)
+
+	h.SeedanceTasks(c)
+
+	require.Equal(t, http.StatusServiceUnavailable, recorder.Code, recorder.Body.String())
+	require.Equal(t, "2", recorder.Header().Get("Retry-After"))
+	require.Equal(t, []string{"status"}, events.snapshot())
+	require.Equal(t, 1, upstream.calls)
+	_, retries, terminals := repo.transitionSnapshot()
+	require.Len(t, retries, 1)
+	require.Equal(t, "temporarily_unavailable", retries[0].errorCode)
+	require.Empty(t, terminals)
+	require.Empty(t, settlement.processSnapshot())
+}
+
+func TestSeedanceDeleteSuccessfulStatusWithProtocolErrorReturnsRetryableFailure(t *testing.T) {
+	repo := &seedanceDurableTaskRepoStub{owned: pendingSeedanceDeleteTask()}
+	settlement := &seedanceSettlementObserverStub{}
+	h, c, recorder, upstream, events := newSeedanceDurableDeleteRequest(
+		t,
+		repo,
+		settlement,
+		http.StatusOK,
+		`{"id":"task","status":"processing"}`,
+	)
+	originalCall := upstream.call
+	upstream.call = func(req *http.Request, accountID int64) (*http.Response, error) {
+		if req.Method != http.MethodDelete {
+			return originalCall(req, accountID)
+		}
+		require.Equal(t, int64(2), accountID)
+		events.add("delete")
+		h.cfg.Gateway.UpstreamResponseReadMaxBytes = 1
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Header:     http.Header{"Content-Type": []string{"application/json"}},
+			Body:       io.NopCloser(strings.NewReader("xx")),
+		}, nil
+	}
+
+	h.SeedanceTasks(c)
+
+	require.Equal(t, http.StatusServiceUnavailable, recorder.Code, recorder.Body.String())
+	require.Equal(t, []string{"status", "delete"}, events.snapshot())
+	require.Equal(t, 2, upstream.calls)
+	_, retries, terminals := repo.transitionSnapshot()
+	require.Len(t, retries, 1)
+	require.Equal(t, "response_too_large", retries[0].errorCode)
+	require.Empty(t, terminals)
+	require.Empty(t, settlement.processSnapshot())
+}
+
+func TestSeedanceDeletePendingTaskMarksCancelledAfterDelete(t *testing.T) {
+	repo := &seedanceDurableTaskRepoStub{owned: pendingSeedanceDeleteTask()}
+	settlement := &seedanceSettlementObserverStub{}
+	h, c, recorder, upstream, events := newSeedanceDurableDeleteRequest(
+		t,
+		repo,
+		settlement,
+		http.StatusOK,
+		`{"id":"task","status":"processing"}`,
+	)
+
+	h.SeedanceTasks(c)
+
+	require.Equal(t, http.StatusNoContent, recorder.Code, recorder.Body.String())
+	require.Equal(t, []string{"status", "delete", "cancelled"}, events.snapshot())
+	require.Equal(t, 2, upstream.calls)
+	_, retries, terminals := repo.transitionSnapshot()
+	require.Empty(t, retries)
+	require.Len(t, terminals, 1)
+	require.Equal(t, service.AsyncVideoBillingStatusCancelled, terminals[0].status)
+	require.True(t, terminals[0].lease.Valid())
+	require.Empty(t, settlement.processSnapshot())
+}
+
+func TestSeedanceDeleteOwnerMismatchIsInvisible(t *testing.T) {
+	task := pendingSeedanceDeleteTask()
+	task.UserID = 99
+	repo := &seedanceDurableTaskRepoStub{owned: task}
+	settlement := &seedanceSettlementObserverStub{}
+	h, c, recorder, upstream, events := newSeedanceDurableDeleteRequest(
+		t,
+		repo,
+		settlement,
+		http.StatusOK,
+		`{"id":"task","status":"processing"}`,
+	)
+
+	h.SeedanceTasks(c)
+
+	require.Equal(t, http.StatusNotFound, recorder.Code, recorder.Body.String())
+	require.Empty(t, events.snapshot())
+	require.Zero(t, upstream.calls)
+	claims, retries, terminals := repo.transitionSnapshot()
+	require.Empty(t, claims)
+	require.Empty(t, retries)
+	require.Empty(t, terminals)
+	require.Empty(t, settlement.processSnapshot())
 }

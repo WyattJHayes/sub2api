@@ -5,6 +5,7 @@ import (
 	"errors"
 	"mime"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 
@@ -18,6 +19,11 @@ import (
 
 const seedanceTaskPersistenceRetryDelay = 50 * time.Millisecond
 
+const (
+	seedanceDeleteLeaseDuration = time.Minute
+	seedanceDeleteRetryDelay    = 5 * time.Second
+)
+
 var errSeedanceTaskPersistence = errors.New("seedance task persistence failed")
 
 type seedanceSettlementObserver interface {
@@ -25,6 +31,12 @@ type seedanceSettlementObserver interface {
 		context.Context,
 		service.SeedanceTaskOwner,
 		string,
+		*service.SeedanceUpstreamResponse,
+		time.Time,
+	) service.SeedanceSettlementResult
+	ProcessClaimed(
+		context.Context,
+		service.AsyncVideoBillingTask,
 		*service.SeedanceUpstreamResponse,
 		time.Time,
 	) service.SeedanceSettlementResult
@@ -229,6 +241,202 @@ func (h *OpenAIGatewayHandler) forwardSeedanceStatusObserved(
 	}
 	h.writeSeedanceResponse(c, response)
 	return response.Result, response, nil
+}
+
+func (h *OpenAIGatewayHandler) forwardSeedanceDeleteProtected(
+	ctx context.Context,
+	c *gin.Context,
+	reqLog *zap.Logger,
+	account *service.Account,
+	task *service.AsyncVideoBillingTask,
+	taskID string,
+) (*service.OpenAIForwardResult, error) {
+	if h == nil || h.seedanceTasks == nil || h.seedanceSettlement == nil || account == nil || task == nil {
+		err := errors.New("seedance delete dependencies are unavailable")
+		h.writeSeedanceDeleteRetryableError(c, err)
+		return nil, err
+	}
+
+	now := time.Now()
+	claimed := *task
+	hasLease := false
+	switch task.Status {
+	case service.AsyncVideoBillingStatusPending:
+		claimedTask, err := h.seedanceTasks.ClaimOwned(
+			ctx,
+			task.ID,
+			task.UserID,
+			task.APIKeyID,
+			now,
+			seedanceDeleteLeaseDuration,
+		)
+		if err != nil || claimedTask == nil {
+			if err == nil {
+				err = service.ErrAsyncVideoBillingTaskNotFound
+			}
+			h.writeSeedanceDeleteRetryableError(c, err)
+			return nil, err
+		}
+		claimed = *claimedTask
+		hasLease = true
+	case service.AsyncVideoBillingStatusSettled,
+		service.AsyncVideoBillingStatusFailed,
+		service.AsyncVideoBillingStatusCancelled:
+		// These terminal states no longer need a lease to protect billing.
+	case service.AsyncVideoBillingStatusDeadLetter:
+		err := errors.New("seedance task billing is unresolved")
+		h.writeSeedanceDeleteRetryableError(c, err)
+		return nil, err
+	default:
+		err := errors.New("seedance task billing status is invalid")
+		h.writeSeedanceDeleteRetryableError(c, err)
+		return nil, err
+	}
+
+	statusResponse, err := h.gatewayService.GetSeedanceTask(ctx, account, taskID)
+	if err != nil {
+		if hasLease {
+			h.releaseSeedanceDeleteLease(ctx, reqLog, claimed, seedanceDeleteErrorCode(err))
+		}
+		h.writeSeedanceDeleteRetryableError(c, err)
+		return nil, err
+	}
+	if statusResponse == nil || statusResponse.Result == nil {
+		err = errors.New("seedance delete status response is incomplete")
+		if hasLease {
+			h.releaseSeedanceDeleteLease(ctx, reqLog, claimed, "seedance_delete_status_incomplete")
+		}
+		h.writeSeedanceDeleteRetryableError(c, err)
+		return nil, err
+	}
+
+	if statusResponse.State == service.SeedanceObservedSucceeded && task.Status != service.AsyncVideoBillingStatusSettled {
+		if !hasLease {
+			err = errors.New("seedance completed task is not claimable for settlement")
+			h.writeSeedanceDeleteRetryableError(c, err)
+			return nil, err
+		}
+		settlement := h.seedanceSettlement.ProcessClaimed(ctx, claimed, statusResponse, now)
+		hasLease = false
+		if !settlement.Settled {
+			if settlement.Fenced && h.seedanceDeleteTaskIsSettled(ctx, claimed) {
+				// A concurrent execution completed the same idempotent settlement.
+			} else {
+				err = settlement.Err
+				if err == nil {
+					err = errors.New("seedance settlement did not complete")
+				}
+				h.writeSeedanceDeleteRetryableError(c, err)
+				return nil, err
+			}
+		}
+	}
+
+	deleteResponse, err := h.gatewayService.DeleteSeedanceTask(ctx, account, taskID)
+	if err != nil {
+		if hasLease {
+			h.releaseSeedanceDeleteLease(ctx, reqLog, claimed, seedanceDeleteErrorCode(err))
+		}
+		if deleteResponse != nil && deleteResponse.StatusCode >= http.StatusMultipleChoices {
+			h.writeSeedanceResponse(c, deleteResponse)
+		} else {
+			h.writeSeedanceDeleteRetryableError(c, err)
+		}
+		return nil, err
+	}
+	if deleteResponse == nil || deleteResponse.Result == nil {
+		err = errors.New("seedance delete response is incomplete")
+		if hasLease {
+			h.releaseSeedanceDeleteLease(ctx, reqLog, claimed, "seedance_delete_response_incomplete")
+		}
+		h.writeSeedanceDeleteRetryableError(c, err)
+		return nil, err
+	}
+
+	if hasLease {
+		terminalStatus := service.AsyncVideoBillingStatusCancelled
+		switch statusResponse.State {
+		case service.SeedanceObservedFailed:
+			terminalStatus = service.AsyncVideoBillingStatusFailed
+		case service.SeedanceObservedCancelled:
+			terminalStatus = service.AsyncVideoBillingStatusCancelled
+		}
+		if err = h.seedanceTasks.MarkTerminal(
+			ctx,
+			seedanceTaskLeaseForHandler(claimed),
+			terminalStatus,
+			"",
+			time.Now(),
+		); err != nil {
+			h.writeSeedanceDeleteRetryableError(c, err)
+			return nil, err
+		}
+	}
+
+	h.writeSeedanceResponse(c, deleteResponse)
+	return deleteResponse.Result, nil
+}
+
+func (h *OpenAIGatewayHandler) releaseSeedanceDeleteLease(
+	ctx context.Context,
+	reqLog *zap.Logger,
+	task service.AsyncVideoBillingTask,
+	errorCode string,
+) {
+	err := h.seedanceTasks.MarkRetry(
+		ctx,
+		seedanceTaskLeaseForHandler(task),
+		time.Now().Add(seedanceDeleteRetryDelay),
+		errorCode,
+		task.MissingTokenChecks,
+	)
+	if err != nil && reqLog != nil {
+		reqLog.Warn("seedance_delete_lease_release_failed",
+			zap.Int64("task_id", task.ID),
+			zap.Int64("user_id", task.UserID),
+			zap.Int64("api_key_id", task.APIKeyID),
+			zap.String("error_code", errorCode),
+		)
+	}
+}
+
+func (h *OpenAIGatewayHandler) seedanceDeleteTaskIsSettled(ctx context.Context, task service.AsyncVideoBillingTask) bool {
+	current, err := h.seedanceTasks.GetOwned(
+		ctx,
+		service.AsyncVideoBillingProviderSeedance,
+		task.UpstreamTaskID,
+		task.UserID,
+		task.APIKeyID,
+	)
+	return err == nil && current != nil && current.Status == service.AsyncVideoBillingStatusSettled
+}
+
+func seedanceTaskLeaseForHandler(task service.AsyncVideoBillingTask) service.AsyncVideoBillingLease {
+	lease := service.AsyncVideoBillingLease{TaskID: task.ID, Epoch: task.LeaseEpoch}
+	if task.LeaseToken != nil {
+		lease.Token = *task.LeaseToken
+	}
+	return lease
+}
+
+func seedanceDeleteErrorCode(err error) string {
+	var upstreamErr *service.SeedanceUpstreamError
+	if errors.As(err, &upstreamErr) && strings.TrimSpace(upstreamErr.SafeCode) != "" {
+		return strings.TrimSpace(upstreamErr.SafeCode)
+	}
+	return "seedance_delete_upstream_failed"
+}
+
+func (h *OpenAIGatewayHandler) writeSeedanceDeleteRetryableError(c *gin.Context, err error) {
+	if c == nil || service.IsResponseCommitted(c) {
+		return
+	}
+	var upstreamErr *service.SeedanceUpstreamError
+	if errors.As(err, &upstreamErr) && upstreamErr.RetryDelay > 0 {
+		seconds := int((upstreamErr.RetryDelay + time.Second - 1) / time.Second)
+		c.Header("Retry-After", strconv.Itoa(max(seconds, 1)))
+	}
+	h.errorResponse(c, http.StatusServiceUnavailable, "upstream_error", "Seedance task status is temporarily unavailable; retry deletion later")
 }
 
 func seedanceResponseHeaderFilter(cfg *config.Config) *responseheaders.CompiledHeaderFilter {

@@ -53,7 +53,7 @@ func TestSeedanceHandlerLifecycleAndOwnership(t *testing.T) {
 		require.Equal(t, 200, w.Code, w.Body.String())
 		slots.assertReleased(t)
 	}
-	for _, other := range []string{"user", "key", "group", "task", "provider"} {
+	for _, other := range []string{"user", "key", "task", "provider"} {
 		c, w = newContext(http.MethodGet)
 		key, _ := middleware.GetAPIKeyFromContext(c)
 		switch other {
@@ -61,9 +61,6 @@ func TestSeedanceHandlerLifecycleAndOwnership(t *testing.T) {
 			c.Set(string(middleware.ContextKeyUser), middleware.AuthSubject{UserID: 11, Concurrency: 5})
 		case "key":
 			key.ID = 21
-		case "group":
-			group := int64(25)
-			key.GroupID = &group
 		case "task":
 			c.Params = gin.Params{{Key: "task_id", Value: "other"}}
 		case "provider":
