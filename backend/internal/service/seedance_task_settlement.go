@@ -15,6 +15,7 @@ const (
 	seedanceErrorUserMissing             = "seedance_user_missing"
 	seedanceErrorAPIKeyMissing           = "seedance_api_key_missing"
 	seedanceErrorAccountMissing          = "seedance_account_missing"
+	seedanceErrorGroupMissing            = "seedance_group_missing"
 	seedanceErrorSubscriptionMissing     = "seedance_subscription_missing"
 	seedanceErrorOwnerMismatch           = "seedance_owner_mismatch"
 	seedanceErrorDeadlineExceeded        = "seedance_poll_deadline_exceeded"
@@ -41,6 +42,7 @@ type SeedanceTaskSettlementService struct {
 	apiKeys       APIKeyRepository
 	users         UserRepository
 	accounts      AccountRepository
+	groups        GroupRepository
 	subscriptions UserSubscriptionRepository
 	usage         *OpenAIGatewayService
 	quotaUpdater  APIKeyQuotaUpdater
@@ -93,6 +95,10 @@ func (s *SeedanceTaskSettlementService) ProcessClaimed(
 	if result != nil {
 		return *result
 	}
+	group, result := s.loadSeedanceGroup(ctx, task, now)
+	if result != nil {
+		return *result
+	}
 	account, result := s.loadSeedanceAccount(ctx, task, now)
 	if result != nil {
 		return *result
@@ -101,11 +107,14 @@ func (s *SeedanceTaskSettlementService) ProcessClaimed(
 	if result != nil {
 		return *result
 	}
-	if !seedanceOwnershipMatches(task, user, apiKey, account, subscription) {
+	if !seedanceOwnershipMatches(task, user, apiKey, account, group, subscription) {
 		return s.deadLetter(ctx, task, now, seedanceErrorOwnerMismatch)
 	}
 
-	apiKey.User = user
+	billingAPIKey := *apiKey
+	billingAPIKey.User = user
+	billingAPIKey.GroupID = copyOptionalInt64(task.GroupID)
+	billingAPIKey.Group = group
 	usageResult := *observed.Result
 	usageResult.RequestID = StableGrokVideoBillingRequestID(task.TaskKey)
 	usageResult.ResponseID = task.TaskKey
@@ -123,7 +132,7 @@ func (s *SeedanceTaskSettlementService) ProcessClaimed(
 	}
 	if err := recordUsage(ctx, &OpenAIRecordUsageInput{
 		Result:             &usageResult,
-		APIKey:             apiKey,
+		APIKey:             &billingAPIKey,
 		User:               user,
 		Account:            account,
 		Subscription:       subscription,
@@ -273,6 +282,26 @@ func (s *SeedanceTaskSettlementService) loadSeedanceAccount(ctx context.Context,
 	return account, nil
 }
 
+func (s *SeedanceTaskSettlementService) loadSeedanceGroup(ctx context.Context, task AsyncVideoBillingTask, now time.Time) (*Group, *SeedanceSettlementResult) {
+	if task.GroupID == nil {
+		return nil, nil
+	}
+	if s == nil || s.groups == nil {
+		result := s.retry(ctx, task, now, "seedance_group_repository_unavailable", task.MissingTokenChecks, errors.New("seedance group repository is unavailable"))
+		return nil, &result
+	}
+	group, err := s.groups.GetByID(ctx, *task.GroupID)
+	if errors.Is(err, ErrGroupNotFound) || (err == nil && group == nil) {
+		result := s.deadLetter(ctx, task, now, seedanceErrorGroupMissing)
+		return nil, &result
+	}
+	if err != nil {
+		result := s.retry(ctx, task, now, "seedance_group_load_failed", task.MissingTokenChecks, err)
+		return nil, &result
+	}
+	return group, nil
+}
+
 func (s *SeedanceTaskSettlementService) loadSeedanceSubscription(ctx context.Context, task AsyncVideoBillingTask, now time.Time) (*UserSubscription, *SeedanceSettlementResult) {
 	if task.SubscriptionID == nil {
 		if task.SubscriptionBilling {
@@ -301,14 +330,17 @@ func (s *SeedanceTaskSettlementService) loadSeedanceSubscription(ctx context.Con
 	return subscription, nil
 }
 
-func seedanceOwnershipMatches(task AsyncVideoBillingTask, user *User, apiKey *APIKey, account *Account, subscription *UserSubscription) bool {
+func seedanceOwnershipMatches(task AsyncVideoBillingTask, user *User, apiKey *APIKey, account *Account, group *Group, subscription *UserSubscription) bool {
 	if user == nil || apiKey == nil || account == nil {
 		return false
 	}
 	if user.ID != task.UserID || apiKey.ID != task.APIKeyID || apiKey.UserID != task.UserID || account.ID != task.AccountID {
 		return false
 	}
-	if !sameOptionalInt64(task.GroupID, apiKey.GroupID) {
+	if task.GroupID == nil && group != nil {
+		return false
+	}
+	if task.GroupID != nil && (group == nil || group.ID != *task.GroupID) {
 		return false
 	}
 	if task.SubscriptionID == nil {
@@ -317,11 +349,12 @@ func seedanceOwnershipMatches(task AsyncVideoBillingTask, user *User, apiKey *AP
 	return subscription != nil && subscription.ID == *task.SubscriptionID && subscription.UserID == task.UserID && task.GroupID != nil && subscription.GroupID == *task.GroupID
 }
 
-func sameOptionalInt64(left, right *int64) bool {
-	if left == nil || right == nil {
-		return left == nil && right == nil
+func copyOptionalInt64(value *int64) *int64 {
+	if value == nil {
+		return nil
 	}
-	return *left == *right
+	copyValue := *value
+	return &copyValue
 }
 
 func (s *SeedanceTaskSettlementService) retry(ctx context.Context, task AsyncVideoBillingTask, now time.Time, errorCode string, missingTokenChecks int, cause error) SeedanceSettlementResult {

@@ -298,7 +298,7 @@ func initializeApplication(buildInfo handler.BuildInfo) (*Application, error) {
 	coordinator := securityaudit.NewCoordinator(legacyEngine, promptService)
 	gatewayHandler := handler.ProvideGatewayHandler(gatewayService, openAIGatewayService, geminiMessagesCompatService, antigravityGatewayService, userService, concurrencyService, billingCacheService, usageService, apiKeyService, usageRecordWorkerPool, errorPassthroughService, contentModerationService, userMessageQueueService, configConfig, settingService, coordinator)
 	asyncVideoBillingTaskRepository := repository.NewAsyncVideoBillingTaskRepository(db)
-	seedanceTaskSettlementService := service.ProvideSeedanceTaskSettlementService(asyncVideoBillingTaskRepository, apiKeyRepository, userRepository, accountRepository, userSubscriptionRepository, openAIGatewayService, apiKeyService, configConfig)
+	seedanceTaskSettlementService := service.ProvideSeedanceTaskSettlementService(asyncVideoBillingTaskRepository, apiKeyRepository, userRepository, accountRepository, groupRepository, userSubscriptionRepository, openAIGatewayService, apiKeyService, configConfig)
 	openAIGatewayHandler := handler.ProvideOpenAIGatewayHandler(openAIGatewayService, pluginManager, concurrencyService, billingCacheService, apiKeyService, usageRecordWorkerPool, errorPassthroughService, contentModerationService, opsService, grokQuotaService, asyncVideoBillingTaskRepository, seedanceTaskSettlementService, configConfig, coordinator)
 	handlerSettingHandler := handler.ProvideSettingHandler(settingService, buildInfo, notificationEmailService)
 	totpHandler := handler.NewTotpHandler(totpService)

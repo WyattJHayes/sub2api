@@ -214,6 +214,7 @@ func TestProvideSeedanceTaskSettlementServiceWiresDependencies(t *testing.T) {
 	apiKeys := &seedanceSettlementAPIKeyRepoStub{}
 	users := &seedanceSettlementUserRepoStub{}
 	accounts := &seedanceSettlementAccountRepoStub{}
+	groups := &seedanceSettlementGroupRepoStub{}
 	subscriptions := &seedanceSettlementSubscriptionRepoStub{}
 	usage := &OpenAIGatewayService{}
 	apiKeyService := &APIKeyService{}
@@ -226,6 +227,7 @@ func TestProvideSeedanceTaskSettlementServiceWiresDependencies(t *testing.T) {
 		apiKeys,
 		users,
 		accounts,
+		groups,
 		subscriptions,
 		usage,
 		apiKeyService,
@@ -236,6 +238,7 @@ func TestProvideSeedanceTaskSettlementServiceWiresDependencies(t *testing.T) {
 	require.Same(t, apiKeys, settlement.apiKeys)
 	require.Same(t, users, settlement.users)
 	require.Same(t, accounts, settlement.accounts)
+	require.Same(t, groups, settlement.groups)
 	require.Same(t, subscriptions, settlement.subscriptions)
 	require.Same(t, usage, settlement.usage)
 	require.Same(t, apiKeyService, settlement.quotaUpdater)

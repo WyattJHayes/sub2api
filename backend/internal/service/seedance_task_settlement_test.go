@@ -117,6 +117,18 @@ func (s *seedanceSettlementAccountRepoStub) GetByID(_ context.Context, id int64)
 	return s.value, s.err
 }
 
+type seedanceSettlementGroupRepoStub struct {
+	GroupRepository
+	value *Group
+	err   error
+	calls []int64
+}
+
+func (s *seedanceSettlementGroupRepoStub) GetByID(_ context.Context, id int64) (*Group, error) {
+	s.calls = append(s.calls, id)
+	return s.value, s.err
+}
+
 type seedanceSettlementSubscriptionRepoStub struct {
 	UserSubscriptionRepository
 	value *UserSubscription
@@ -150,6 +162,7 @@ type seedanceSettlementHarness struct {
 	apiKeys       *seedanceSettlementAPIKeyRepoStub
 	users         *seedanceSettlementUserRepoStub
 	accounts      *seedanceSettlementAccountRepoStub
+	groups        *seedanceSettlementGroupRepoStub
 	subscriptions *seedanceSettlementSubscriptionRepoStub
 	quota         *seedanceSettlementQuotaStub
 }
@@ -160,6 +173,7 @@ func newSeedanceSettlementHarness() *seedanceSettlementHarness {
 	user := &User{ID: 11, Status: StatusActive}
 	apiKey := &APIKey{ID: 21, UserID: user.ID, GroupID: &groupID, Status: StatusAPIKeyActive, User: user}
 	account := &Account{ID: 51, Status: StatusActive}
+	group := &Group{ID: groupID, RateMultiplier: 0.8, VideoRateIndependent: true, VideoRateMultiplier: 0.25}
 	subscription := &UserSubscription{ID: subscriptionID, UserID: user.ID, GroupID: groupID, Status: SubscriptionStatusActive}
 
 	h := &seedanceSettlementHarness{
@@ -167,6 +181,7 @@ func newSeedanceSettlementHarness() *seedanceSettlementHarness {
 		apiKeys:       &seedanceSettlementAPIKeyRepoStub{value: apiKey},
 		users:         &seedanceSettlementUserRepoStub{value: user},
 		accounts:      &seedanceSettlementAccountRepoStub{value: account},
+		groups:        &seedanceSettlementGroupRepoStub{value: group},
 		subscriptions: &seedanceSettlementSubscriptionRepoStub{value: subscription},
 		quota:         &seedanceSettlementQuotaStub{},
 	}
@@ -175,6 +190,7 @@ func newSeedanceSettlementHarness() *seedanceSettlementHarness {
 		apiKeys:       h.apiKeys,
 		users:         h.users,
 		accounts:      h.accounts,
+		groups:        h.groups,
 		subscriptions: h.subscriptions,
 		quotaUpdater:  h.quota,
 		leaseDuration: time.Minute,
@@ -321,7 +337,8 @@ func TestSeedanceSettlementLoadsDeletedAPIKeyAndSubscription(t *testing.T) {
 	require.Equal(t, []int64{task.APIKeyID}, h.apiKeys.calls)
 	require.Equal(t, []int64{*task.SubscriptionID}, h.subscriptions.calls)
 	require.Same(t, h.users.value, captured.User)
-	require.Same(t, h.apiKeys.value, captured.APIKey)
+	require.Equal(t, h.apiKeys.value.ID, captured.APIKey.ID)
+	require.Equal(t, h.apiKeys.value.UserID, captured.APIKey.UserID)
 	require.Same(t, h.subscriptions.value, captured.Subscription)
 	require.Same(t, h.accounts.value, captured.Account)
 	require.Same(t, h.quota, captured.APIKeyService)
@@ -329,6 +346,57 @@ func TestSeedanceSettlementLoadsDeletedAPIKeyAndSubscription(t *testing.T) {
 	require.Equal(t, task.RequestPayloadHash, captured.RequestPayloadHash)
 	require.Equal(t, task.OriginalModel, captured.OriginalModel)
 	require.Equal(t, task.Model, captured.ChannelMappedModel)
+}
+
+func TestSeedanceSettlementUsesPersistedGroupAfterAPIKeyMoves(t *testing.T) {
+	now := time.Date(2026, time.September, 19, 8, 0, 0, 0, time.UTC)
+	h := newSeedanceSettlementHarness()
+	currentGroupID := int64(99)
+	h.apiKeys.value.GroupID = &currentGroupID
+	h.apiKeys.value.Group = &Group{ID: currentGroupID, RateMultiplier: 9}
+
+	var captured *OpenAIRecordUsageInput
+	h.service.recordUsage = func(_ context.Context, input *OpenAIRecordUsageInput) error {
+		captured = input
+		return nil
+	}
+
+	task := seedanceSettlementClaimedTask(now)
+	result := h.service.ProcessClaimed(context.Background(), task, seedanceSettlementSucceeded(80), now)
+
+	require.NoError(t, result.Err)
+	require.True(t, result.Settled)
+	require.False(t, result.DeadLettered)
+	require.Empty(t, h.tasks.terminalCalls)
+	require.Equal(t, []int64{*task.GroupID}, h.groups.calls)
+	require.NotNil(t, captured)
+	require.NotSame(t, h.apiKeys.value, captured.APIKey)
+	require.Equal(t, task.GroupID, captured.APIKey.GroupID)
+	require.Same(t, h.groups.value, captured.APIKey.Group)
+}
+
+func TestSeedanceSettlementPhysicallyMissingGroupDeadLetters(t *testing.T) {
+	now := time.Date(2026, time.September, 19, 8, 0, 0, 0, time.UTC)
+	h := newSeedanceSettlementHarness()
+	h.groups.value = nil
+	h.groups.err = ErrGroupNotFound
+	recordUsageCalls := 0
+	h.service.recordUsage = func(context.Context, *OpenAIRecordUsageInput) error {
+		recordUsageCalls++
+		return nil
+	}
+
+	task := seedanceSettlementClaimedTask(now)
+	result := h.service.ProcessClaimed(context.Background(), task, seedanceSettlementSucceeded(80), now)
+
+	require.NoError(t, result.Err)
+	require.True(t, result.DeadLettered)
+	require.Equal(t, "seedance_group_missing", result.ErrorCode)
+	require.Zero(t, recordUsageCalls)
+	require.Equal(t, []int64{*task.GroupID}, h.groups.calls)
+	require.Len(t, h.tasks.terminalCalls, 1)
+	require.Equal(t, AsyncVideoBillingStatusDeadLetter, h.tasks.terminalCalls[0].Status)
+	require.Equal(t, "seedance_group_missing", h.tasks.terminalCalls[0].ErrorCode)
 }
 
 func TestSeedanceSettlementPhysicallyMissingOwnerDeadLetters(t *testing.T) {
