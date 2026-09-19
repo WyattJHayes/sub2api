@@ -139,6 +139,32 @@ WHERE ns.nspname = 'public'
 	requireColumn(t, tx, "usage_billing_dedup_archive", "request_fingerprint", "character varying", 64, false)
 	requireIndex(t, tx, "usage_billing_dedup_archive", "usage_billing_dedup_archive_pkey")
 
+	// async_video_billing_tasks: durable Seedance settlement ledger.
+	var tasksRegclass sql.NullString
+	require.NoError(t, tx.QueryRowContext(context.Background(),
+		"SELECT to_regclass('public.async_video_billing_tasks')",
+	).Scan(&tasksRegclass))
+	require.True(t, tasksRegclass.Valid)
+	for _, column := range []struct {
+		name, dataType string
+		nullable       bool
+	}{
+		{"provider", "character varying", false},
+		{"upstream_task_id", "character varying", false},
+		{"task_key", "character varying", false},
+		{"pricing_at", "timestamp with time zone", false},
+		{"lease_token", "uuid", true},
+		{"lease_epoch", "bigint", false},
+		{"lease_expires_at", "timestamp with time zone", true},
+		{"settled_at", "timestamp with time zone", true},
+	} {
+		requireColumn(t, tx, "async_video_billing_tasks", column.name, column.dataType, 0, column.nullable)
+	}
+	requireIndex(t, tx, "async_video_billing_tasks", "async_video_billing_tasks_provider_upstream_owner_key")
+	requireIndex(t, tx, "async_video_billing_tasks", "idx_async_video_billing_tasks_due")
+	requireConstraintDefinitionContains(t, tx, "async_video_billing_tasks", "async_video_billing_tasks_status_check",
+		"'pending'", "'settled'", "'failed'", "'cancelled'", "'dead_letter'")
+
 	// settings table should exist
 	var settingsRegclass sql.NullString
 	require.NoError(t, tx.QueryRowContext(context.Background(), "SELECT to_regclass('public.settings')").Scan(&settingsRegclass))
