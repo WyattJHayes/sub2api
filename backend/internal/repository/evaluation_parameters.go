@@ -1,6 +1,7 @@
 package repository
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -21,8 +22,13 @@ var evaluationRequestParameterKeys = []string{
 func validateEvaluationMatrixParameters(matrix []evaluationMatrixEntry, cases []evaluationCaseForRun) error {
 	for _, evaluationCase := range cases {
 		var prompt map[string]json.RawMessage
-		if err := json.Unmarshal(evaluationCase.promptSpec, &prompt); err != nil {
-			return fmt.Errorf("decode evaluation case request parameters: %w", err)
+		if !json.Valid(evaluationCase.promptSpec) {
+			return fmt.Errorf("decode evaluation case request parameters: invalid JSON")
+		}
+		if bytes.HasPrefix(bytes.TrimSpace(evaluationCase.promptSpec), []byte("{")) {
+			if err := json.Unmarshal(evaluationCase.promptSpec, &prompt); err != nil {
+				return fmt.Errorf("decode evaluation case request parameters: %w", err)
+			}
 		}
 		var execution struct {
 			URL string `json:"url"`

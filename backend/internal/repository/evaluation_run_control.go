@@ -57,11 +57,22 @@ func loadRunControlReplay(ctx context.Context, tx *sql.Tx, runID uuid.UUID, idem
 	var eventID, eventRunID uuid.UUID
 	var eventType string
 	var payload []byte
-	err := tx.QueryRowContext(ctx, `
+	query := `
 		SELECT id, run_id, event_type, payload
 		FROM evaluation_run_events
 		WHERE idempotency_key = $1
-		FOR UPDATE`, idempotencyKey).Scan(&eventID, &eventRunID, &eventType, &payload)
+		FOR UPDATE`
+	args := []any{idempotencyKey}
+	if tenantID, scoped := radarTenant(ctx); scoped {
+		query = `
+			SELECT e.id, e.run_id, e.event_type, e.payload
+			FROM evaluation_run_events e
+			JOIN evaluation_runs r ON r.id = e.run_id
+			WHERE e.idempotency_key = $1 AND r.tenant_id = $2
+			FOR UPDATE OF e`
+		args = append(args, tenantID)
+	}
+	err := tx.QueryRowContext(ctx, query, args...).Scan(&eventID, &eventRunID, &eventType, &payload)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, false, nil
 	}
@@ -108,9 +119,16 @@ func (r *radarGovernanceRepository) controlRun(ctx context.Context, runID uuid.U
 		return replay, nil
 	}
 	var row runControlRow
-	if err := tx.QueryRowContext(ctx, `
+	runQuery := `
 		SELECT status, paused_from_status, pause_reason, control_epoch, state_version
-		FROM evaluation_runs WHERE id = $1 FOR UPDATE`, runID).Scan(
+		FROM evaluation_runs WHERE id = $1`
+	runArgs := []any{runID}
+	if tenantID, scoped := radarTenant(ctx); scoped {
+		runQuery += ` AND tenant_id = $2`
+		runArgs = append(runArgs, tenantID)
+	}
+	runQuery += ` FOR UPDATE`
+	if err := tx.QueryRowContext(ctx, runQuery, runArgs...).Scan(
 		&row.status, &row.pausedFrom, &row.pauseReason, &row.epoch, &row.stateVersion); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return nil, infraerrors.New(http.StatusNotFound, "RUN_NOT_FOUND", "evaluation run not found")

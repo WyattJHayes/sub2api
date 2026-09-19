@@ -134,7 +134,7 @@ func (r *radarGovernanceRepository) EnableEvaluationKey(ctx context.Context, key
 	defer func() { _ = tx.Rollback() }()
 	record := &service.RadarEvaluationKeyRecord{}
 	var groupID sql.NullInt64
-	err = tx.QueryRowContext(ctx, `
+	query := `
 		UPDATE api_keys k
 		SET is_evaluation = TRUE, updated_at = NOW()
 		WHERE k.id = $1 AND k.status = 'active' AND k.deleted_at IS NULL
@@ -146,7 +146,14 @@ func (r *radarGovernanceRepository) EnableEvaluationKey(ctx context.Context, key
 		    WHERE u.id = k.user_id AND u.status = 'active' AND u.deleted_at IS NULL
 		      AND (g.id IS NULL OR (g.status = 'active' AND g.deleted_at IS NULL))
 		  )
-		RETURNING k.id, k.name, k.user_id, k.group_id, k.is_evaluation`, keyID).Scan(
+		`
+	args := []any{keyID}
+	if tenantID, scoped := radarTenant(ctx); scoped {
+		query += ` AND k.user_id = $2`
+		args = append(args, tenantID)
+	}
+	query += ` RETURNING k.id, k.name, k.user_id, k.group_id, k.is_evaluation`
+	err = tx.QueryRowContext(ctx, query, args...).Scan(
 		&record.ID, &record.Name, &record.UserID, &groupID, &record.IsEvaluation,
 	)
 	if errors.Is(err, sql.ErrNoRows) {

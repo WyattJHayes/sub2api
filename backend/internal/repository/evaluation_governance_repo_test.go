@@ -28,6 +28,30 @@ func TestProvideRadarGovernanceRepositoryUsesConfiguredRouteProfile(t *testing.T
 	require.Equal(t, configuredProfile, configured.routeProfileVersion)
 }
 
+func TestEnableEvaluationKeyScopesUpdateToTenantOwner(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = db.Close() })
+
+	expectRadarWorkerWriter(t, mock)
+	mock.ExpectQuery(`(?s)UPDATE api_keys k.*WHERE k\.id = \$1.*AND k\.user_id = \$2`).
+		WithArgs(int64(17), int64(41)).
+		WillReturnRows(sqlmock.NewRows([]string{"id", "name", "user_id", "group_id", "is_evaluation"}).
+			AddRow(int64(17), "radar-evaluation", int64(41), nil, true))
+	mock.ExpectExec("INSERT INTO evaluation_key_events").
+		WithArgs(sqlmock.AnyArg(), int64(17), int64(77)).
+		WillReturnResult(sqlmock.NewResult(1, 1))
+	mock.ExpectCommit()
+
+	record, err := (&radarGovernanceRepository{db: db}).EnableEvaluationKey(
+		service.WithRadarTenant(context.Background(), 41), 17, 77,
+	)
+	require.NoError(t, err)
+	require.Equal(t, int64(41), record.UserID)
+	require.True(t, record.IsEvaluation)
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
 func TestListRunsProjectsRecordedBillingWithoutTreatingMissingAsZero(t *testing.T) {
 	db, mock, err := sqlmock.New()
 	require.NoError(t, err)

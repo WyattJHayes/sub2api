@@ -80,6 +80,50 @@ func TestRunControlIdempotencyReturnsOriginalResult(t *testing.T) {
 	require.NoError(t, mock.ExpectationsWereMet())
 }
 
+func TestRunControlIdempotencyReplayUsesTenantScope(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	require.NoError(t, err)
+	defer func() { _ = db.Close() }()
+	runID, eventID := uuid.New(), uuid.New()
+	original := service.RunControlResult{RunID: runID, FromStatus: "running", ToStatus: "paused", PreviousEpoch: 4, CurrentEpoch: 4, EventID: eventID}
+	payload, err := json.Marshal(map[string]any{"reason": "operator", "result": original})
+	require.NoError(t, err)
+	expectRadarWorkerWriter(t, mock)
+	mock.ExpectQuery(`(?s)SELECT e\.id, e\.run_id, e\.event_type, e\.payload.*JOIN evaluation_runs r ON r\.id = e\.run_id.*WHERE e\.idempotency_key = \$1 AND r\.tenant_id = \$2`).
+		WithArgs(strings.Repeat("g", 64), int64(41)).
+		WillReturnRows(sqlmock.NewRows([]string{"id", "run_id", "event_type", "payload"}).AddRow(eventID, runID, "run_control_pause", payload))
+	mock.ExpectCommit()
+
+	repo := &radarGovernanceRepository{db: db}
+	result, err := repo.PauseRun(service.WithRadarTenant(context.Background(), 41), runID, "operator", 9, strings.Repeat("g", 64))
+	require.NoError(t, err)
+	require.Equal(t, eventID, result.EventID)
+	require.Equal(t, "paused", result.ToStatus)
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestPauseRunLocksOnlyTenantOwnedRun(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	require.NoError(t, err)
+	defer func() { _ = db.Close() }()
+	runID := uuid.New()
+	expectRadarWorkerWriter(t, mock)
+	mock.ExpectQuery(`(?s)SELECT e\.id, e\.run_id, e\.event_type, e\.payload.*JOIN evaluation_runs r ON r\.id = e\.run_id.*WHERE e\.idempotency_key = \$1 AND r\.tenant_id = \$2`).
+		WithArgs(strings.Repeat("h", 64), int64(41)).WillReturnError(sql.ErrNoRows)
+	mock.ExpectQuery(`(?s)SELECT status, paused_from_status, pause_reason, control_epoch, state_version.*FROM evaluation_runs WHERE id = \$1 AND tenant_id = \$2 FOR UPDATE`).
+		WithArgs(runID, int64(41)).
+		WillReturnRows(sqlmock.NewRows([]string{"status", "paused_from_status", "pause_reason", "control_epoch", "state_version"}).AddRow("running", nil, nil, int64(4), int64(7)))
+	mock.ExpectExec("UPDATE evaluation_runs SET status='paused'").WithArgs(runID, "running", "operator", int64(8)).WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectExec("INSERT INTO evaluation_run_events").WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectCommit()
+
+	repo := &radarGovernanceRepository{db: db}
+	result, err := repo.PauseRun(service.WithRadarTenant(context.Background(), 41), runID, "operator", 9, strings.Repeat("h", 64))
+	require.NoError(t, err)
+	require.Equal(t, "paused", result.ToStatus)
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
 func TestRunControlRejectsInvalidReasonBeforeOpeningTransaction(t *testing.T) {
 	repo := &radarGovernanceRepository{db: nil}
 	_, err := repo.PauseRun(context.Background(), uuid.New(), "unknown", 9, strings.Repeat("d", 64))

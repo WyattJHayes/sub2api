@@ -1,11 +1,38 @@
 package repository
 
 import (
+	"net/http"
 	"testing"
 
+	infraerrors "github.com/Wei-Shaw/sub2api/internal/pkg/errors"
 	"github.com/google/uuid"
 	"github.com/stretchr/testify/require"
 )
+
+func TestEvaluationParametersAllowNonObjectPromptWithoutRouteRequestParameters(t *testing.T) {
+	for _, prompt := range []string{`"ping"`, `["ping",{"role":"user","content":"pong"}]`} {
+		t.Run(prompt, func(t *testing.T) {
+			entry := evaluationMatrixEntry{baselineConfig: []byte(`{}`), candidateConfig: []byte(`{}`)}
+			cases := []evaluationCaseForRun{{
+				id: uuid.New(), promptSpec: []byte(prompt), executionSpec: []byte(`{"url":"/v1/responses"}`),
+			}}
+
+			require.NoError(t, validateEvaluationMatrixParameters([]evaluationMatrixEntry{entry}, cases))
+		})
+	}
+}
+
+func TestEvaluationParametersReportUnfrozenParametersForNonObjectPrompt(t *testing.T) {
+	entry := evaluationMatrixEntry{baselineConfig: []byte(`{"temperature":0}`), candidateConfig: []byte(`{}`)}
+	cases := []evaluationCaseForRun{{
+		id: uuid.New(), promptSpec: []byte(`"ping"`), executionSpec: []byte(`{"url":"/v1/responses"}`),
+	}}
+
+	err := validateEvaluationMatrixParameters([]evaluationMatrixEntry{entry}, cases)
+	require.Error(t, err)
+	require.Equal(t, http.StatusBadRequest, infraerrors.Code(err))
+	require.Equal(t, "UNFROZEN_REQUEST_PARAMETERS", infraerrors.Reason(err))
+}
 
 func TestEvaluationParametersMustMatchEveryFrozenCaseAndSide(t *testing.T) {
 	for _, test := range []struct {
