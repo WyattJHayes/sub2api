@@ -18,6 +18,7 @@ import (
 
 func TestSeedanceHandlerLifecycleAndOwnership(t *testing.T) {
 	h, slots, bindings, upstream := newGrokMediaSlotHandler(t, false, false, service.PlatformOpenAI)
+	h.SetSeedanceDurableBilling(&seedanceDurableTaskRepoStub{}, &service.SeedanceTaskSettlementService{})
 	var owner int64
 	upstream.call = func(req *http.Request, id int64) (*http.Response, error) {
 		body := `{"id":"task-ark","status":"queued"}`

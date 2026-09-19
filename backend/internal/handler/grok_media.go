@@ -81,6 +81,10 @@ func (h *OpenAIGatewayHandler) handleGrokMedia(c *gin.Context, endpoint service.
 		zap.Any("group_id", apiKey.GroupID),
 		zap.String("endpoint", string(endpoint)),
 	)
+	if endpoint == service.SeedanceEndpointCreate && (h.seedanceTasks == nil || h.seedanceSettlement == nil) {
+		h.errorResponse(c, http.StatusServiceUnavailable, "api_error", "Seedance task tracking is temporarily unavailable")
+		return
+	}
 	if !h.ensureResponsesDependencies(c, reqLog) {
 		return
 	}
@@ -373,6 +377,20 @@ func (h *OpenAIGatewayHandler) handleGrokMedia(c *gin.Context, endpoint service.
 		writerSizeBeforeForward := c.Writer.Size()
 		result, err := func() (*service.OpenAIForwardResult, error) {
 			defer releaseAccount()
+			if endpoint == service.SeedanceEndpointCreate {
+				return h.forwardSeedanceCreateDurably(
+					requestCtx,
+					c,
+					reqLog,
+					account,
+					apiKey,
+					subject,
+					subscription,
+					requestStart,
+					requestModel,
+					body,
+				)
+			}
 			if endpoint.IsSeedance() {
 				return h.gatewayService.ForwardSeedance(requestCtx, c, account, endpoint, requestID, body)
 			}
@@ -388,6 +406,11 @@ func (h *OpenAIGatewayHandler) handleGrokMedia(c *gin.Context, endpoint service.
 		service.SetOpsLatencyMs(c, service.OpsResponseLatencyMsKey, responseLatencyMs)
 
 		if err != nil {
+			if errors.Is(err, errSeedanceTaskPersistence) {
+				h.gatewayService.ReportOpenAIAccountScheduleResult(account, grokMediaScheduleModel(account, routingModel, result), true, nil)
+				h.errorResponse(c, http.StatusServiceUnavailable, "api_error", "Seedance task tracking is temporarily unavailable")
+				return
+			}
 			var failoverErr *service.UpstreamFailoverError
 			if errors.As(err, &failoverErr) {
 				if failoverClientGone(c) {
