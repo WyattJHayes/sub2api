@@ -269,6 +269,20 @@ func (_u *UsageLogUpdate) ClearBillingMode() *UsageLogUpdate {
 	return _u
 }
 
+// SetTrafficClass sets the "traffic_class" field.
+func (_u *UsageLogUpdate) SetTrafficClass(v string) *UsageLogUpdate {
+	_u.mutation.SetTrafficClass(v)
+	return _u
+}
+
+// SetNillableTrafficClass sets the "traffic_class" field if the given value is not nil.
+func (_u *UsageLogUpdate) SetNillableTrafficClass(v *string) *UsageLogUpdate {
+	if v != nil {
+		_u.SetTrafficClass(*v)
+	}
+	return _u
+}
+
 // SetGroupID sets the "group_id" field.
 func (_u *UsageLogUpdate) SetGroupID(v int64) *UsageLogUpdate {
 	_u.mutation.SetGroupID(v)
@@ -1076,6 +1090,11 @@ func (_u *UsageLogUpdate) check() error {
 			return &ValidationError{Name: "billing_mode", err: fmt.Errorf(`ent: validator failed for field "UsageLog.billing_mode": %w`, err)}
 		}
 	}
+	if v, ok := _u.mutation.TrafficClass(); ok {
+		if err := usagelog.TrafficClassValidator(v); err != nil {
+			return &ValidationError{Name: "traffic_class", err: fmt.Errorf(`ent: validator failed for field "UsageLog.traffic_class": %w`, err)}
+		}
+	}
 	if v, ok := _u.mutation.UserAgent(); ok {
 		if err := usagelog.UserAgentValidator(v); err != nil {
 			return &ValidationError{Name: "user_agent", err: fmt.Errorf(`ent: validator failed for field "UsageLog.user_agent": %w`, err)}
@@ -1191,6 +1210,9 @@ func (_u *UsageLogUpdate) sqlSave(ctx context.Context) (_node int, err error) {
 	}
 	if _u.mutation.BillingModeCleared() {
 		_spec.ClearField(usagelog.FieldBillingMode, field.TypeString)
+	}
+	if value, ok := _u.mutation.TrafficClass(); ok {
+		_spec.SetField(usagelog.FieldTrafficClass, field.TypeString, value)
 	}
 	if value, ok := _u.mutation.InputTokens(); ok {
 		_spec.SetField(usagelog.FieldInputTokens, field.TypeInt, value)
@@ -1780,6 +1802,20 @@ func (_u *UsageLogUpdateOne) SetNillableBillingMode(v *string) *UsageLogUpdateOn
 // ClearBillingMode clears the value of the "billing_mode" field.
 func (_u *UsageLogUpdateOne) ClearBillingMode() *UsageLogUpdateOne {
 	_u.mutation.ClearBillingMode()
+	return _u
+}
+
+// SetTrafficClass sets the "traffic_class" field.
+func (_u *UsageLogUpdateOne) SetTrafficClass(v string) *UsageLogUpdateOne {
+	_u.mutation.SetTrafficClass(v)
+	return _u
+}
+
+// SetNillableTrafficClass sets the "traffic_class" field if the given value is not nil.
+func (_u *UsageLogUpdateOne) SetNillableTrafficClass(v *string) *UsageLogUpdateOne {
+	if v != nil {
+		_u.SetTrafficClass(*v)
+	}
 	return _u
 }
 
@@ -2603,6 +2639,11 @@ func (_u *UsageLogUpdateOne) check() error {
 			return &ValidationError{Name: "billing_mode", err: fmt.Errorf(`ent: validator failed for field "UsageLog.billing_mode": %w`, err)}
 		}
 	}
+	if v, ok := _u.mutation.TrafficClass(); ok {
+		if err := usagelog.TrafficClassValidator(v); err != nil {
+			return &ValidationError{Name: "traffic_class", err: fmt.Errorf(`ent: validator failed for field "UsageLog.traffic_class": %w`, err)}
+		}
+	}
 	if v, ok := _u.mutation.UserAgent(); ok {
 		if err := usagelog.UserAgentValidator(v); err != nil {
 			return &ValidationError{Name: "user_agent", err: fmt.Errorf(`ent: validator failed for field "UsageLog.user_agent": %w`, err)}
@@ -2735,6 +2776,9 @@ func (_u *UsageLogUpdateOne) sqlSave(ctx context.Context) (_node *UsageLog, err 
 	}
 	if _u.mutation.BillingModeCleared() {
 		_spec.ClearField(usagelog.FieldBillingMode, field.TypeString)
+	}
+	if value, ok := _u.mutation.TrafficClass(); ok {
+		_spec.SetField(usagelog.FieldTrafficClass, field.TypeString, value)
 	}
 	if value, ok := _u.mutation.InputTokens(); ok {
 		_spec.SetField(usagelog.FieldInputTokens, field.TypeInt, value)

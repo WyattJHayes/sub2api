@@ -10,7 +10,6 @@ const pollOrderStatus = vi.hoisted(() => vi.fn())
 const verifyOrder = vi.hoisted(() => vi.fn())
 const verifyOrderPublic = vi.hoisted(() => vi.fn())
 const resolveOrderPublicByResumeToken = vi.hoisted(() => vi.fn())
-const refreshUser = vi.hoisted(() => vi.fn())
 
 vi.mock('vue-router', async () => {
   const actual = await vi.importActual<typeof import('vue-router')>('vue-router')
@@ -34,12 +33,6 @@ vi.mock('vue-i18n', async () => {
 vi.mock('@/stores/payment', () => ({
   usePaymentStore: () => ({
     pollOrderStatus,
-  }),
-}))
-
-vi.mock('@/stores/auth', () => ({
-  useAuthStore: () => ({
-    refreshUser,
   }),
 }))
 
@@ -98,8 +91,6 @@ describe('PaymentResultView', () => {
     verifyOrder.mockReset()
     verifyOrderPublic.mockReset()
     resolveOrderPublicByResumeToken.mockReset()
-    refreshUser.mockReset()
-    refreshUser.mockResolvedValue({})
     window.localStorage.clear()
   })
 
@@ -180,7 +171,7 @@ describe('PaymentResultView', () => {
     }))
     resolveOrderPublicByResumeToken.mockResolvedValue({
       data: {
-        ...orderFactory('COMPLETED'),
+        ...orderFactory('PAID'),
         amount: 100,
         pay_amount: 103,
         fee_rate: 3,
@@ -199,14 +190,13 @@ describe('PaymentResultView', () => {
 
     expect(pollOrderStatus).not.toHaveBeenCalled()
     expect(resolveOrderPublicByResumeToken).toHaveBeenCalledWith('resume-authoritative')
-    expect(refreshUser).toHaveBeenCalledTimes(1)
     expect(wrapper.text()).toContain('payment.result.success')
     expect(wrapper.text()).toContain('103.00')
     expect(wrapper.text()).toContain('100.00')
     expect(window.localStorage.getItem(PAYMENT_RECOVERY_STORAGE_KEY)).toBeNull()
   })
 
-  it('waits for completed fulfillment before refreshing the user balance', async () => {
+  it('refreshes a pending resume-token result until the order becomes paid', async () => {
     vi.useFakeTimers()
     routeState.query = {
       resume_token: 'resume-77',
@@ -220,7 +210,7 @@ describe('PaymentResultView', () => {
         data: orderFactory('PENDING'),
       })
       .mockResolvedValueOnce({
-        data: orderFactory('COMPLETED'),
+        data: orderFactory('PAID'),
       })
 
     const wrapper = mount(PaymentResultView, {
@@ -234,7 +224,6 @@ describe('PaymentResultView', () => {
     await flushPromises()
 
     expect(resolveOrderPublicByResumeToken).toHaveBeenCalledTimes(1)
-    expect(refreshUser).not.toHaveBeenCalled()
     expect(wrapper.text()).toContain('payment.result.processing')
     expect(window.localStorage.getItem(PAYMENT_RECOVERY_STORAGE_KEY)).not.toBeNull()
 
@@ -242,34 +231,9 @@ describe('PaymentResultView', () => {
     await flushPromises()
 
     expect(resolveOrderPublicByResumeToken).toHaveBeenCalledTimes(2)
-    expect(refreshUser).toHaveBeenCalledTimes(1)
     expect(wrapper.text()).toContain('payment.result.success')
     expect(wrapper.text()).not.toContain('payment.result.failed')
     expect(window.localStorage.getItem(PAYMENT_RECOVERY_STORAGE_KEY)).toBeNull()
-  })
-
-  it('keeps the successful result when refreshing the user balance fails', async () => {
-    routeState.query = {
-      resume_token: 'resume-refresh-failure',
-    }
-    resolveOrderPublicByResumeToken.mockResolvedValue({
-      data: orderFactory('COMPLETED'),
-    })
-    refreshUser.mockRejectedValueOnce(new Error('profile refresh failed'))
-
-    const wrapper = mount(PaymentResultView, {
-      global: {
-        stubs: {
-          OrderStatusBadge: true,
-        },
-      },
-    })
-
-    await flushPromises()
-
-    expect(refreshUser).toHaveBeenCalledTimes(1)
-    expect(wrapper.text()).toContain('payment.result.success')
-    expect(wrapper.text()).not.toContain('payment.result.failed')
   })
 
   it('falls back to order_id polling when resume-token recovery fails', async () => {

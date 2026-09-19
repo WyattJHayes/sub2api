@@ -102,6 +102,9 @@ func provideCleanup(
 	proxyExpiry *service.ProxyExpiryService,
 	subscriptionExpiry *service.SubscriptionExpiryService,
 	usageCleanup *service.UsageCleanupService,
+	terminalizationRuntime *service.RouteEvidenceTerminalizationRuntime,
+	outboxConsumerRuntime *service.EvaluationOutboxConsumerRuntime,
+	artifactCleanup *service.EvaluationArtifactCleanupService,
 	idempotencyCleanup *service.IdempotencyCleanupService,
 	batchImageCleanup *service.BatchImageCleanupService,
 	batchImageWorker *service.BatchImageWorkerRuntime,
@@ -233,6 +236,24 @@ func provideCleanup(
 			{"UsageCleanupService", func() error {
 				if usageCleanup != nil {
 					usageCleanup.Stop()
+				}
+				return nil
+			}},
+			{"RouteEvidenceTerminalizationRuntime", func() error {
+				if terminalizationRuntime != nil {
+					terminalizationRuntime.Stop()
+				}
+				return nil
+			}},
+			{"EvaluationOutboxConsumerRuntime", func() error {
+				if outboxConsumerRuntime != nil {
+					outboxConsumerRuntime.Stop()
+				}
+				return nil
+			}},
+			{"EvaluationArtifactCleanupService", func() error {
+				if artifactCleanup != nil {
+					artifactCleanup.Stop()
 				}
 				return nil
 			}},

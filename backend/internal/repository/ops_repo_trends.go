@@ -162,13 +162,13 @@ ORDER BY bucket ASC`
 	// - No platform/group: totals by platform
 	// - Platform selected but no group: top groups in that platform
 	if platform == "" && (groupID == nil || *groupID <= 0) {
-		items, err := r.getThroughputBreakdownByPlatform(ctx, start, end)
+		items, err := r.getThroughputBreakdownByPlatform(ctx, start, end, opsTrafficClass(filter))
 		if err != nil {
 			return nil, err
 		}
 		byPlatform = items
 	} else if platform != "" && (groupID == nil || *groupID <= 0) {
-		items, err := r.getThroughputTopGroupsByPlatform(ctx, start, end, platform, 10)
+		items, err := r.getThroughputTopGroupsByPlatform(ctx, start, end, platform, opsTrafficClass(filter), 10)
 		if err != nil {
 			return nil, err
 		}
@@ -184,7 +184,7 @@ ORDER BY bucket ASC`
 	}, nil
 }
 
-func (r *opsRepository) getThroughputBreakdownByPlatform(ctx context.Context, start, end time.Time) ([]*service.OpsThroughputPlatformBreakdownItem, error) {
+func (r *opsRepository) getThroughputBreakdownByPlatform(ctx context.Context, start, end time.Time, trafficClass service.TrafficClass) ([]*service.OpsThroughputPlatformBreakdownItem, error) {
 	q := `
 WITH usage_totals AS (
   SELECT COALESCE(NULLIF(g.platform,''), a.platform) AS platform,
@@ -194,6 +194,7 @@ WITH usage_totals AS (
   LEFT JOIN groups g ON g.id = ul.group_id
   LEFT JOIN accounts a ON a.id = ul.account_id
   WHERE ul.created_at >= $1 AND ul.created_at < $2
+    AND ul.traffic_class = $3
   GROUP BY 1
 ),
 error_totals AS (
@@ -203,6 +204,7 @@ error_totals AS (
   WHERE created_at >= $1 AND created_at < $2
     AND COALESCE(status_code, 0) >= 400
     AND is_count_tokens = FALSE  -- 排除 count_tokens 请求的错误
+    AND traffic_class = $3
   GROUP BY 1
 ),
 combined AS (
@@ -218,7 +220,7 @@ FROM combined
 WHERE platform IS NOT NULL AND platform <> ''
 ORDER BY request_count DESC`
 
-	rows, err := r.db.QueryContext(ctx, q, start, end)
+	rows, err := r.db.QueryContext(ctx, q, start, end, string(trafficClass))
 	if err != nil {
 		return nil, err
 	}
@@ -248,7 +250,7 @@ ORDER BY request_count DESC`
 	return items, nil
 }
 
-func (r *opsRepository) getThroughputTopGroupsByPlatform(ctx context.Context, start, end time.Time, platform string, limit int) ([]*service.OpsThroughputGroupBreakdownItem, error) {
+func (r *opsRepository) getThroughputTopGroupsByPlatform(ctx context.Context, start, end time.Time, platform string, trafficClass service.TrafficClass, limit int) ([]*service.OpsThroughputGroupBreakdownItem, error) {
 	if strings.TrimSpace(platform) == "" {
 		return nil, nil
 	}
@@ -266,6 +268,7 @@ WITH usage_totals AS (
   JOIN groups g ON g.id = ul.group_id
   WHERE ul.created_at >= $1 AND ul.created_at < $2
     AND g.platform = $3
+    AND ul.traffic_class = $4
   GROUP BY 1, 2
 ),
 error_totals AS (
@@ -277,6 +280,7 @@ error_totals AS (
     AND group_id IS NOT NULL
     AND COALESCE(status_code, 0) >= 400
     AND is_count_tokens = FALSE  -- 排除 count_tokens 请求的错误
+    AND traffic_class = $4
   GROUP BY 1
 ),
 combined AS (
@@ -293,9 +297,9 @@ SELECT group_id, group_name, (success_count + error_count) AS request_count, tok
 FROM combined
 WHERE group_id IS NOT NULL
 ORDER BY request_count DESC
-LIMIT $4`
+LIMIT $5`
 
-	rows, err := r.db.QueryContext(ctx, q, start, end, platform, limit)
+	rows, err := r.db.QueryContext(ctx, q, start, end, platform, string(trafficClass), limit)
 	if err != nil {
 		return nil, err
 	}

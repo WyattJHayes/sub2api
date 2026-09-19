@@ -169,6 +169,20 @@ func (_c *UsageLogCreate) SetNillableBillingMode(v *string) *UsageLogCreate {
 	return _c
 }
 
+// SetTrafficClass sets the "traffic_class" field.
+func (_c *UsageLogCreate) SetTrafficClass(v string) *UsageLogCreate {
+	_c.mutation.SetTrafficClass(v)
+	return _c
+}
+
+// SetNillableTrafficClass sets the "traffic_class" field if the given value is not nil.
+func (_c *UsageLogCreate) SetNillableTrafficClass(v *string) *UsageLogCreate {
+	if v != nil {
+		_c.SetTrafficClass(*v)
+	}
+	return _c
+}
+
 // SetGroupID sets the "group_id" field.
 func (_c *UsageLogCreate) SetGroupID(v int64) *UsageLogCreate {
 	_c.mutation.SetGroupID(v)
@@ -697,6 +711,10 @@ func (_c *UsageLogCreate) ExecX(ctx context.Context) {
 
 // defaults sets the default values of the builder before save.
 func (_c *UsageLogCreate) defaults() {
+	if _, ok := _c.mutation.TrafficClass(); !ok {
+		v := usagelog.DefaultTrafficClass
+		_c.mutation.SetTrafficClass(v)
+	}
 	if _, ok := _c.mutation.InputTokens(); !ok {
 		v := usagelog.DefaultInputTokens
 		_c.mutation.SetInputTokens(v)
@@ -834,6 +852,14 @@ func (_c *UsageLogCreate) check() error {
 	if v, ok := _c.mutation.BillingMode(); ok {
 		if err := usagelog.BillingModeValidator(v); err != nil {
 			return &ValidationError{Name: "billing_mode", err: fmt.Errorf(`ent: validator failed for field "UsageLog.billing_mode": %w`, err)}
+		}
+	}
+	if _, ok := _c.mutation.TrafficClass(); !ok {
+		return &ValidationError{Name: "traffic_class", err: errors.New(`ent: missing required field "UsageLog.traffic_class"`)}
+	}
+	if v, ok := _c.mutation.TrafficClass(); ok {
+		if err := usagelog.TrafficClassValidator(v); err != nil {
+			return &ValidationError{Name: "traffic_class", err: fmt.Errorf(`ent: validator failed for field "UsageLog.traffic_class": %w`, err)}
 		}
 	}
 	if _, ok := _c.mutation.InputTokens(); !ok {
@@ -1006,6 +1032,10 @@ func (_c *UsageLogCreate) createSpec() (*UsageLog, *sqlgraph.CreateSpec) {
 	if value, ok := _c.mutation.BillingMode(); ok {
 		_spec.SetField(usagelog.FieldBillingMode, field.TypeString, value)
 		_node.BillingMode = &value
+	}
+	if value, ok := _c.mutation.TrafficClass(); ok {
+		_spec.SetField(usagelog.FieldTrafficClass, field.TypeString, value)
+		_node.TrafficClass = value
 	}
 	if value, ok := _c.mutation.InputTokens(); ok {
 		_spec.SetField(usagelog.FieldInputTokens, field.TypeInt, value)
@@ -1479,6 +1509,18 @@ func (u *UsageLogUpsert) UpdateBillingMode() *UsageLogUpsert {
 // ClearBillingMode clears the value of the "billing_mode" field.
 func (u *UsageLogUpsert) ClearBillingMode() *UsageLogUpsert {
 	u.SetNull(usagelog.FieldBillingMode)
+	return u
+}
+
+// SetTrafficClass sets the "traffic_class" field.
+func (u *UsageLogUpsert) SetTrafficClass(v string) *UsageLogUpsert {
+	u.Set(usagelog.FieldTrafficClass, v)
+	return u
+}
+
+// UpdateTrafficClass sets the "traffic_class" field to the value that was provided on create.
+func (u *UsageLogUpsert) UpdateTrafficClass() *UsageLogUpsert {
+	u.SetExcluded(usagelog.FieldTrafficClass)
 	return u
 }
 
@@ -2369,6 +2411,20 @@ func (u *UsageLogUpsertOne) UpdateBillingMode() *UsageLogUpsertOne {
 func (u *UsageLogUpsertOne) ClearBillingMode() *UsageLogUpsertOne {
 	return u.Update(func(s *UsageLogUpsert) {
 		s.ClearBillingMode()
+	})
+}
+
+// SetTrafficClass sets the "traffic_class" field.
+func (u *UsageLogUpsertOne) SetTrafficClass(v string) *UsageLogUpsertOne {
+	return u.Update(func(s *UsageLogUpsert) {
+		s.SetTrafficClass(v)
+	})
+}
+
+// UpdateTrafficClass sets the "traffic_class" field to the value that was provided on create.
+func (u *UsageLogUpsertOne) UpdateTrafficClass() *UsageLogUpsertOne {
+	return u.Update(func(s *UsageLogUpsert) {
+		s.UpdateTrafficClass()
 	})
 }
 
@@ -3525,6 +3581,20 @@ func (u *UsageLogUpsertBulk) UpdateBillingMode() *UsageLogUpsertBulk {
 func (u *UsageLogUpsertBulk) ClearBillingMode() *UsageLogUpsertBulk {
 	return u.Update(func(s *UsageLogUpsert) {
 		s.ClearBillingMode()
+	})
+}
+
+// SetTrafficClass sets the "traffic_class" field.
+func (u *UsageLogUpsertBulk) SetTrafficClass(v string) *UsageLogUpsertBulk {
+	return u.Update(func(s *UsageLogUpsert) {
+		s.SetTrafficClass(v)
+	})
+}
+
+// UpdateTrafficClass sets the "traffic_class" field to the value that was provided on create.
+func (u *UsageLogUpsertBulk) UpdateTrafficClass() *UsageLogUpsertBulk {
+	return u.Update(func(s *UsageLogUpsert) {
+		s.UpdateTrafficClass()
 	})
 }
 

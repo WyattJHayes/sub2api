@@ -87,6 +87,8 @@ type OpsInsertErrorLogInput struct {
 	// Matches service.RequestType enum semantics from usage_log.go.
 	RequestType *int16
 	UserAgent   string
+	// TrafficClass is normalized by OpsService before persistence.
+	TrafficClass TrafficClass
 
 	ErrorPhase        string
 	ErrorType         string
@@ -164,6 +166,12 @@ type OpsInsertSystemMetricsInput struct {
 	MemoryUsedMB       *int64
 	MemoryTotalMB      *int64
 	MemoryUsagePercent *float64
+	MemAvailableMB     *int64
+	SwapUsedMB         *int64
+	SwapTotalMB        *int64
+	DiskUsedPercent    *float64
+	OOMKillCount       *int64
+	ResourceWarning    string
 
 	DBOK    *bool
 	RedisOK *bool
@@ -257,6 +265,12 @@ type OpsSystemMetricsSnapshot struct {
 	MemoryUsedMB       *int64   `json:"memory_used_mb"`
 	MemoryTotalMB      *int64   `json:"memory_total_mb"`
 	MemoryUsagePercent *float64 `json:"memory_usage_percent"`
+	MemAvailableMB     *int64   `json:"mem_available_mb"`
+	SwapUsedMB         *int64   `json:"swap_used_mb"`
+	SwapTotalMB        *int64   `json:"swap_total_mb"`
+	DiskUsedPercent    *float64 `json:"disk_used_percent"`
+	OOMKillCount       *int64   `json:"oom_kill_count"`
+	ResourceWarning    string   `json:"resource_warning,omitempty"`
 
 	DBOK    *bool `json:"db_ok"`
 	RedisOK *bool `json:"redis_ok"`

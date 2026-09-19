@@ -1,0 +1,142 @@
+{
+  "__inputs": [
+    {
+      "name": "DS_PROMETHEUS",
+      "label": "Prometheus",
+      "type": "datasource",
+      "pluginId": "prometheus",
+      "pluginName": "Prometheus"
+    }
+  ],
+  "annotations": {
+    "list": [
+      {
+        "builtIn": 1,
+        "datasource": {
+          "type": "grafana",
+          "uid": "-- Grafana --"
+        },
+        "enable": true,
+        "hide": true,
+        "iconColor": "#5794F2",
+        "name": "Annotations & Alerts",
+        "type": "dashboard"
+      }
+    ]
+  },
+  "editable": false,
+  "fiscalYearStartMonth": 0,
+  "graphTooltip": 1,
+  "id": null,
+  "links": [],
+  "panels": [
+    {
+      "datasource": {"type": "prometheus", "uid": "${DS_PROMETHEUS}"},
+      "fieldConfig": {"defaults": {"unit": "ms"}, "overrides": []},
+      "gridPos": {"h": 8, "w": 12, "x": 0, "y": 0},
+      "id": 1,
+      "title": "Gateway P99 latency",
+      "type": "timeseries",
+      "targets": [{"expr": "histogram_quantile(0.99, sum by (le) (rate(radar_gateway_request_latency_ms_bucket{stage=\"gateway\"}[5m])))", "legendFormat": "P99"}]
+    },
+    {
+      "datasource": {"type": "prometheus", "uid": "${DS_PROMETHEUS}"},
+      "fieldConfig": {"defaults": {"unit": "ms"}, "overrides": []},
+      "gridPos": {"h": 8, "w": 12, "x": 12, "y": 0},
+      "id": 2,
+      "title": "Streaming TTFT P99",
+      "type": "timeseries",
+      "targets": [{"expr": "histogram_quantile(0.99, sum by (le) (rate(radar_gateway_request_latency_ms_bucket{stage=\"ttft\"}[5m])))", "legendFormat": "TTFT P99"}]
+    },
+    {
+      "datasource": {"type": "prometheus", "uid": "${DS_PROMETHEUS}"},
+      "fieldConfig": {"defaults": {"unit": "percent", "max": 1, "min": 0}, "overrides": []},
+      "gridPos": {"h": 8, "w": 8, "x": 0, "y": 8},
+      "id": 3,
+      "title": "Gateway error rate",
+      "type": "timeseries",
+      "targets": [{"expr": "sum(rate(radar_gateway_requests_total{outcome=~\"error|timeout|client_failure\"}[5m])) / clamp_min(sum(rate(radar_gateway_requests_total[5m])), 1)", "legendFormat": "error rate"}]
+    },
+    {
+      "datasource": {"type": "prometheus", "uid": "${DS_PROMETHEUS}"},
+      "fieldConfig": {"defaults": {"unit": "s"}, "overrides": []},
+      "gridPos": {"h": 8, "w": 8, "x": 8, "y": 8},
+      "id": 4,
+      "title": "Queue and analysis lag",
+      "type": "timeseries",
+      "targets": [
+        {"expr": "radar_queue_lag_seconds", "legendFormat": "queue"},
+        {"expr": "radar_analysis_lag_seconds", "legendFormat": "analysis"}
+      ]
+    },
+    {
+      "datasource": {"type": "prometheus", "uid": "${DS_PROMETHEUS}"},
+      "fieldConfig": {"defaults": {"unit": "s"}, "overrides": []},
+      "gridPos": {"h": 8, "w": 8, "x": 16, "y": 8},
+      "id": 5,
+      "title": "Lease age and worker heartbeat",
+      "type": "timeseries",
+      "targets": [
+        {"expr": "radar_lease_age_seconds", "legendFormat": "lease age"},
+        {"expr": "radar_worker_heartbeat_age_seconds", "legendFormat": "heartbeat {{worker_kind}}"}
+      ]
+    },
+    {
+      "datasource": {"type": "prometheus", "uid": "${DS_PROMETHEUS}"},
+      "fieldConfig": {"defaults": {"unit": "s"}, "overrides": []},
+      "gridPos": {"h": 8, "w": 8, "x": 0, "y": 16},
+      "id": 6,
+      "title": "Recovery duration",
+      "type": "timeseries",
+      "targets": [{"expr": "radar_recovery_duration_seconds", "legendFormat": "RTO"}]
+    },
+    {
+      "datasource": {"type": "prometheus", "uid": "${DS_PROMETHEUS}"},
+      "fieldConfig": {"defaults": {"unit": "currencyUSD"}, "overrides": []},
+      "gridPos": {"h": 8, "w": 8, "x": 8, "y": 16},
+      "id": 7,
+      "title": "Cost by region",
+      "type": "timeseries",
+      "targets": [{"expr": "radar_cost_usd_total", "legendFormat": "{{region}}"}]
+    },
+    {
+      "datasource": {"type": "prometheus", "uid": "${DS_PROMETHEUS}"},
+      "fieldConfig": {"defaults": {"unit": "percent", "max": 1, "min": 0}, "overrides": []},
+      "gridPos": {"h": 8, "w": 8, "x": 16, "y": 16},
+      "id": 8,
+      "title": "GPU utilization",
+      "type": "timeseries",
+      "targets": [{"expr": "radar_gpu_utilization_ratio", "legendFormat": "{{region}} {{worker_kind}}"}]
+    },
+    {
+      "datasource": {"type": "prometheus", "uid": "${DS_PROMETHEUS}"},
+      "fieldConfig": {"defaults": {"unit": "short"}, "overrides": []},
+      "gridPos": {"h": 6, "w": 12, "x": 0, "y": 24},
+      "id": 9,
+      "title": "Billing idempotency failures",
+      "type": "stat",
+      "targets": [{"expr": "increase(radar_billing_idempotency_failures_total[1h])", "legendFormat": "failures"}]
+    },
+    {
+      "datasource": {"type": "prometheus", "uid": "${DS_PROMETHEUS}"},
+      "fieldConfig": {"defaults": {"unit": "short"}, "overrides": []},
+      "gridPos": {"h": 6, "w": 12, "x": 12, "y": 24},
+      "id": 10,
+      "title": "Gateway requests",
+      "type": "stat",
+      "targets": [{"expr": "sum(increase(radar_gateway_requests_total[1h]))", "legendFormat": "requests"}]
+    }
+  ],
+  "refresh": "30s",
+  "schemaVersion": 39,
+  "style": "dark",
+  "tags": ["sub2api", "radar", "reliability"],
+  "templating": {"list": []},
+  "time": {"from": "now-6h", "to": "now"},
+  "timepicker": {},
+  "timezone": "utc",
+  "title": "Sub2API Radar Production Reliability",
+  "uid": "sub2api-radar-production",
+  "version": 1,
+  "weekStart": ""
+}

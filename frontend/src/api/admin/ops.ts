@@ -8,6 +8,14 @@ import { apiClient, buildGatewayUrl } from '../client'
 import type { PaginatedResponse } from '@/types'
 
 export type OpsQueryMode = 'auto' | 'raw' | 'preagg'
+export type OpsTrafficClass = 'production' | 'metadata' | 'synthetic' | 'unknown'
+
+export interface OpsTrafficBreakdown {
+  production: number
+  metadata: number
+  synthetic: number
+  unknown: number
+}
 
 export interface OpsRequestOptions {
   signal?: AbortSignal
@@ -65,6 +73,9 @@ export interface OpsDashboardOverview {
 
   duration: OpsPercentiles
   ttft: OpsPercentiles
+
+  /** Counts across all traffic classes; SLA and rates remain scoped to the selected class. */
+  traffic_breakdown?: OpsTrafficBreakdown
 }
 
 export interface OpsPercentiles {
@@ -107,7 +118,7 @@ export interface OpsThroughputTrendResponse {
 
 export type OpsRequestKind = 'success' | 'error'
 export type OpsRequestDetailsKind = OpsRequestKind | 'all'
-export type OpsRequestDetailsSort = 'created_at_desc' | 'duration_desc'
+export type OpsRequestDetailsSort = 'created_at_desc' | 'duration_desc' | 'ttft_desc'
 
 export interface OpsRequestDetail {
   kind: OpsRequestKind
@@ -117,6 +128,7 @@ export interface OpsRequestDetail {
   platform?: string
   model?: string
   duration_ms?: number | null
+  first_token_ms?: number | null
   status_code?: number | null
 
   error_id?: number | null
@@ -253,6 +265,12 @@ export interface OpsSystemMetricsSnapshot {
   memory_used_mb?: number | null
   memory_total_mb?: number | null
   memory_usage_percent?: number | null
+  mem_available_mb?: number | null
+  swap_used_mb?: number | null
+  swap_total_mb?: number | null
+  disk_used_percent?: number | null
+  oom_kill_count?: number | null
+  resource_warning?: string | null
 
   db_ok?: boolean | null
   redis_ok?: boolean | null
@@ -424,6 +442,7 @@ export interface OpsRealtimeTrafficSummary {
   end_time: string
   platform: string
   group_id?: number | null
+  traffic_class?: OpsTrafficClass
   qps: OpsRateSummary
   tps: OpsRateSummary
 }
@@ -437,7 +456,8 @@ export interface OpsRealtimeTrafficSummaryResponse {
 export async function getRealtimeTrafficSummary(
   window: string,
   platform?: string,
-  groupId?: number | null
+  groupId?: number | null,
+  trafficClass?: OpsTrafficClass
 ): Promise<OpsRealtimeTrafficSummaryResponse> {
   const params: Record<string, any> = { window }
   if (platform) {
@@ -445,6 +465,9 @@ export async function getRealtimeTrafficSummary(
   }
   if (typeof groupId === 'number' && groupId > 0) {
     params.group_id = groupId
+  }
+  if (trafficClass) {
+    params.traffic_class = trafficClass
   }
 
   const { data } = await apiClient.get<OpsRealtimeTrafficSummaryResponse>('/admin/ops/realtime-traffic', { params })
@@ -814,6 +837,7 @@ export interface OpsAggregationSettings {
 
 export interface OpsRuntimeLogConfig {
   level: 'debug' | 'info' | 'warn' | 'error'
+  persist_access_logs: boolean
   enable_sampling: boolean
   sampling_initial: number
   sampling_thereafter: number
@@ -968,6 +992,7 @@ export async function getDashboardOverview(
   platform?: string
   group_id?: number | null
   mode?: OpsQueryMode
+  traffic_class?: OpsTrafficClass
   },
   options: OpsRequestOptions = {}
 ): Promise<OpsDashboardOverview> {
@@ -986,6 +1011,7 @@ export async function getDashboardSnapshotV2(
   platform?: string
   group_id?: number | null
   mode?: OpsQueryMode
+  traffic_class?: OpsTrafficClass
   },
   options: OpsRequestOptions = {}
 ): Promise<OpsDashboardSnapshotV2Response> {
@@ -1004,6 +1030,7 @@ export async function getThroughputTrend(
   platform?: string
   group_id?: number | null
   mode?: OpsQueryMode
+  traffic_class?: OpsTrafficClass
   },
   options: OpsRequestOptions = {}
 ): Promise<OpsThroughputTrendResponse> {
@@ -1022,6 +1049,7 @@ export async function getLatencyHistogram(
   platform?: string
   group_id?: number | null
   mode?: OpsQueryMode
+  traffic_class?: OpsTrafficClass
   },
   options: OpsRequestOptions = {}
 ): Promise<OpsLatencyHistogramResponse> {
@@ -1040,6 +1068,7 @@ export async function getErrorTrend(
   platform?: string
   group_id?: number | null
   mode?: OpsQueryMode
+  traffic_class?: OpsTrafficClass
   },
   options: OpsRequestOptions = {}
 ): Promise<OpsErrorTrendResponse> {
@@ -1058,6 +1087,7 @@ export async function getErrorDistribution(
   platform?: string
   group_id?: number | null
   mode?: OpsQueryMode
+  traffic_class?: OpsTrafficClass
   },
   options: OpsRequestOptions = {}
 ): Promise<OpsErrorDistributionResponse> {

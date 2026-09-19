@@ -21,14 +21,9 @@ type UserRepoAPIKeyGroupFilterSuite struct {
 
 func (s *UserRepoAPIKeyGroupFilterSuite) SetupTest() {
 	s.ctx = context.Background()
+	resetUserAndGroupFixtures(s.T())
 	s.client = testEntClient(s.T())
 	s.repo = newUserRepositoryWithSQL(s.client, integrationDB)
-	// api_keys 必须先于 users 清理（外键）；groups 也清理避免跨用例串扰。
-	_, _ = integrationDB.ExecContext(s.ctx, "DELETE FROM api_keys")
-	_, _ = integrationDB.ExecContext(s.ctx, "DELETE FROM user_allowed_groups")
-	_, _ = integrationDB.ExecContext(s.ctx, "DELETE FROM user_subscriptions")
-	_, _ = integrationDB.ExecContext(s.ctx, "DELETE FROM users")
-	_, _ = integrationDB.ExecContext(s.ctx, "DELETE FROM groups")
 }
 
 func TestUserRepoAPIKeyGroupFilterSuite(t *testing.T) {

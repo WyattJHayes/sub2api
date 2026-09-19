@@ -1,0 +1,170 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://sub2api.local/schemas/radar-staging-reliability-acceptance-v1.json",
+  "title": "Radar staging reliability acceptance evidence",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "release", "fact_manifest", "reliability_snapshots", "recovery", "rollback"],
+  "properties": {
+    "schema_version": {"const": "radar-staging-reliability-acceptance-v1"},
+    "release": {
+      "$ref": "#/$defs/release"
+    },
+    "fact_manifest": {
+      "$ref": "#/$defs/factManifest"
+    },
+    "reliability_snapshots": {
+      "type": "array",
+      "minItems": 1,
+      "items": {"$ref": "#/$defs/snapshot"}
+    },
+    "recovery": {
+      "$ref": "#/$defs/recovery"
+    },
+    "rollback": {
+      "$ref": "#/$defs/rollback"
+    }
+  },
+  "$defs": {
+    "uuid": {"type": "string", "format": "uuid"},
+    "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "imageDigest": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
+    "release": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["run_id", "load_plan_id", "control_plane_image_digest", "worker_image_digest"],
+      "properties": {
+        "run_id": {"$ref": "#/$defs/uuid"},
+        "load_plan_id": {"$ref": "#/$defs/uuid"},
+        "control_plane_image_digest": {"$ref": "#/$defs/imageDigest"},
+        "worker_image_digest": {"$ref": "#/$defs/imageDigest"}
+      }
+    },
+    "snapshot": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["snapshot_id", "snapshot_hash", "run_id", "load_plan_id", "profile_id", "slice_key", "window_start", "window_end", "query_version", "source_hash", "source_watermark", "fresh_until", "metrics", "request_count", "success_count", "error_count", "timeout_count", "billing_idempotency_failures", "p99_latency_ms", "p99_slo_ms", "error_rate"],
+      "properties": {
+        "snapshot_id": {"$ref": "#/$defs/uuid"},
+        "snapshot_hash": {"$ref": "#/$defs/sha256"},
+        "run_id": {"$ref": "#/$defs/uuid"},
+        "load_plan_id": {"$ref": "#/$defs/uuid"},
+        "profile_id": {"type": "string", "minLength": 1},
+        "slice_key": {"type": "string", "minLength": 1},
+        "window_start": {"type": "string", "format": "date-time"},
+        "window_end": {"type": "string", "format": "date-time"},
+        "query_version": {"type": "string", "minLength": 1},
+        "source_hash": {"$ref": "#/$defs/sha256"},
+        "source_watermark": {"$ref": "#/$defs/sha256"},
+        "fresh_until": {"type": "string", "format": "date-time"},
+        "metrics": {"type": "object"},
+        "request_count": {"type": "integer", "minimum": 1},
+        "success_count": {"type": "integer", "minimum": 0},
+        "error_count": {"type": "integer", "minimum": 0},
+        "timeout_count": {"type": "integer", "minimum": 0},
+        "billing_idempotency_failures": {"type": "integer", "minimum": 0},
+        "p99_latency_ms": {"type": "integer", "minimum": 0},
+        "p99_slo_ms": {"type": "integer", "minimum": 1},
+        "error_rate": {"type": ["number", "string"]}
+      }
+    },
+    "snapshotRef": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["snapshot_id", "snapshot_hash", "run_id", "load_plan_id", "profile_id", "slice_key", "source_watermark"],
+      "properties": {
+        "snapshot_id": {"$ref": "#/$defs/uuid"},
+        "snapshot_hash": {"$ref": "#/$defs/sha256"},
+        "run_id": {"$ref": "#/$defs/uuid"},
+        "load_plan_id": {"$ref": "#/$defs/uuid"},
+        "profile_id": {"type": "string", "minLength": 1},
+        "slice_key": {"type": "string", "minLength": 1},
+        "source_watermark": {"$ref": "#/$defs/sha256"}
+      }
+    },
+    "factManifest": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["schema_version", "run_id", "load_plan_id", "profile_id", "policy_id", "policy_hash", "release_subject_id", "release_subject_hash", "snapshot_refs", "recovery_ref", "artifact_manifest_hashes", "manifest_sha256", "signature"],
+      "properties": {
+        "schema_version": {"const": "radar-fact-manifest-v1"},
+        "run_id": {"$ref": "#/$defs/uuid"},
+        "load_plan_id": {"$ref": "#/$defs/uuid"},
+        "profile_id": {"type": "string", "minLength": 1},
+        "policy_id": {"$ref": "#/$defs/uuid"},
+        "policy_hash": {"$ref": "#/$defs/sha256"},
+        "release_subject_id": {"$ref": "#/$defs/uuid"},
+        "release_subject_hash": {"$ref": "#/$defs/sha256"},
+        "snapshot_refs": {"type": "array", "minItems": 1, "items": {"$ref": "#/$defs/snapshotRef"}},
+        "recovery_ref": {"$ref": "#/$defs/recoveryRef"},
+        "artifact_manifest_hashes": {"type": "array", "minItems": 1, "items": {"$ref": "#/$defs/sha256"}},
+        "manifest_sha256": {"$ref": "#/$defs/sha256"},
+        "signature": {"$ref": "#/$defs/sha256"}
+      }
+    },
+    "recoveryRef": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["evidence_id", "evidence_hash", "run_id", "experiment_id", "source_watermark", "recovery_generation"],
+      "properties": {
+        "evidence_id": {"$ref": "#/$defs/uuid"},
+        "evidence_hash": {"$ref": "#/$defs/sha256"},
+        "run_id": {"$ref": "#/$defs/uuid"},
+        "experiment_id": {"$ref": "#/$defs/uuid"},
+        "source_watermark": {"$ref": "#/$defs/sha256"},
+        "recovery_generation": {"type": "integer", "minimum": 0}
+      }
+    },
+    "recovery": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["evidence_id", "evidence_hash", "recovery_generation", "source_watermark", "rpo_seconds", "rpo_limit_seconds", "rto_seconds", "rto_limit_seconds", "worker_reregistered", "leases_recovered", "duplicate_score_count", "evidence_hash_consistent", "ledger_consistent", "deterministic_acceptance"],
+      "properties": {
+        "evidence_id": {"$ref": "#/$defs/uuid"},
+        "evidence_hash": {"$ref": "#/$defs/sha256"},
+        "recovery_generation": {"type": "integer", "minimum": 0},
+        "source_watermark": {"$ref": "#/$defs/sha256"},
+        "rpo_seconds": {"type": ["number", "string"]},
+        "rpo_limit_seconds": {"type": ["number", "string"]},
+        "rto_seconds": {"type": ["number", "string"]},
+        "rto_limit_seconds": {"type": ["number", "string"]},
+        "worker_reregistered": {"const": true},
+        "leases_recovered": {"const": true},
+        "duplicate_score_count": {"const": 0},
+        "evidence_hash_consistent": {"const": true},
+        "ledger_consistent": {"const": true},
+        "deterministic_acceptance": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["valid_pairs", "pre_recovery_hash", "post_recovery_hash"],
+          "properties": {
+            "valid_pairs": {"const": 30},
+            "pre_recovery_hash": {"$ref": "#/$defs/sha256"},
+            "post_recovery_hash": {"$ref": "#/$defs/sha256"}
+          }
+        }
+      }
+    },
+    "rollback": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["recorded_at", "failed_run_ids", "active_lease_ids", "previous_control_plane_image_digest", "previous_worker_image_digest", "control_plane_binary_sha256", "worker_binary_sha256", "migration_checksums", "score_hashes", "aggregate_hashes", "artifact_manifest_hashes", "budget_ledger_total_before", "budget_ledger_total_after", "smoke_run_id"],
+      "properties": {
+        "recorded_at": {"type": "string", "format": "date-time"},
+        "failed_run_ids": {"type": "array", "minItems": 1, "items": {"$ref": "#/$defs/uuid"}},
+        "active_lease_ids": {"type": "array", "items": {"$ref": "#/$defs/uuid"}},
+        "previous_control_plane_image_digest": {"$ref": "#/$defs/imageDigest"},
+        "previous_worker_image_digest": {"$ref": "#/$defs/imageDigest"},
+        "control_plane_binary_sha256": {"$ref": "#/$defs/sha256"},
+        "worker_binary_sha256": {"$ref": "#/$defs/sha256"},
+        "migration_checksums": {"type": "array", "minItems": 1, "items": {"$ref": "#/$defs/sha256"}},
+        "score_hashes": {"type": "array", "minItems": 1, "items": {"$ref": "#/$defs/sha256"}},
+        "aggregate_hashes": {"type": "array", "minItems": 1, "items": {"$ref": "#/$defs/sha256"}},
+        "artifact_manifest_hashes": {"type": "array", "minItems": 1, "items": {"$ref": "#/$defs/sha256"}},
+        "budget_ledger_total_before": {"type": ["number", "string"]},
+        "budget_ledger_total_after": {"type": ["number", "string"]},
+        "smoke_run_id": {"$ref": "#/$defs/uuid"}
+      }
+    }
+  }
+}

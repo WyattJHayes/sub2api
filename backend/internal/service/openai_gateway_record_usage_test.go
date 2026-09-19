@@ -9,6 +9,7 @@ import (
 
 	"github.com/Wei-Shaw/sub2api/internal/config"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/ctxkey"
+	"github.com/shopspring/decimal"
 	"github.com/stretchr/testify/require"
 )
 
@@ -67,6 +68,37 @@ func TestOpenAIGatewayServiceRecordUsage_RejectsNilInput(t *testing.T) {
 	svc := &OpenAIGatewayService{}
 	require.Error(t, svc.RecordUsage(context.Background(), nil))
 	require.Error(t, svc.RecordUsage(context.Background(), &OpenAIRecordUsageInput{}))
+}
+
+func TestOpenAIGatewayServiceRecordUsage_AttachesFinalizedBillingEvidenceBestEffort(t *testing.T) {
+	usageRepo := &openAIRecordUsageLogRepoStub{inserted: true}
+	billingRepo := &openAIRecordUsageBillingRepoStub{result: &UsageBillingApplyResult{Applied: true}}
+	evidenceRepo := &recordUsageEvidenceRepoStub{err: errors.New("evidence unavailable")}
+	svc := newOpenAIRecordUsageServiceWithBillingRepoForTest(usageRepo, billingRepo, &openAIRecordUsageUserRepoStub{}, &openAIRecordUsageSubRepoStub{}, nil)
+	ttft := 87
+	beforeFailures := EvaluationEvidencePersistenceFailureCount()
+
+	err := svc.RecordUsage(evaluationRecordUsageContext(evidenceRepo, "trace-openai-usage"), &OpenAIRecordUsageInput{
+		Result: &OpenAIForwardResult{
+			RequestID: "openai_evidence", Usage: OpenAIUsage{InputTokens: 12, OutputTokens: 3},
+			Model: "gpt-5.1", Duration: 1750 * time.Millisecond, FirstTokenMs: &ttft,
+		},
+		APIKey: &APIKey{ID: 501, Quota: 100}, User: &User{ID: 601}, Account: &Account{ID: 701, Type: AccountTypeAPIKey},
+	})
+
+	require.NoError(t, err, "evidence persistence must not change billing behavior")
+	require.Equal(t, 1, billingRepo.calls)
+	require.Equal(t, 1, usageRepo.calls)
+	require.Equal(t, 1, evidenceRepo.attachCalls)
+	require.Equal(t, "trace-openai-usage", evidenceRepo.traceID)
+	require.Equal(t, 12, evidenceRepo.usage.InputTokens)
+	require.Equal(t, 3, evidenceRepo.usage.OutputTokens)
+	require.Equal(t, &ttft, evidenceRepo.usage.TTFT)
+	require.Equal(t, 1750, *evidenceRepo.usage.Latency)
+	require.Equal(t, decimal.NewFromFloat(usageRepo.lastLog.ActualCost), evidenceRepo.usage.BilledAmount)
+	require.Equal(t, "completed", evidenceRepo.usage.FinishReason)
+	require.NoError(t, evidenceRepo.lastCtxErr)
+	require.Equal(t, beforeFailures+1, EvaluationEvidencePersistenceFailureCount())
 }
 
 func TestRecordCyberPolicyUsageLog_BillsRealUpstreamTokens(t *testing.T) {
@@ -569,6 +601,75 @@ func TestOpenAIGatewayServiceRecordUsage_TimePricingUsesExplicitPricingAt(t *tes
 	require.InDelta(t, baseCost*0.8, usageRepo.lastLog.ActualCost, 1e-12)
 	require.InDelta(t, 0.8, usageRepo.lastLog.RateMultiplier, 1e-12)
 }
+
+func TestOpenAIGatewayServiceRecordUsage_DeepSeekAccountStatsUsesRequestPricingAtAndUpstreamModel(t *testing.T) {
+	for _, model := range []struct {
+		name        string
+		offPeakCost float64
+	}{
+		{"deepseek-v4-flash", 1000*1.5e-7 + 500*6e-7 + 1000*3e-9},
+		{"deepseek-v4-pro", 1000*6.6e-7 + 500*1.98e-6 + 1000*2.2e-8},
+	} {
+		for _, slot := range []struct {
+			name       string
+			pricingAt  time.Time
+			multiplier float64
+		}{
+			{"peak", time.Date(2026, time.August, 24, 2, 0, 0, 0, time.UTC), 2},
+			{"off_peak", time.Date(2026, time.August, 24, 12, 0, 0, 0, time.UTC), 1},
+		} {
+			t.Run(model.name+"/"+slot.name, func(t *testing.T) {
+				usageRepo := &openAIRecordUsageLogRepoStub{inserted: true}
+				userRepo := &openAIRecordUsageUserRepoStub{}
+				svc := newOpenAIRecordUsageServiceForTest(usageRepo, userRepo, &openAIRecordUsageSubRepoStub{}, nil)
+				groupID := int64(18)
+				cache := newEmptyChannelCache()
+				cache.channelByGroupID[groupID] = &Channel{ID: 1, Status: StatusActive}
+				cache.groupPlatform[groupID] = PlatformDeepseek
+				cache.loadedAt = time.Now()
+				svc.channelService = &ChannelService{}
+				svc.channelService.cache.Store(cache)
+				svc.resolver = NewModelPricingResolver(svc.channelService, svc.billingService)
+				alias := "customer-chat"
+				inputPrice, outputPrice, cachePrice := 1e-6, 2e-6, 1e-7
+				group := &Group{ID: groupID, Platform: PlatformDeepseek, RateMultiplier: 0.8,
+					ModelPricing: []ChannelModelPricing{{
+						Models: []string{alias}, BillingMode: BillingModeToken,
+						InputPrice: &inputPrice, OutputPrice: &outputPrice, CacheReadPrice: &cachePrice,
+					}},
+				}
+				err := svc.RecordUsage(context.Background(), &OpenAIRecordUsageInput{
+					Result: &OpenAIForwardResult{
+						RequestID: "openai_deepseek_account_stats_" + model.name + "_" + slot.name,
+						Model:     alias, BillingModel: alias, UpstreamModel: model.name,
+						Usage: OpenAIUsage{InputTokens: 2000, OutputTokens: 500, CacheReadInputTokens: 1000},
+					},
+					APIKey: &APIKey{ID: 1008, GroupID: &groupID, Group: group},
+					User:   &User{ID: 2008}, Account: &Account{ID: 3008, Platform: PlatformDeepseek},
+					PricingAt:          slot.pricingAt,
+					ChannelUsageFields: ChannelUsageFields{OriginalModel: alias, BillingModelSource: BillingModelSourceRequested},
+				})
+				require.NoError(t, err)
+				require.NotNil(t, usageRepo.lastLog)
+				log := usageRepo.lastLog
+				require.Equal(t, alias, log.RequestedModel)
+				require.NotNil(t, log.UpstreamModel)
+				require.Equal(t, model.name, *log.UpstreamModel)
+				require.WithinDuration(t, time.Now(), log.CreatedAt, time.Minute)
+				require.False(t, log.CreatedAt.Equal(slot.pricingAt), "request pricing time must differ from record creation")
+				customerTotal := 1000*inputPrice + 500*outputPrice + 1000*cachePrice
+				require.InDelta(t, customerTotal, log.TotalCost, 1e-12)
+				require.InDelta(t, customerTotal*0.8, log.ActualCost, 1e-12)
+				require.Equal(t, 1, userRepo.deductCalls)
+				require.InDelta(t, customerTotal*0.8, userRepo.lastAmount, 1e-12)
+				require.NotNil(t, log.AccountStatsCost)
+				require.InDelta(t, model.offPeakCost*slot.multiplier, *log.AccountStatsCost, 1e-12,
+					"account cost must use the upstream model and historical PricingAt")
+			})
+		}
+	}
+}
+
 func TestOpenAIGatewayServiceRecordUsage_IncludesEndpointMetadata(t *testing.T) {
 	usageRepo := &openAIRecordUsageLogRepoStub{inserted: true}
 	userRepo := &openAIRecordUsageUserRepoStub{}
@@ -2062,8 +2163,11 @@ func TestOpenAIGatewayServiceRecordUsage_OutputImageSizeWinsBeforeBillingAndPers
 
 	err := svc.RecordUsage(context.Background(), &OpenAIRecordUsageInput{
 		Result: &OpenAIForwardResult{
-			RequestID:        "resp_image_output_size",
-			Model:            "gpt-image-2",
+			RequestID: "resp_image_output_size",
+			Model:     "gpt-image-2",
+			Usage: OpenAIUsage{
+				ImageCacheReadTokens: 40,
+			},
 			ImageCount:       1,
 			ImageInputSize:   "1024x1024",
 			ImageOutputSizes: []string{"3840x2160"},
@@ -2093,7 +2197,7 @@ func TestOpenAIGatewayServiceRecordUsage_OutputImageSizeWinsBeforeBillingAndPers
 	require.Equal(t, "3840x2160", *usageRepo.lastLog.ImageOutputSize)
 	require.NotNil(t, usageRepo.lastLog.ImageSizeSource)
 	require.Equal(t, ImageSizeSourceOutput, *usageRepo.lastLog.ImageSizeSource)
-	require.Equal(t, map[string]int{ImageBillingSize4K: 1}, usageRepo.lastLog.ImageSizeBreakdown)
+	require.Equal(t, map[string]int{ImageBillingSize4K: 1, "image_cache_read_tokens": 40}, usageRepo.lastLog.ImageSizeBreakdown)
 	require.InDelta(t, 0.44, usageRepo.lastLog.TotalCost, 1e-12)
 	require.InDelta(t, 0.44, usageRepo.lastLog.ActualCost, 1e-12)
 }

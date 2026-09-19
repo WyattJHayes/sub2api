@@ -1,6 +1,8 @@
 package handler
 
 import (
+	"context"
+	"errors"
 	"net/http"
 	"strconv"
 	"strings"
@@ -248,6 +250,11 @@ func (h *UsageHandler) List(c *gin.Context) {
 
 	records, result, err := h.usageService.ListWithFilters(c.Request.Context(), params, parsed.Filters)
 	if err != nil {
+		if errors.Is(err, context.DeadlineExceeded) {
+			c.Header("Retry-After", "1")
+			response.Error(c, http.StatusServiceUnavailable, "Usage service temporarily unavailable, please retry later")
+			return
+		}
 		response.ErrorFrom(c, err)
 		return
 	}

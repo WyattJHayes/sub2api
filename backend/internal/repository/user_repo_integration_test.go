@@ -30,12 +30,10 @@ func (s *UserRepoSuite) SetupTest() {
 	s.client = testEntClient(s.T())
 	s.repo = newUserRepositoryWithSQL(s.client, integrationDB)
 
-	// 清理测试数据，确保每个测试从干净状态开始
-	_, _ = integrationDB.ExecContext(s.ctx, "DELETE FROM auth_identity_channels")
-	_, _ = integrationDB.ExecContext(s.ctx, "DELETE FROM auth_identities")
-	_, _ = integrationDB.ExecContext(s.ctx, "DELETE FROM user_subscriptions")
-	_, _ = integrationDB.ExecContext(s.ctx, "DELETE FROM user_allowed_groups")
-	_, _ = integrationDB.ExecContext(s.ctx, "DELETE FROM users")
+	// 这些测试使用共享 client，必须清理级联关联数据；逐表 DELETE
+	// 会因其他外键依赖失败，而原实现忽略了该错误，导致测试间数据污染。
+	_, err := integrationDB.ExecContext(s.ctx, "TRUNCATE TABLE users CASCADE")
+	s.Require().NoError(err)
 }
 
 func TestUserRepoSuite(t *testing.T) {

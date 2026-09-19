@@ -8,6 +8,9 @@ type OpsDashboardFilter struct {
 
 	Platform string
 	GroupID  *int64
+	// TrafficClass scopes metrics queries. Empty means production; the other
+	// classes remain available for explicit operational drill-downs.
+	TrafficClass TrafficClass
 
 	// QueryMode controls whether dashboard queries should use raw logs or pre-aggregated tables.
 	// Expected values: auto/raw/preagg (see OpsQueryMode).
@@ -65,8 +68,16 @@ type OpsDashboardOverview struct {
 	QPS OpsRateSummary `json:"qps"`
 	TPS OpsRateSummary `json:"tps"`
 
-	Duration OpsPercentiles `json:"duration"`
-	TTFT     OpsPercentiles `json:"ttft"`
+	Duration         OpsPercentiles      `json:"duration"`
+	TTFT             OpsPercentiles      `json:"ttft"`
+	TrafficBreakdown OpsTrafficBreakdown `json:"traffic_breakdown"`
+}
+
+type OpsTrafficBreakdown struct {
+	Production int64 `json:"production"`
+	Metadata   int64 `json:"metadata"`
+	Synthetic  int64 `json:"synthetic"`
+	Unknown    int64 `json:"unknown"`
 }
 
 type OpsLatencyHistogramBucket struct {

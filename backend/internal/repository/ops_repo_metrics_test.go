@@ -31,13 +31,13 @@ func TestInsertSystemMetricsNullableIntegerMetrics(t *testing.T) {
 			}
 			t.Cleanup(func() { _ = db.Close() })
 
-			args := make([]driver.Value, 40)
+			args := make([]driver.Value, 46)
 			args[0] = createdAt
 			args[1] = int64(1)
 			for i := 4; i <= 12; i++ {
 				args[i] = int64(0)
 			}
-			args[35] = tt.wantDBActive
+			args[41] = tt.wantDBActive
 
 			mock.ExpectExec("INSERT INTO ops_system_metrics").
 				WithArgs(args...).

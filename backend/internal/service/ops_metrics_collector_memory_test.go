@@ -108,3 +108,9 @@ func TestResolveMemoryStatsHostWithoutTotalKeepsGopsutilPercent(t *testing.T) {
 	require.Equal(t, int64(8*1024), *usedMB)
 	require.InDelta(t, 42.5, *pct, 0.05)
 }
+
+func TestResolveAvailableMemoryBytesKeepsZeroWhenCgroupIsFull(t *testing.T) {
+	available, ok := resolveAvailableMemoryBytes(2*testGiB, 2*testGiB, true, 16*testGiB, true)
+	require.True(t, ok)
+	require.Zero(t, available)
+}

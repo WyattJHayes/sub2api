@@ -12,6 +12,19 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
+func applyOpsTrafficClassParam(c *gin.Context, filter *service.OpsDashboardFilter) error {
+	raw := strings.TrimSpace(c.Query("traffic_class"))
+	if raw == "" {
+		return nil
+	}
+	class := service.NormalizeTrafficClass(raw)
+	if class == service.TrafficClassUnknown && strings.ToLower(raw) != string(service.TrafficClassUnknown) {
+		return fmt.Errorf("invalid traffic_class")
+	}
+	filter.TrafficClass = class
+	return nil
+}
+
 // GetDashboardOverview returns vNext ops dashboard overview (raw path).
 // GET /api/v1/admin/ops/dashboard/overview
 func (h *OpsHandler) GetDashboardOverview(c *gin.Context) {
@@ -35,6 +48,10 @@ func (h *OpsHandler) GetDashboardOverview(c *gin.Context) {
 		EndTime:   endTime,
 		Platform:  strings.TrimSpace(c.Query("platform")),
 		QueryMode: parseOpsQueryMode(c),
+	}
+	if err := applyOpsTrafficClassParam(c, filter); err != nil {
+		response.BadRequest(c, err.Error())
+		return
 	}
 	if v := strings.TrimSpace(c.Query("group_id")); v != "" {
 		id, err := strconv.ParseInt(v, 10, 64)
@@ -76,6 +93,10 @@ func (h *OpsHandler) GetDashboardThroughputTrend(c *gin.Context) {
 		EndTime:   endTime,
 		Platform:  strings.TrimSpace(c.Query("platform")),
 		QueryMode: parseOpsQueryMode(c),
+	}
+	if err := applyOpsTrafficClassParam(c, filter); err != nil {
+		response.BadRequest(c, err.Error())
+		return
 	}
 	if v := strings.TrimSpace(c.Query("group_id")); v != "" {
 		id, err := strconv.ParseInt(v, 10, 64)
@@ -119,6 +140,10 @@ func (h *OpsHandler) GetDashboardLatencyHistogram(c *gin.Context) {
 		Platform:  strings.TrimSpace(c.Query("platform")),
 		QueryMode: parseOpsQueryMode(c),
 	}
+	if err := applyOpsTrafficClassParam(c, filter); err != nil {
+		response.BadRequest(c, err.Error())
+		return
+	}
 	if v := strings.TrimSpace(c.Query("group_id")); v != "" {
 		id, err := strconv.ParseInt(v, 10, 64)
 		if err != nil || id <= 0 {
@@ -159,6 +184,10 @@ func (h *OpsHandler) GetDashboardErrorTrend(c *gin.Context) {
 		EndTime:   endTime,
 		Platform:  strings.TrimSpace(c.Query("platform")),
 		QueryMode: parseOpsQueryMode(c),
+	}
+	if err := applyOpsTrafficClassParam(c, filter); err != nil {
+		response.BadRequest(c, err.Error())
+		return
 	}
 	if v := strings.TrimSpace(c.Query("group_id")); v != "" {
 		id, err := strconv.ParseInt(v, 10, 64)
@@ -202,6 +231,10 @@ func (h *OpsHandler) GetDashboardErrorDistribution(c *gin.Context) {
 		Platform:  strings.TrimSpace(c.Query("platform")),
 		QueryMode: parseOpsQueryMode(c),
 	}
+	if err := applyOpsTrafficClassParam(c, filter); err != nil {
+		response.BadRequest(c, err.Error())
+		return
+	}
 	if v := strings.TrimSpace(c.Query("group_id")); v != "" {
 		id, err := strconv.ParseInt(v, 10, 64)
 		if err != nil || id <= 0 {
@@ -219,7 +252,8 @@ func (h *OpsHandler) GetDashboardErrorDistribution(c *gin.Context) {
 	response.Success(c, data)
 }
 
-// GetDashboardOpenAITokenStats returns OpenAI token efficiency stats grouped by model.
+// GetDashboardOpenAITokenStats returns token efficiency stats for all platforms, grouped by model.
+// The endpoint name is retained for compatibility; platform and group_id optionally narrow the scope.
 // GET /api/v1/admin/ops/dashboard/openai-token-stats
 func (h *OpsHandler) GetDashboardOpenAITokenStats(c *gin.Context) {
 	if h.opsService == nil {

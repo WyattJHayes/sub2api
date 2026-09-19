@@ -297,7 +297,8 @@ const routes: RouteRecordRaw[] = [
       requiresAdmin: false,
       title: 'My Subscriptions',
       titleKey: 'userSubscriptions.title',
-      descriptionKey: 'userSubscriptions.description'
+      descriptionKey: 'userSubscriptions.description',
+      requiresSubscription: true
     }
   },
   {
@@ -414,6 +415,20 @@ const routes: RouteRecordRaw[] = [
     }
   },
   {
+    path: '/admin/radar',
+    component: () => import('@/views/admin/radar/RadarShell.vue'),
+    meta: { requiresAuth: true, requiresAdmin: true, title: 'Quality Radar', titleKey: 'admin.radar.title' },
+    children: [
+      { path: '', name: 'AdminRadarOverview', component: () => import('@/views/admin/radar/RadarOverviewView.vue'), meta: { requiresAuth: true, requiresAdmin: true, title: 'Radar Overview', titleKey: 'admin.radar.pages.overview' } },
+      { path: 'models', name: 'AdminRadarModels', component: () => import('@/views/admin/radar/RadarModelsView.vue'), meta: { requiresAuth: true, requiresAdmin: true, title: 'Radar Models', titleKey: 'admin.radar.pages.models' } },
+      { path: 'runs', name: 'AdminRadarRuns', component: () => import('@/views/admin/radar/RadarRunsView.vue'), meta: { requiresAuth: true, requiresAdmin: true, title: 'Radar Runs', titleKey: 'admin.radar.pages.runs' } },
+      { path: 'alerts', name: 'AdminRadarAlerts', component: () => import('@/views/admin/radar/RadarAlertsView.vue'), meta: { requiresAuth: true, requiresAdmin: true, title: 'Radar Alerts', titleKey: 'admin.radar.pages.alerts' } },
+      { path: 'gates', name: 'AdminRadarGates', component: () => import('@/views/admin/radar/RadarGatesView.vue'), meta: { requiresAuth: true, requiresAdmin: true, title: 'Radar Gates', titleKey: 'admin.radar.pages.gates' } },
+      { path: 'workers', name: 'AdminRadarWorkers', component: () => import('@/views/admin/radar/RadarWorkersView.vue'), meta: { requiresAuth: true, requiresAdmin: true, title: 'Radar Workers', titleKey: 'admin.radar.pages.workers' } },
+      { path: 'datasets', name: 'AdminRadarDatasets', component: () => import('@/views/admin/radar/RadarDatasetsView.vue'), meta: { requiresAuth: true, requiresAdmin: true, title: 'Radar Datasets', titleKey: 'admin.radar.pages.datasets' } }
+    ]
+  },
+  {
     path: '/admin/ops',
     name: 'AdminOps',
     component: () => import('@/views/admin/ops/OpsDashboard.vue'),
@@ -498,6 +513,28 @@ const routes: RouteRecordRaw[] = [
       requiresAdmin: false,
       title: 'Channel Status',
       titleKey: 'nav.channelStatus'
+    }
+  },
+  {
+    path: '/model-health',
+    name: 'ModelHealth',
+    component: () => import('@/views/user/ModelHealthView.vue'),
+    meta: {
+      requiresAuth: true,
+      requiresAdmin: false,
+      title: 'Model Health',
+      titleKey: 'modelHealth.title'
+    }
+  },
+  {
+    path: '/model-health/:alias',
+    name: 'ModelQualityReport',
+    component: () => import('@/views/user/ModelQualityReportView.vue'),
+    meta: {
+      requiresAuth: true,
+      requiresAdmin: false,
+      title: 'Model Quality Report',
+      titleKey: 'modelHealth.report.title'
     }
   },
   {
@@ -907,7 +944,7 @@ router.beforeEach(async (to, _from, next) => {
   // 公共设置可能尚未加载（App.vue 的 onMounted 异步拉取晚于首次导航，且纯静态部署
   // 无 __APP_CONFIG__ 注入）。此时 cachedPublicSettings 为空会把 payment/risk_control
   // 误判为“未启用”而错误拦截，故这里先确保设置加载完成。
-  if ((to.meta.requiresPayment || to.meta.requiresRiskControl) && !appStore.publicSettingsLoaded) {
+  if ((to.meta.requiresPayment || to.meta.requiresRiskControl || to.meta.requiresSubscription) && !appStore.publicSettingsLoaded) {
     try {
       await appStore.fetchPublicSettings()
     } catch (error) {
@@ -935,10 +972,19 @@ router.beforeEach(async (to, _from, next) => {
     return
   }
 
+  // 订阅功能是 opt-out 开关：只有显式 false 才拦截「我的订阅」页直达。
+  if (
+    to.meta.requiresSubscription &&
+    appStore.publicSettingsLoaded &&
+    appStore.cachedPublicSettings?.subscription_enabled === false
+  ) {
+    next(authStore.isAdmin ? '/admin/dashboard' : '/dashboard')
+    return
+  }
+
   // 简易模式下限制访问某些页面
   if (authStore.isSimpleMode) {
     const restrictedPaths = [
-      '/admin/groups',
       '/admin/subscriptions',
       '/admin/redeem',
       '/subscriptions',
@@ -976,6 +1022,10 @@ router.afterEach((to) => {
   // 结束导航加载状态
   navigationLoading.endNavigation()
 
+  // A successful navigation confirms that the current entry and its chunks are
+  // coherent again, so allow a future deployment to recover once more.
+  sessionStorage.removeItem('chunk_reload_attempted')
+
   // 懒初始化预加载（首次导航时创建，传入 router 实例）
   if (!routePrefetch) {
     routePrefetch = useRoutePrefetch(router)
@@ -988,17 +1038,47 @@ router.afterEach((to) => {
  * Navigation guard: Error handling
  * Handles dynamic import failures caused by deployment updates
  */
+const isChunkLoadError = (error: unknown): boolean => {
+  const message = error instanceof Error ? error.message : String(error)
+  const normalizedMessage = message.toLowerCase()
+
+  return (
+    normalizedMessage.includes('failed to fetch dynamically imported module') ||
+    normalizedMessage.includes('loading chunk') ||
+    normalizedMessage.includes('loading css chunk') ||
+    normalizedMessage.includes('importing a module script failed') ||
+    normalizedMessage.includes('failed to load module script') ||
+    normalizedMessage.includes('not a valid javascript mime type') ||
+    normalizedMessage.includes('strict mime type checking is enforced for module scripts') ||
+    (normalizedMessage.includes('mime type') && normalizedMessage.includes('module')) ||
+    (error instanceof Error && error.name === 'ChunkLoadError')
+  )
+}
+
+const clearStaleClientCaches = async (): Promise<void> => {
+  const cleanupTasks: Promise<unknown>[] = []
+
+  if (typeof navigator !== 'undefined' && 'serviceWorker' in navigator) {
+    cleanupTasks.push(
+      navigator.serviceWorker
+        .getRegistrations()
+        .then((registrations) => Promise.all(registrations.map((registration) => registration.unregister())))
+    )
+  }
+
+  if (typeof caches !== 'undefined') {
+    cleanupTasks.push(
+      caches.keys().then((cacheNames) => Promise.all(cacheNames.map((cacheName) => caches.delete(cacheName))))
+    )
+  }
+
+  await Promise.all(cleanupTasks.map((task) => task.catch(() => undefined)))
+}
+
 router.onError((error) => {
   console.error('Router error:', error)
 
-  // Check if this is a dynamic import failure (chunk loading error)
-  const isChunkLoadError =
-    error.message?.includes('Failed to fetch dynamically imported module') ||
-    error.message?.includes('Loading chunk') ||
-    error.message?.includes('Loading CSS chunk') ||
-    error.name === 'ChunkLoadError'
-
-  if (isChunkLoadError) {
+  if (isChunkLoadError(error)) {
     // Avoid infinite reload loop by checking sessionStorage
     const reloadKey = 'chunk_reload_attempted'
     const lastReload = sessionStorage.getItem(reloadKey)
@@ -1007,8 +1087,8 @@ router.onError((error) => {
     // Allow reload if never attempted or more than 10 seconds ago
     if (!lastReload || now - parseInt(lastReload) > 10000) {
       sessionStorage.setItem(reloadKey, now.toString())
-      console.warn('Chunk load error detected, reloading page to fetch latest version...')
-      window.location.reload()
+      console.warn('Chunk load error detected, clearing stale browser caches and reloading...')
+      void clearStaleClientCaches().finally(() => window.location.reload())
     } else {
       console.error('Chunk load error persists after reload. Please clear browser cache.')
     }

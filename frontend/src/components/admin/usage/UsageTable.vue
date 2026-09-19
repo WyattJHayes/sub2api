@@ -72,19 +72,18 @@
             </div>
             <span v-else class="font-medium text-gray-900 dark:text-white">{{ row.model }}</span>
             <div
-              v-if="row.upstream_model_mismatch === true && row.upstream_response_model"
-              class="break-all pl-3 text-[11px]"
-              :class="isLikelyModelVariant(row) ? 'text-amber-600 dark:text-amber-400' : 'text-orange-600 dark:text-orange-400'"
-              :title="modelAuditTitle(row)"
+              class="flex flex-wrap items-center gap-x-1.5 gap-y-1 break-all pl-3 text-[11px]"
+              :class="upstreamModelStatusTextClass(row)"
+              :title="upstreamResponseTitle(row)"
             >
-              <span class="mr-1">↳ {{ t('usage.upstreamResponseModel') }}:</span>{{ row.upstream_response_model }}
+              <span class="mr-1">↳ {{ t('usage.upstreamResponseModel') }}:</span>{{ upstreamResponseModel(row) }}
               <span
-                class="ml-1 inline-flex rounded px-1 py-px text-[10px] font-medium ring-1 ring-inset"
-                :class="isLikelyModelVariant(row)
-                  ? 'bg-amber-50 text-amber-700 ring-amber-200 dark:bg-amber-500/10 dark:text-amber-300 dark:ring-amber-500/30'
-                  : 'bg-orange-50 text-orange-700 ring-orange-200 dark:bg-orange-500/10 dark:text-orange-300 dark:ring-orange-500/30'"
+                data-testid="upstream-model-status"
+                :data-status="upstreamModelStatus(row)"
+                class="inline-flex rounded px-1 py-px text-[10px] font-medium ring-1 ring-inset"
+                :class="upstreamModelStatusBadgeClass(row)"
               >
-                {{ isLikelyModelVariant(row) ? t('usage.modelVariant') : t('usage.modelMismatch') }}
+                {{ t(upstreamModelStatusLabel(row)) }}
               </span>
             </div>
           </div>
@@ -410,19 +409,19 @@
             <div class="text-xs font-semibold text-gray-300 mb-1">{{ t('usage.costDetails') }}</div>
             <div v-if="tooltipData && tooltipData.input_cost > 0" class="flex items-center justify-between gap-4">
               <span class="text-gray-400">{{ t('admin.usage.inputCost') }}</span>
-              <span class="font-medium text-white">${{ tooltipData.input_cost.toFixed(6) }}</span>
+              <span class="font-medium text-white">${{ tooltipData.input_cost.toFixed(8) }}</span>
             </div>
             <div v-if="tooltipData && hasImageInputCost(tooltipData)" class="flex items-center justify-between gap-4">
               <span class="text-gray-400">{{ t('usage.imageInputCost') }}</span>
-              <span class="font-medium text-fuchsia-300">${{ tooltipData.image_input_cost.toFixed(6) }}</span>
+              <span class="font-medium text-fuchsia-300">${{ tooltipData.image_input_cost.toFixed(8) }}</span>
             </div>
             <div v-if="tooltipData && tooltipData.output_cost > 0" class="flex items-center justify-between gap-4">
               <span class="text-gray-400">{{ t('admin.usage.outputCost') }}</span>
-              <span class="font-medium text-white">${{ tooltipData.output_cost.toFixed(6) }}</span>
+              <span class="font-medium text-white">${{ tooltipData.output_cost.toFixed(8) }}</span>
             </div>
             <div v-if="tooltipData && hasImageOutputCost(tooltipData)" class="flex items-center justify-between gap-4">
               <span class="text-gray-400">{{ t('usage.imageOutputCost') }}</span>
-              <span class="font-medium text-pink-300">${{ tooltipData.image_output_cost.toFixed(6) }}</span>
+              <span class="font-medium text-pink-300">${{ tooltipData.image_output_cost.toFixed(8) }}</span>
             </div>
             <!-- Token billing: show unit prices per 1M tokens -->
             <template v-if="tooltipData && !isImageUsage(tooltipData) && (!tooltipData.billing_mode || tooltipData.billing_mode === BILLING_MODE_TOKEN)">
@@ -470,24 +469,24 @@
               </div>
               <div class="flex items-center justify-between gap-4">
                 <span class="text-gray-400">{{ t('usage.imageUnitPrice') }}</span>
-                <span class="font-medium text-sky-300">${{ imageUnitPrice(tooltipData).toFixed(6) }}</span>
+                <span class="font-medium text-sky-300">${{ imageUnitPrice(tooltipData).toFixed(8) }}</span>
               </div>
               <div class="flex items-center justify-between gap-4">
                 <span class="text-gray-400">{{ t('usage.imageTotalPrice') }}</span>
-                <span class="font-medium text-white">${{ tooltipData.total_cost?.toFixed(6) || '0.000000' }}</span>
+                <span class="font-medium text-white">${{ tooltipData.total_cost?.toFixed(8) || '0.00000000' }}</span>
               </div>
             </template>
             <div v-else class="flex items-center justify-between gap-4">
               <span class="text-gray-400">{{ t('usage.unitPrice') }}</span>
-              <span class="font-medium text-sky-300">${{ tooltipData?.total_cost?.toFixed(6) || '0.000000' }}</span>
+              <span class="font-medium text-sky-300">${{ tooltipData?.total_cost?.toFixed(8) || '0.00000000' }}</span>
             </div>
             <div v-if="tooltipData && tooltipData.cache_creation_cost > 0" class="flex items-center justify-between gap-4">
               <span class="text-gray-400">{{ t('admin.usage.cacheCreationCost') }}</span>
-              <span class="font-medium text-white">${{ tooltipData.cache_creation_cost.toFixed(6) }}</span>
+              <span class="font-medium text-white">${{ tooltipData.cache_creation_cost.toFixed(8) }}</span>
             </div>
             <div v-if="tooltipData && tooltipData.cache_read_cost > 0" class="flex items-center justify-between gap-4">
               <span class="text-gray-400">{{ t('admin.usage.cacheReadCost') }}</span>
-              <span class="font-medium text-white">${{ tooltipData.cache_read_cost.toFixed(6) }}</span>
+              <span class="font-medium text-white">${{ tooltipData.cache_read_cost.toFixed(8) }}</span>
             </div>
           </div>
           <!-- Rate and Summary -->
@@ -501,11 +500,11 @@
           </div>
           <div class="flex items-center justify-between gap-6">
             <span class="text-gray-400">{{ t('usage.original') }}</span>
-            <span class="font-medium text-white">${{ tooltipData?.total_cost?.toFixed(6) || '0.000000' }}</span>
+            <span class="font-medium text-white">${{ tooltipData?.total_cost?.toFixed(8) || '0.00000000' }}</span>
           </div>
           <div class="flex items-center justify-between gap-6">
             <span class="text-gray-400">{{ t('usage.userBilled') }}</span>
-            <span class="font-semibold text-green-400">${{ tooltipData?.actual_cost?.toFixed(6) || '0.000000' }}</span>
+            <span class="font-semibold text-green-400">${{ tooltipData?.actual_cost?.toFixed(8) || '0.00000000' }}</span>
           </div>
           <!-- Account billing (separated from user billing) -->
           <template v-if="showAccountBilling">
@@ -520,7 +519,7 @@
                   total_cost: tooltipData?.total_cost,
                   account_stats_cost: tooltipData?.account_stats_cost,
                   account_rate_multiplier: tooltipData?.account_rate_multiplier,
-                }).toFixed(6) }}
+                }).toFixed(8) }}
               </span>
             </div>
           </template>
@@ -630,24 +629,58 @@ const hasReasoningEffortMapping = (row: AdminUsageLog): boolean => {
 
 const sentUpstreamModel = (row: AdminUsageLog): string => row.upstream_model?.trim() || row.model?.trim() || ''
 
-const normalizeModelVariant = (model: string): string => model
-  .trim()
-  .toLowerCase()
-  .replace(/-latest$/, '')
-  .replace(/-\d{4}-\d{2}-\d{2}$/, '')
-  .replace(/-\d{8}$/, '')
+type UpstreamModelStatus = 'consistent' | 'unknown' | 'mismatch'
 
-const isLikelyModelVariant = (row: AdminUsageLog): boolean => {
-  const sent = sentUpstreamModel(row)
-  const response = row.upstream_response_model?.trim() || ''
-  return sent !== '' && response !== '' && normalizeModelVariant(sent) === normalizeModelVariant(response)
+const upstreamModelStatus = (row: AdminUsageLog): UpstreamModelStatus => {
+  if (row.upstream_model_status === 'consistent' || row.upstream_model_status === 'unknown' || row.upstream_model_status === 'mismatch') {
+    return row.upstream_model_status
+  }
+  if (!row.upstream_response_model?.trim()) return 'unknown'
+  if (row.upstream_model_mismatch === true) return 'mismatch'
+  if (row.upstream_model_mismatch === false) return 'consistent'
+  return 'unknown'
 }
+
+const upstreamModelStatusLabel = (row: AdminUsageLog): string => {
+  const status = upstreamModelStatus(row)
+  if (status === 'consistent') return 'usage.modelConsistent'
+  if (status === 'mismatch') return 'usage.modelMismatch'
+  return 'usage.modelUnknown'
+}
+
+const upstreamModelStatusTextClass = (row: AdminUsageLog): string => {
+  const status = upstreamModelStatus(row)
+  if (status === 'consistent') return 'text-emerald-600 dark:text-emerald-400'
+  if (status === 'mismatch') return 'text-red-600 dark:text-red-400'
+  return 'text-amber-600 dark:text-amber-400'
+}
+
+const upstreamModelStatusBadgeClass = (row: AdminUsageLog): string => {
+  const status = upstreamModelStatus(row)
+  if (status === 'consistent') {
+    return 'bg-emerald-50 text-emerald-700 ring-emerald-200 dark:bg-emerald-500/10 dark:text-emerald-300 dark:ring-emerald-500/30'
+  }
+  if (status === 'mismatch') {
+    return 'bg-red-50 text-red-700 ring-red-200 dark:bg-red-500/10 dark:text-red-300 dark:ring-red-500/30'
+  }
+  return 'bg-amber-50 text-amber-700 ring-amber-200 dark:bg-amber-500/10 dark:text-amber-300 dark:ring-amber-500/30'
+}
+
+const upstreamResponseModel = (row: AdminUsageLog): string =>
+  row.upstream_response_model?.trim() || t('usage.upstreamResponseUnknown')
 
 const modelAuditTitle = (row: AdminUsageLog): string => [
   `${t('usage.requestedModel')}: ${row.model || '-'}`,
   `${t('usage.sentUpstreamModel')}: ${sentUpstreamModel(row) || '-'}`,
   `${t('usage.upstreamResponseModel')}: ${row.upstream_response_model || '-'}`,
 ].join('\n')
+
+const upstreamResponseTitle = (row: AdminUsageLog): string => {
+  const response = row.upstream_response_model?.trim()
+  if (!response) return t('usage.upstreamResponseUnknownHint')
+  if (row.upstream_model_mismatch === true) return modelAuditTitle(row)
+  return `${t('usage.upstreamResponseModel')}: ${response}`
+}
 
 const currentPageIps = computed(() =>
   Array.from(new Set(props.data.map((row) => row.ip_address).filter((ip): ip is string => Boolean(ip))))

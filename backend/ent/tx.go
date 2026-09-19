@@ -46,6 +46,16 @@ type Tx struct {
 	CompositeModelRoute *CompositeModelRouteClient
 	// ErrorPassthroughRule is the client for interacting with the ErrorPassthroughRule builders.
 	ErrorPassthroughRule *ErrorPassthroughRuleClient
+	// EvaluationCase is the client for interacting with the EvaluationCase builders.
+	EvaluationCase *EvaluationCaseClient
+	// EvaluationDatasetVersion is the client for interacting with the EvaluationDatasetVersion builders.
+	EvaluationDatasetVersion *EvaluationDatasetVersionClient
+	// EvaluationPlan is the client for interacting with the EvaluationPlan builders.
+	EvaluationPlan *EvaluationPlanClient
+	// EvaluationRouteEvidence is the client for interacting with the EvaluationRouteEvidence builders.
+	EvaluationRouteEvidence *EvaluationRouteEvidenceClient
+	// EvaluationRun is the client for interacting with the EvaluationRun builders.
+	EvaluationRun *EvaluationRunClient
 	// Group is the client for interacting with the Group builders.
 	Group *GroupClient
 	// IdempotencyRecord is the client for interacting with the IdempotencyRecord builders.
@@ -239,6 +249,11 @@ func (tx *Tx) init() {
 	tx.ChannelMonitorRequestTemplate = NewChannelMonitorRequestTemplateClient(tx.config)
 	tx.CompositeModelRoute = NewCompositeModelRouteClient(tx.config)
 	tx.ErrorPassthroughRule = NewErrorPassthroughRuleClient(tx.config)
+	tx.EvaluationCase = NewEvaluationCaseClient(tx.config)
+	tx.EvaluationDatasetVersion = NewEvaluationDatasetVersionClient(tx.config)
+	tx.EvaluationPlan = NewEvaluationPlanClient(tx.config)
+	tx.EvaluationRouteEvidence = NewEvaluationRouteEvidenceClient(tx.config)
+	tx.EvaluationRun = NewEvaluationRunClient(tx.config)
 	tx.Group = NewGroupClient(tx.config)
 	tx.IdempotencyRecord = NewIdempotencyRecordClient(tx.config)
 	tx.IdentityAdoptionDecision = NewIdentityAdoptionDecisionClient(tx.config)

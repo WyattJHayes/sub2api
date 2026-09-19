@@ -130,6 +130,93 @@ func RegisterAdminRoutes(
 
 		// 操作审计日志
 		registerAuditLogRoutes(admin, h, stepUpAuth)
+
+		// Quality Radar governance and read projections. The nil guard keeps
+		// lightweight route tests that construct partial handler sets valid.
+		registerRadarGovernanceRoutes(admin, h)
+		registerRadarReliabilityRoutes(admin, h)
+	}
+}
+
+func registerRadarReliabilityRoutes(admin *gin.RouterGroup, h *handler.Handlers) {
+	if h == nil || h.Admin == nil || h.Admin.RadarReliability == nil {
+		return
+	}
+	reliability := admin.Group("/radar/reliability")
+	reliability.POST("/load-plans", h.Admin.RadarReliability.CreateLoadPlan)
+	reliability.POST("/load-plans/:id/publish", h.Admin.RadarReliability.PublishLoadPlan)
+	reliability.GET("/load-plans/:id", h.Admin.RadarReliability.GetLoadPlan)
+}
+
+func registerRadarGovernanceRoutes(admin *gin.RouterGroup, h *handler.Handlers) {
+	if h == nil || h.Admin == nil || h.Admin.RadarGovernance == nil {
+		return
+	}
+	radar := admin.Group("/radar")
+	{
+		radar.GET("/overview", h.Admin.RadarGovernance.Overview)
+		radar.GET("/models", h.Admin.RadarGovernance.EmptyModels)
+		radar.POST("/models", h.Admin.RadarGovernance.RegisterTrackedModel)
+		radar.DELETE("/models/:alias", h.Admin.RadarGovernance.UntrackModel)
+		radar.GET("/runs", h.Admin.RadarGovernance.EmptyRuns)
+		radar.GET("/alerts", h.Admin.RadarGovernance.EmptyAlerts)
+		radar.GET("/gates", h.Admin.RadarGovernance.EmptyGates)
+		radar.GET("/workers", h.Admin.RadarGovernance.EmptyWorkers)
+		radar.POST("/workers", h.Admin.RadarGovernance.RegisterWorker)
+		radar.POST("/workers/:id/rotate-token", h.Admin.RadarGovernance.RotateWorkerToken)
+		radar.POST("/workers/:id/pause-claims", h.Admin.RadarGovernance.PauseWorkerClaims)
+		radar.POST("/workers/:id/resume-claims", h.Admin.RadarGovernance.ResumeWorkerClaims)
+		radar.POST("/workers/:id/drain", h.Admin.RadarGovernance.DrainWorker)
+		radar.POST("/workers/:id/disable", h.Admin.RadarGovernance.DisableWorker)
+		radar.GET("/datasets", h.Admin.RadarGovernance.EmptyDatasets)
+		radar.POST("/evaluation-keys/:id/enable", h.Admin.RadarGovernance.EnableEvaluationKey)
+		radar.POST("/datasets", h.Admin.RadarGovernance.CreateDataset)
+		radar.POST("/datasets/:id/publish", h.Admin.RadarGovernance.PublishDataset)
+		radar.POST("/plans", h.Admin.RadarGovernance.CreatePlan)
+		radar.POST("/runs", h.Admin.RadarGovernance.StartRun)
+		radar.POST("/runs/:id/pause", h.Admin.RadarGovernance.PauseRun)
+		radar.POST("/runs/:id/resume", h.Admin.RadarGovernance.ResumeRun)
+		radar.POST("/runs/:id/cancel", h.Admin.RadarGovernance.CancelRun)
+		radar.POST("/runs/:id/fence", h.Admin.RadarGovernance.FenceRun)
+		radar.GET("/runs/:id/reliability-facts", h.Admin.RadarGovernance.GetReliabilityFacts)
+		radar.POST("/revision-batches", h.Admin.RadarGovernance.CreateRevisionBatch)
+		radar.POST("/revision-batches/:id/fence", h.Admin.RadarGovernance.FenceRevisionBatch)
+		radar.POST("/revision-batches/:id/resume", h.Admin.RadarGovernance.ResumeRevisionBatch)
+		radar.POST("/revision-batches/:id/cancel", h.Admin.RadarGovernance.CancelRevisionBatch)
+		radar.POST("/revision-batches/:id/repair", h.Admin.RadarGovernance.RepairRevisionBatch)
+		radar.POST("/revision-batches/:id/compensating-head/approve", h.Admin.RadarGovernance.ApproveCompensatingScoreHead)
+
+		roleBindings := radar.Group("/rbac/role-bindings")
+		roleBindings.GET("", h.Admin.RadarGovernance.ListRoleBindings)
+		roleBindings.POST("", h.Admin.RadarGovernance.CreateRoleBinding)
+		roleBindings.DELETE("/:id", h.Admin.RadarGovernance.DisableRoleBinding)
+
+		baselines := radar.Group("/baselines")
+		baselines.POST("", h.Admin.RadarGovernance.ProposeBaseline)
+		baselines.GET("/:id", h.Admin.RadarGovernance.GetBaseline)
+		baselines.POST("/:id/approve", h.Admin.RadarGovernance.ApproveBaseline)
+		baselines.POST("/:id/activate", h.Admin.RadarGovernance.ActivateBaseline)
+
+		policies := radar.Group("/policies")
+		policies.POST("", h.Admin.RadarGovernance.CreateGatePolicy)
+		policies.POST("/:id/approve", h.Admin.RadarGovernance.ApproveGatePolicy)
+		policies.POST("/:id/activate", h.Admin.RadarGovernance.ActivateGatePolicy)
+		radar.POST("/release-subjects", h.Admin.RadarGovernance.CreateReleaseSubject)
+		radar.GET("/release-subjects/:id", h.Admin.RadarGovernance.GetReleaseSubject)
+		radar.POST("/release-subjects/:id/activate", h.Admin.RadarGovernance.ActivateReleaseSubject)
+		radar.POST("/release-subjects/:id/revoke", h.Admin.RadarGovernance.RevokeReleaseSubject)
+
+		radar.POST("/gates/evaluate", h.Admin.RadarGovernance.EvaluateGate)
+		gates := radar.Group("/gates")
+		gates.POST("/waivers", h.Admin.RadarGovernance.WaiveGateDecision)
+
+		radar.POST("/alerts/observe", h.Admin.RadarGovernance.ObserveAlert)
+		alerts := radar.Group("/alerts")
+		alerts.GET("/:id", h.Admin.RadarGovernance.GetAlert)
+		alerts.POST("/:id/acknowledge", h.Admin.RadarGovernance.AcknowledgeAlert)
+		alerts.POST("/:id/recovery", h.Admin.RadarGovernance.RecordAlertRecovery)
+		alerts.POST("/:id/resolve", h.Admin.RadarGovernance.ResolveAlert)
+		alerts.POST("/:id/attribution", h.Admin.RadarGovernance.RecordAttribution)
 	}
 }
 
@@ -333,7 +420,7 @@ func registerGroupRoutes(admin *gin.RouterGroup, h *handler.Handlers) {
 		groups.GET("/capacity-summary", h.Admin.Group.GetCapacitySummary)
 		groups.GET("/live-capability", h.Admin.Group.GetLiveCapability)
 		groups.PUT("/sort-order", h.Admin.Group.UpdateSortOrder)
-		groups.GET("/:id/models-list-candidates", h.Admin.Group.GetModelsListCandidates)
+		groups.GET("/:id/model-allowlist-candidates", h.Admin.Group.GetGroupModelAllowlistCandidates)
 		groups.GET("/:id/composite-routes", h.Admin.Group.ListCompositeRoutes)
 		groups.POST("/:id/composite-routes", h.Admin.Group.CreateCompositeRoute)
 		groups.POST("/:id/composite-routes/preview", h.Admin.Group.PreviewCompositeRoute)
@@ -372,6 +459,8 @@ func registerAccountRoutes(admin *gin.RouterGroup, h *handler.Handlers, stepUpAu
 		accounts.POST("/sync/crs", h.Admin.Account.SyncFromCRS)
 		accounts.POST("/sync/crs/preview", h.Admin.Account.PreviewFromCRS)
 		accounts.PUT("/:id", h.Admin.Account.Update)
+		accounts.GET("/:id/grok-media-eligibility", h.Admin.Account.GetGrokMediaEligibility)
+		accounts.PUT("/:id/grok-media-eligibility", h.Admin.Account.UpdateGrokMediaEligibility)
 		accounts.PUT("/:id/upstream-billing-probe", h.Admin.Account.SetUpstreamBillingProbeEnabled)
 		accounts.POST("/:id/upstream-billing-probe", h.Admin.Account.ProbeUpstreamBilling)
 		accounts.GET("/:id/ollama-cloud-usage", h.Admin.Account.GetOllamaCloudUsage)
@@ -673,6 +762,7 @@ func registerSubscriptionRoutes(admin *gin.RouterGroup, h *handler.Handlers) {
 		subscriptions.GET("/:id/progress", h.Admin.Subscription.GetProgress)
 		subscriptions.POST("/assign", h.Admin.Subscription.Assign)
 		subscriptions.POST("/bulk-assign", h.Admin.Subscription.BulkAssign)
+		subscriptions.POST("/bulk-action", h.Admin.Subscription.BulkAction)
 		subscriptions.POST("/:id/extend", h.Admin.Subscription.Extend)
 		subscriptions.POST("/:id/reset-quota", h.Admin.Subscription.ResetQuota)
 		subscriptions.POST("/:id/revoke", h.Admin.Subscription.Revoke)

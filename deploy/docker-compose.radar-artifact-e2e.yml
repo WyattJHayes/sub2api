@@ -1,0 +1,8 @@
+services:
+  minio-staging:
+    ports:
+      - "127.0.0.1:${RADAR_ARTIFACT_E2E_MINIO_PORT:-19000}:9000"
+
+  clamav-staging:
+    ports:
+      - "127.0.0.1:${RADAR_ARTIFACT_E2E_CLAMAV_PORT:-13310}:3310"
