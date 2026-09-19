@@ -1,8 +1,8 @@
 package service
 
 import (
-	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"net/http"
 	"strings"
@@ -10,7 +10,6 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"github.com/tidwall/gjson"
-	"github.com/tidwall/sjson"
 )
 
 const (
@@ -70,86 +69,31 @@ func buildSeedanceURL(base string, endpoint GrokMediaEndpoint, taskID string) (s
 	return base, nil
 }
 
-// ForwardSeedance preserves the Ark protocol, including multimodal content and
-// future fields. Only model is rewritten using the account's configured mapping.
 func (s *OpenAIGatewayService) ForwardSeedance(ctx context.Context, c *gin.Context, account *Account, endpoint GrokMediaEndpoint, taskID string, body []byte) (*OpenAIForwardResult, error) {
-	if !account.SupportsOpenAIEndpointCapability(OpenAIEndpointCapabilitySeedance) || !endpoint.IsSeedance() {
-		return nil, fmt.Errorf("seedance requires an OpenAI API key account with a custom base URL")
-	}
-	base, err := s.validateUpstreamBaseURL(account.GetCredential("base_url"))
-	if err != nil {
-		return nil, err
-	}
-	target, err := buildSeedanceURL(base, endpoint, strings.TrimPrefix(taskID, "seedance:"))
-	if err != nil {
-		return nil, err
-	}
-	model, upstreamModel := "", ""
-	method := http.MethodGet
+	started := time.Now()
+	var response *SeedanceUpstreamResponse
+	var err error
 	switch endpoint {
 	case SeedanceEndpointCreate:
-		info, parseErr := ParseSeedanceRequest(body)
-		if parseErr != nil {
-			return nil, parseErr
-		}
-		model = info.Model
-		upstreamModel = account.GetMappedModel(model)
-		body, err = sjson.SetBytes(body, "model", upstreamModel)
-		if err != nil {
-			return nil, err
-		}
-		method = http.MethodPost
+		response, err = s.CreateSeedanceTask(ctx, account, body)
+	case SeedanceEndpointStatus:
+		response, err = s.GetSeedanceTask(ctx, account, taskID)
 	case SeedanceEndpointDelete:
-		method = http.MethodDelete
+		response, err = s.DeleteSeedanceTask(ctx, account, taskID)
+	default:
+		return nil, fmt.Errorf("unsupported seedance endpoint")
 	}
-	token := strings.TrimSpace(account.GetCredential("api_key"))
-	if token == "" {
-		return nil, fmt.Errorf("seedance account missing api_key")
-	}
-	started := time.Now()
-	req, err := http.NewRequestWithContext(ctx, method, target, bytes.NewReader(body))
-	if err != nil {
-		return nil, err
-	}
-	req.Header.Set("Authorization", "Bearer "+token)
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Accept", "application/json")
-	account.ApplyHeaderOverrides(req.Header)
-	proxy := ""
-	if account.ProxyID != nil && account.Proxy != nil {
-		proxy = account.Proxy.URL()
-	}
-	resp, err := s.httpUpstream.Do(req, proxy, account.ID, account.Concurrency)
 	SetOpsLatencyMs(c, OpsUpstreamLatencyMsKey, time.Since(started).Milliseconds())
 	if err != nil {
+		var upstreamErr *SeedanceUpstreamError
+		if errors.As(err, &upstreamErr) && upstreamErr.SafeCode == "response_too_large" {
+			setOpsUpstreamError(c, http.StatusBadGateway, "upstream response too large", "")
+			openAITooLargeError(c)
+		} else if response != nil && response.StatusCode >= http.StatusMultipleChoices {
+			writeGrokMediaResponse(c, &http.Response{StatusCode: response.StatusCode, Header: response.Header}, response.Body, s.responseHeaderFilter)
+		}
 		return nil, err
 	}
-	defer func() { _ = resp.Body.Close() }()
-	responseBody, err := ReadUpstreamResponseBody(resp.Body, s.cfg, c, openAITooLargeError)
-	if err != nil {
-		return nil, err
-	}
-	// Do not retry ambiguous asynchronous creates: the upstream may already have
-	// accepted a billable job. Preserve native error codes and response bodies.
-	if resp.StatusCode >= 300 {
-		writeGrokMediaResponse(c, resp, responseBody, s.responseHeaderFilter)
-		return nil, fmt.Errorf("seedance upstream status %d", resp.StatusCode)
-	}
-	result := &OpenAIForwardResult{Model: model, BillingModel: model, UpstreamModel: upstreamModel, Duration: time.Since(started), ResponseHeaders: resp.Header.Clone()}
-	if endpoint == SeedanceEndpointCreate {
-		id := strings.TrimSpace(gjson.GetBytes(responseBody, "id").String())
-		if id == "" {
-			return nil, fmt.Errorf("seedance create response missing task ID")
-		}
-		result.ResponseID = SeedanceTaskKey(id)
-	}
-	if endpoint == SeedanceEndpointStatus {
-		result.ResponseID = taskID
-		result.UpstreamModel = gjson.GetBytes(responseBody, "model").String()
-		if gjson.GetBytes(responseBody, "status").String() == "succeeded" {
-			result.Usage.OutputTokens = max(0, int(gjson.GetBytes(responseBody, "usage.completion_tokens").Int()))
-		}
-	}
-	writeGrokMediaResponse(c, resp, responseBody, s.responseHeaderFilter)
-	return result, nil
+	writeGrokMediaResponse(c, &http.Response{StatusCode: response.StatusCode, Header: response.Header}, response.Body, s.responseHeaderFilter)
+	return response.Result, nil
 }
