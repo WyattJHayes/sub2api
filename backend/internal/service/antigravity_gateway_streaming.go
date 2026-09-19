@@ -202,16 +202,28 @@ func (s *AntigravityGatewayService) handleGeminiStreamingResponse(c *gin.Context
 	if keepaliveInterval > 0 && downstreamRejectsSSEComments(c) {
 		keepaliveInterval = 0
 	}
-	var keepaliveTicker *time.Ticker
+	var keepaliveTimer *time.Timer
 	if keepaliveInterval > 0 {
-		keepaliveTicker = time.NewTicker(keepaliveInterval)
-		defer keepaliveTicker.Stop()
+		keepaliveTimer = time.NewTimer(keepaliveInterval)
+		defer keepaliveTimer.Stop()
 	}
 	var keepaliveCh <-chan time.Time
-	if keepaliveTicker != nil {
-		keepaliveCh = keepaliveTicker.C
+	if keepaliveTimer != nil {
+		keepaliveCh = keepaliveTimer.C
 	}
 	lastDataAt := time.Now()
+	resetKeepaliveTimer := func() {
+		if keepaliveTimer == nil {
+			return
+		}
+		if !keepaliveTimer.Stop() {
+			select {
+			case <-keepaliveTimer.C:
+			default:
+			}
+		}
+		keepaliveTimer.Reset(keepaliveInterval)
+	}
 
 	cw := newAntigravityClientWriter(c.Writer, flusher, "antigravity gemini")
 
@@ -246,6 +258,7 @@ func (s *AntigravityGatewayService) handleGeminiStreamingResponse(c *gin.Context
 			}
 
 			lastDataAt = time.Now()
+			resetKeepaliveTimer()
 
 			line := ev.line
 			s.observeAntigravityGeminiSSELine(c, line)
@@ -318,16 +331,21 @@ func (s *AntigravityGatewayService) handleGeminiStreamingResponse(c *gin.Context
 
 		case <-keepaliveCh:
 			if cw.Disconnected() {
+				resetKeepaliveTimer()
 				continue
 			}
 			if time.Since(lastDataAt) < keepaliveInterval {
+				resetKeepaliveTimer()
 				continue
 			}
 			// SSE ping/keepalive：保持连接活跃防止 Cloudflare Tunnel 等代理断开
 			if !cw.Fprintf(":\n\n") {
 				logger.LegacyPrintf("service.antigravity_gateway", "Client disconnected during keepalive ping (antigravity gemini), continuing to drain upstream for billing")
+				resetKeepaliveTimer()
 				continue
 			}
+			lastDataAt = time.Now()
+			resetKeepaliveTimer()
 		}
 	}
 }
