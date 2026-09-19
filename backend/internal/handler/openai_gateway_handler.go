@@ -43,7 +43,7 @@ type OpenAIGatewayHandler struct {
 	securityAuditCoordinator   *securityaudit.Coordinator
 	grokMediaEligibilityProber grokMediaEligibilityProber
 	seedanceTasks              service.AsyncVideoBillingTaskRepository
-	seedanceSettlement         *service.SeedanceTaskSettlementService
+	seedanceSettlement         seedanceSettlementObserver
 	opsService                 *service.OpsService
 	concurrencyHelper          *ConcurrencyHelper
 	imageLimiter               *imageConcurrencyLimiter

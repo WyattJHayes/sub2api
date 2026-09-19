@@ -20,12 +20,25 @@ const seedanceTaskPersistenceRetryDelay = 50 * time.Millisecond
 
 var errSeedanceTaskPersistence = errors.New("seedance task persistence failed")
 
+type seedanceSettlementObserver interface {
+	ObserveOwned(
+		context.Context,
+		service.SeedanceTaskOwner,
+		string,
+		*service.SeedanceUpstreamResponse,
+		time.Time,
+	) service.SeedanceSettlementResult
+}
+
 func (h *OpenAIGatewayHandler) SetSeedanceDurableBilling(
 	tasks service.AsyncVideoBillingTaskRepository,
 	settlement *service.SeedanceTaskSettlementService,
 ) {
 	h.seedanceTasks = tasks
-	h.seedanceSettlement = settlement
+	h.seedanceSettlement = nil
+	if settlement != nil {
+		h.seedanceSettlement = settlement
+	}
 }
 
 // SeedanceTasks exposes Ark's native asynchronous video task protocol.
@@ -190,6 +203,32 @@ func (h *OpenAIGatewayHandler) writeSeedanceResponse(c *gin.Context, response *s
 		contentType = "application/json"
 	}
 	c.Data(response.StatusCode, contentType, response.Body)
+}
+
+func (h *OpenAIGatewayHandler) forwardSeedanceStatusObserved(
+	ctx context.Context,
+	c *gin.Context,
+	account *service.Account,
+	taskID string,
+) (*service.OpenAIForwardResult, *service.SeedanceUpstreamResponse, error) {
+	upstreamStarted := time.Now()
+	response, err := h.gatewayService.GetSeedanceTask(ctx, account, taskID)
+	service.SetOpsLatencyMs(c, service.OpsUpstreamLatencyMsKey, time.Since(upstreamStarted).Milliseconds())
+	if err != nil {
+		var upstreamErr *service.SeedanceUpstreamError
+		if errors.As(err, &upstreamErr) && upstreamErr.SafeCode == "response_too_large" {
+			service.SetOpsUpstreamError(c, http.StatusBadGateway, "upstream response too large", "")
+			h.errorResponse(c, http.StatusBadGateway, "upstream_error", "Upstream response too large")
+		} else if response != nil && response.StatusCode >= http.StatusMultipleChoices {
+			h.writeSeedanceResponse(c, response)
+		}
+		return nil, response, err
+	}
+	if response == nil || response.Result == nil {
+		return nil, response, errors.New("seedance status response is incomplete")
+	}
+	h.writeSeedanceResponse(c, response)
+	return response.Result, response, nil
 }
 
 func seedanceResponseHeaderFilter(cfg *config.Config) *responseheaders.CompiledHeaderFilter {

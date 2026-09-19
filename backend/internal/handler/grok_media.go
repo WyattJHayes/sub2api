@@ -81,7 +81,8 @@ func (h *OpenAIGatewayHandler) handleGrokMedia(c *gin.Context, endpoint service.
 		zap.Any("group_id", apiKey.GroupID),
 		zap.String("endpoint", string(endpoint)),
 	)
-	if endpoint == service.SeedanceEndpointCreate && (h.seedanceTasks == nil || h.seedanceSettlement == nil) {
+	if (endpoint == service.SeedanceEndpointCreate || endpoint == service.SeedanceEndpointStatus) &&
+		(h.seedanceTasks == nil || h.seedanceSettlement == nil) {
 		h.errorResponse(c, http.StatusServiceUnavailable, "api_error", "Seedance task tracking is temporarily unavailable")
 		return
 	}
@@ -183,13 +184,63 @@ func (h *OpenAIGatewayHandler) handleGrokMedia(c *gin.Context, endpoint service.
 	}
 	sessionHash := h.gatewayService.GenerateExplicitSessionHash(c, sessionSeed)
 	boundLookupAccountID := int64(0)
+	var durableSeedanceTask *service.AsyncVideoBillingTask
+	legacySeedanceFallback := false
 	if endpoint.IsVideoLookupRequest() {
 		sessionHash = service.GrokMediaVideoRequestSessionHash(requestID, subject.UserID, apiKey.ID)
-		boundLookupAccountID, err = h.gatewayService.ResolveGrokMediaVideoRequestAccount(
-			c.Request.Context(), apiKey.GroupID, requestID, subject.UserID, apiKey.ID,
-		)
-		if err != nil || boundLookupAccountID <= 0 {
-			reqLog.Info("grok_media.video_lookup_owner_binding_missing", zap.Error(err))
+		if endpoint == service.SeedanceEndpointStatus {
+			upstreamTaskID := strings.TrimPrefix(strings.TrimSpace(requestID), "seedance:")
+			durableSeedanceTask, err = h.seedanceTasks.GetOwned(
+				c.Request.Context(),
+				service.AsyncVideoBillingProviderSeedance,
+				upstreamTaskID,
+				subject.UserID,
+				apiKey.ID,
+			)
+			if err == nil && durableSeedanceTask != nil {
+				if durableSeedanceTask.Provider != service.AsyncVideoBillingProviderSeedance ||
+					strings.TrimSpace(durableSeedanceTask.UpstreamTaskID) != upstreamTaskID ||
+					durableSeedanceTask.UserID != subject.UserID ||
+					durableSeedanceTask.APIKeyID != apiKey.ID || durableSeedanceTask.AccountID <= 0 {
+					reqLog.Warn("seedance_task_owner_mismatch",
+						zap.Int64("task_id", durableSeedanceTask.ID),
+						zap.Int64("task_user_id", durableSeedanceTask.UserID),
+						zap.Int64("task_api_key_id", durableSeedanceTask.APIKeyID),
+						zap.Int64("request_user_id", subject.UserID),
+						zap.Int64("request_api_key_id", apiKey.ID),
+					)
+					h.errorResponse(c, http.StatusNotFound, "not_found_error", "Video request not found")
+					return
+				}
+				boundLookupAccountID = durableSeedanceTask.AccountID
+			} else if err == nil || errors.Is(err, service.ErrAsyncVideoBillingTaskNotFound) {
+				durableSeedanceTask = nil
+				boundLookupAccountID, err = h.gatewayService.ResolveGrokMediaVideoRequestAccount(
+					c.Request.Context(), apiKey.GroupID, requestID, subject.UserID, apiKey.ID,
+				)
+				if err == nil && boundLookupAccountID > 0 {
+					legacySeedanceFallback = true
+					reqLog.Warn("seedance_legacy_redis_fallback",
+						zap.Int64("user_id", subject.UserID),
+						zap.Int64("api_key_id", apiKey.ID),
+						zap.Int64("account_id", boundLookupAccountID),
+					)
+				}
+			} else {
+				reqLog.Warn("seedance_task_owner_lookup_failed",
+					zap.Int64("user_id", subject.UserID),
+					zap.Int64("api_key_id", apiKey.ID),
+				)
+				h.errorResponse(c, http.StatusServiceUnavailable, "api_error", "Seedance task tracking is temporarily unavailable")
+				return
+			}
+		} else {
+			boundLookupAccountID, err = h.gatewayService.ResolveGrokMediaVideoRequestAccount(
+				c.Request.Context(), apiKey.GroupID, requestID, subject.UserID, apiKey.ID,
+			)
+		}
+		if boundLookupAccountID <= 0 {
+			reqLog.Info("grok_media.video_lookup_owner_binding_missing")
 			h.errorResponse(c, http.StatusNotFound, "not_found_error", "Video request not found")
 			return
 		}
@@ -375,6 +426,7 @@ func (h *OpenAIGatewayHandler) handleGrokMedia(c *gin.Context, endpoint service.
 		service.SetOpsLatencyMs(c, service.OpsRoutingLatencyMsKey, time.Since(routingStart).Milliseconds())
 		forwardStart := time.Now()
 		writerSizeBeforeForward := c.Writer.Size()
+		var seedanceObserved *service.SeedanceUpstreamResponse
 		result, err := func() (*service.OpenAIForwardResult, error) {
 			defer releaseAccount()
 			if endpoint == service.SeedanceEndpointCreate {
@@ -390,6 +442,11 @@ func (h *OpenAIGatewayHandler) handleGrokMedia(c *gin.Context, endpoint service.
 					requestModel,
 					body,
 				)
+			}
+			if endpoint == service.SeedanceEndpointStatus {
+				var result *service.OpenAIForwardResult
+				result, seedanceObserved, err = h.forwardSeedanceStatusObserved(requestCtx, c, account, requestID)
+				return result, err
 			}
 			if endpoint.IsSeedance() {
 				return h.gatewayService.ForwardSeedance(requestCtx, c, account, endpoint, requestID, body)
@@ -530,8 +587,26 @@ func (h *OpenAIGatewayHandler) handleGrokMedia(c *gin.Context, endpoint service.
 		// Status poll OR content download can observe official done+video.url.
 		// Both paths share the same claim key so the customer is charged once.
 		if endpoint == service.SeedanceEndpointStatus {
-			if billResult := prepareSeedanceCompletionBilling(requestCtx, h, apiKey, subject, requestID, result); billResult != nil {
-				recordGrokMediaUsage(c, h, reqLog, apiKey, subject, subscription, account, billResult, billResult.Model, body, requestID)
+			if durableSeedanceTask != nil {
+				settlement := h.seedanceSettlement.ObserveOwned(
+					requestCtx,
+					service.SeedanceTaskOwner{UserID: subject.UserID, APIKeyID: apiKey.ID},
+					strings.TrimPrefix(strings.TrimSpace(requestID), "seedance:"),
+					seedanceObserved,
+					time.Now(),
+				)
+				if settlement.Err != nil && !settlement.Fenced {
+					reqLog.Warn("seedance_status_settlement_deferred",
+						zap.Int64("task_id", durableSeedanceTask.ID),
+						zap.Int64("user_id", subject.UserID),
+						zap.Int64("api_key_id", apiKey.ID),
+						zap.String("error_code", settlement.ErrorCode),
+					)
+				}
+			} else if legacySeedanceFallback {
+				if billResult := prepareSeedanceCompletionBilling(requestCtx, h, apiKey, subject, requestID, result); billResult != nil {
+					recordGrokMediaUsage(c, h, reqLog, apiKey, subject, subscription, account, billResult, billResult.Model, body, requestID)
+				}
 			}
 		} else if endpoint == service.GrokMediaEndpointVideoStatus || endpoint == service.GrokMediaEndpointVideoContent {
 			taskID := strings.TrimSpace(requestID)
