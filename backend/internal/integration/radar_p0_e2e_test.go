@@ -226,7 +226,7 @@ func newRadarP0Fixture(
 		nil,
 		cfg,
 	)
-	channelService := service.NewChannelService(channelRepo, groupRepo, apiKeyService, nil)
+	channelService := service.NewChannelService(channelRepo, groupRepo, apiKeyService, nil, nil)
 	concurrencyService := service.NewConcurrencyService(nil)
 	billingCacheService := service.NewBillingCacheService(
 		nil,

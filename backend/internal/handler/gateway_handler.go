@@ -939,6 +939,12 @@ func (h *GatewayHandler) Messages(c *gin.Context) {
 			}
 			attemptBody := attemptParsedReq.Body.Bytes()
 
+			// Record the finalized transport attempt only after the selected account
+			// and channel mapping are fixed, and immediately before the upstream call.
+			// This keeps Radar evidence aligned with the model actually present in the
+			// request body while excluding local validation and profit-veto failures.
+			recordEvaluationRouteAttempt(c.Request.Context(), h.cfg, account, channelMapping.ChannelID, attemptParsedReq.Model)
+
 			// 转发请求 - 根据账号平台分流
 			c.Set("parsed_request", attemptParsedReq)
 			var result *service.ForwardResult
