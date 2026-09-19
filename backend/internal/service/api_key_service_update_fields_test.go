@@ -30,6 +30,10 @@ func (s *updateFieldsAPIKeyRepoStub) GetByID(context.Context, int64) (*APIKey, e
 	return &clone, nil
 }
 
+func (s *updateFieldsAPIKeyRepoStub) GetByIDIncludeDeleted(ctx context.Context, id int64) (*APIKey, error) {
+	return s.GetByID(ctx, id)
+}
+
 func (s *updateFieldsAPIKeyRepoStub) Update(_ context.Context, _ *APIKey, fields APIKeyUpdateFields) error {
 	s.updateFields = append(s.updateFields, fields)
 	return nil

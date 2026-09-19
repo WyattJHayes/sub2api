@@ -31,6 +31,10 @@ func (s *authRepoStub) GetByID(ctx context.Context, id int64) (*APIKey, error) {
 	panic("unexpected GetByID call")
 }
 
+func (s *authRepoStub) GetByIDIncludeDeleted(ctx context.Context, id int64) (*APIKey, error) {
+	panic("unexpected GetByIDIncludeDeleted call")
+}
+
 func (s *authRepoStub) GetKeyAndOwnerID(ctx context.Context, id int64) (string, int64, error) {
 	panic("unexpected GetKeyAndOwnerID call")
 }

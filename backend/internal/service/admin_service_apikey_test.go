@@ -144,6 +144,10 @@ func (s *apiKeyRepoStubForGroupUpdate) GetByID(_ context.Context, _ int64) (*API
 	clone := *s.key
 	return &clone, nil
 }
+
+func (s *apiKeyRepoStubForGroupUpdate) GetByIDIncludeDeleted(ctx context.Context, id int64) (*APIKey, error) {
+	return s.GetByID(ctx, id)
+}
 func (s *apiKeyRepoStubForGroupUpdate) Update(_ context.Context, key *APIKey, _ APIKeyUpdateFields) error {
 	if s.updateErr != nil {
 		return s.updateErr
