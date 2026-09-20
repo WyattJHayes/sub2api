@@ -186,6 +186,7 @@ func (h *OpenAIGatewayHandler) handleGrokMedia(c *gin.Context, endpoint service.
 	boundLookupAccountID := int64(0)
 	var durableSeedanceTask *service.AsyncVideoBillingTask
 	legacySeedanceFallback := false
+	lookupGroupID := apiKey.GroupID
 	if endpoint.IsVideoLookupRequest() {
 		sessionHash = service.GrokMediaVideoRequestSessionHash(requestID, subject.UserID, apiKey.ID)
 		if endpoint == service.SeedanceEndpointStatus || endpoint == service.SeedanceEndpointDelete {
@@ -213,6 +214,9 @@ func (h *OpenAIGatewayHandler) handleGrokMedia(c *gin.Context, endpoint service.
 					return
 				}
 				boundLookupAccountID = durableSeedanceTask.AccountID
+				if durableSeedanceTask.GroupID != nil {
+					lookupGroupID = durableSeedanceTask.GroupID
+				}
 			} else if endpoint == service.SeedanceEndpointStatus && (err == nil || errors.Is(err, service.ErrAsyncVideoBillingTaskNotFound)) {
 				durableSeedanceTask = nil
 				boundLookupAccountID, err = h.gatewayService.ResolveGrokMediaVideoRequestAccount(
@@ -288,7 +292,7 @@ func (h *OpenAIGatewayHandler) handleGrokMedia(c *gin.Context, endpoint service.
 		var scheduleDecision service.OpenAIAccountScheduleDecision
 		if boundLookupAccountID > 0 {
 			selection, scheduleDecision, err = h.gatewayService.SelectMediaVideoRequestAccount(
-				requestCtx, apiKey.GroupID, sessionHash, boundLookupAccountID, routingModel, platform,
+				requestCtx, lookupGroupID, sessionHash, boundLookupAccountID, routingModel, platform,
 			)
 		} else {
 			selection, scheduleDecision, err = h.gatewayService.SelectAccountWithSchedulerForCapability(
@@ -413,7 +417,7 @@ func (h *OpenAIGatewayHandler) handleGrokMedia(c *gin.Context, endpoint service.
 			admissionSessionHash = ""
 		}
 		var slotResult openAISlotAcquireResult
-		accountReleaseFunc, slotResult = h.acquireResponsesAccountSlot(c, apiKey.GroupID, admissionSessionHash, selection, false, &streamStarted, reqLog)
+		accountReleaseFunc, slotResult = h.acquireResponsesAccountSlot(c, lookupGroupID, admissionSessionHash, selection, false, &streamStarted, reqLog)
 		if slotResult == openAISlotAcquireProfitVetoed {
 			// 媒体路径已显式豁免利润门（suppress 标记），此分支仅防御性兜底，
 			// 同样受否决上限约束。

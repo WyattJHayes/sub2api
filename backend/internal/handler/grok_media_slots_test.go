@@ -174,6 +174,14 @@ type grokMediaSlotRepo struct {
 	mismatch bool
 }
 
+type grokMediaSlotUserRepo struct {
+	service.UserRepository
+}
+
+func (grokMediaSlotUserRepo) GetByID(_ context.Context, id int64) (*service.User, error) {
+	return &service.User{ID: id, Balance: 100}, nil
+}
+
 func (r grokMediaSlotRepo) GetByID(ctx context.Context, id int64) (*service.Account, error) {
 	if r.mismatch {
 		return r.openAIImagesFailoverAccountRepo.GetByID(ctx, 2)
@@ -199,6 +207,10 @@ func (p grokMediaSlotProber) ProbeMediaEligibility(ctx context.Context, id int64
 }
 
 func newGrokMediaSlotHandler(t *testing.T, oauth, mismatch bool, platforms ...string) (*OpenAIGatewayHandler, *grokMediaSlotsCache, *grokMediaSlotBindings, *grokMediaSlotUpstream) {
+	return newGrokMediaSlotHandlerWithRunMode(t, config.RunModeSimple, oauth, mismatch, platforms...)
+}
+
+func newGrokMediaSlotHandlerWithRunMode(t *testing.T, runMode string, oauth, mismatch bool, platforms ...string) (*OpenAIGatewayHandler, *grokMediaSlotsCache, *grokMediaSlotBindings, *grokMediaSlotUpstream) {
 	t.Helper()
 	gin.SetMode(gin.TestMode)
 	accounts := make([]service.Account, 3)
@@ -224,7 +236,7 @@ func newGrokMediaSlotHandler(t *testing.T, oauth, mismatch bool, platforms ...st
 		return &http.Response{StatusCode: 200, Header: http.Header{"Content-Type": []string{"application/json"}},
 			Body: io.NopCloser(strings.NewReader(`{"request_id":"task","status":"pending"}`))}, nil
 	}}
-	cfg := &config.Config{RunMode: config.RunModeSimple}
+	cfg := &config.Config{RunMode: runMode}
 	cfg.Gateway.Scheduling.StickySessionWaitTimeout = 20 * time.Millisecond
 	cfg.Gateway.Scheduling.StickySessionMaxWaiting = 3
 	cfg.Gateway.OpenAIScheduler.StickyEscapeEnabled = true
@@ -238,7 +250,11 @@ func newGrokMediaSlotHandler(t *testing.T, oauth, mismatch bool, platforms ...st
 	groupID := int64(24)
 	require.NoError(t, gateway.BindGrokMediaVideoRequestAccount(context.Background(), &groupID, "task", 10, 20, 1))
 	bindings.writes = 0
-	billing := service.NewBillingCacheService(nil, nil, nil, nil, nil, nil, cfg, nil)
+	var userRepo service.UserRepository
+	if runMode == config.RunModeStandard {
+		userRepo = grokMediaSlotUserRepo{}
+	}
+	billing := service.NewBillingCacheService(nil, userRepo, nil, nil, nil, nil, cfg, nil)
 	t.Cleanup(billing.Stop)
 	handler := NewOpenAIGatewayHandler(gateway, concurrency, billing, service.NewAPIKeyService(nil, nil, nil, nil, nil, nil, cfg), nil, nil, nil, nil, cfg)
 	return handler, slots, bindings, upstream

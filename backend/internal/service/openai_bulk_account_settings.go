@@ -75,7 +75,7 @@ func normalizeBulkOpenAIEndpointCapabilities(raw any) (any, bool, error) {
 		return nil, true, nil
 	}
 
-	values := make([]string, 0, 2)
+	values := make([]string, 0, 3)
 	switch typed := raw.(type) {
 	case []any:
 		for _, item := range typed {
@@ -91,10 +91,10 @@ func normalizeBulkOpenAIEndpointCapabilities(raw any) (any, bool, error) {
 		return nil, false, invalidBulkOpenAIEndpointCapabilities()
 	}
 
-	selected := make(map[string]bool, 2)
+	selected := make(map[string]bool, 3)
 	for _, value := range values {
 		switch OpenAIEndpointCapability(value) {
-		case OpenAIEndpointCapabilityChatCompletions, OpenAIEndpointCapabilityEmbeddings:
+		case OpenAIEndpointCapabilityChatCompletions, OpenAIEndpointCapabilityEmbeddings, OpenAIEndpointCapabilitySeedance:
 			selected[value] = true
 		default:
 			return nil, false, invalidBulkOpenAIEndpointCapabilities()
@@ -105,19 +105,28 @@ func normalizeBulkOpenAIEndpointCapabilities(raw any) (any, bool, error) {
 	}
 
 	includeChat := selected[string(OpenAIEndpointCapabilityChatCompletions)]
-	if includeChat && selected[string(OpenAIEndpointCapabilityEmbeddings)] {
+	includeEmbeddings := selected[string(OpenAIEndpointCapabilityEmbeddings)]
+	includeSeedance := selected[string(OpenAIEndpointCapabilitySeedance)]
+	if includeChat && includeEmbeddings && !includeSeedance {
 		return nil, true, nil
 	}
+	canonical := make([]string, 0, len(selected))
 	if includeChat {
-		return []string{string(OpenAIEndpointCapabilityChatCompletions)}, true, nil
+		canonical = append(canonical, string(OpenAIEndpointCapabilityChatCompletions))
 	}
-	return []string{string(OpenAIEndpointCapabilityEmbeddings)}, false, nil
+	if includeEmbeddings {
+		canonical = append(canonical, string(OpenAIEndpointCapabilityEmbeddings))
+	}
+	if includeSeedance {
+		canonical = append(canonical, string(OpenAIEndpointCapabilitySeedance))
+	}
+	return canonical, includeChat, nil
 }
 
 func invalidBulkOpenAIEndpointCapabilities() error {
 	return infraerrors.BadRequest(
 		"OPENAI_ENDPOINT_CAPABILITIES_INVALID",
-		"openai_capabilities must contain chat_completions, embeddings, or both",
+		"openai_capabilities must contain chat_completions, embeddings, seedance, or a supported combination",
 	)
 }
 

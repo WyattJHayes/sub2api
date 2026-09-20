@@ -387,6 +387,39 @@ func TestAdminServiceBulkUpdateAccounts_EmbeddingsOnlyResetsResponsesMode(t *tes
 	require.Nil(t, repo.lastBulkUpdate.Extra["openai_responses_mode"])
 }
 
+func TestAdminServiceBulkUpdateAccounts_AcceptsSeedanceCapabilities(t *testing.T) {
+	tests := []struct {
+		name string
+		in   []string
+		want []string
+	}{
+		{name: "seedance only", in: []string{"seedance"}, want: []string{"seedance"}},
+		{name: "chat and seedance", in: []string{"seedance", "chat_completions"}, want: []string{"chat_completions", "seedance"}},
+		{name: "embeddings and seedance", in: []string{"seedance", "embeddings"}, want: []string{"embeddings", "seedance"}},
+		{name: "all capabilities", in: []string{"seedance", "embeddings", "chat_completions"}, want: []string{"chat_completions", "embeddings", "seedance"}},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			repo := &accountRepoStubForBulkUpdate{getByIDsAccounts: []*Account{{
+				ID: 1, Platform: PlatformOpenAI, Type: AccountTypeAPIKey,
+			}}}
+			svc := &adminServiceImpl{accountRepo: repo}
+
+			result, err := svc.BulkUpdateAccounts(context.Background(), &BulkUpdateAccountsInput{
+				AccountIDs: []int64{1},
+				Credentials: map[string]any{
+					openAIEndpointCapabilitiesCredentialKey: append([]string(nil), tt.in...),
+				},
+			})
+
+			require.NoError(t, err)
+			require.Equal(t, 1, result.Success)
+			require.Equal(t, tt.want, repo.lastBulkUpdate.Credentials[openAIEndpointCapabilitiesCredentialKey])
+		})
+	}
+}
+
 func TestAdminServiceBulkUpdateAccounts_RejectsInvalidOpenAISettingValuesBeforeWrite(t *testing.T) {
 	tests := []struct {
 		name        string

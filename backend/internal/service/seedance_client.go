@@ -221,9 +221,9 @@ func safeSeedanceErrorCode(value string) string {
 		}
 		if (char >= 'a' && char <= 'z') || (char >= 'A' && char <= 'Z') ||
 			(char >= '0' && char <= '9') || char == '_' || char == '-' || char == '.' {
-			builder.WriteByte(byte(char))
+			_ = builder.WriteByte(byte(char))
 		} else {
-			builder.WriteByte('_')
+			_ = builder.WriteByte('_')
 		}
 	}
 	return builder.String()

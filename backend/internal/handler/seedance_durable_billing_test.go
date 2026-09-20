@@ -15,6 +15,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Wei-Shaw/sub2api/internal/config"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/logger"
 	middleware "github.com/Wei-Shaw/sub2api/internal/server/middleware"
 	"github.com/Wei-Shaw/sub2api/internal/service"
@@ -546,6 +547,72 @@ func TestSeedanceGetSettlementRetryKeepsUpstreamResponse(t *testing.T) {
 	require.JSONEq(t, `{"id":"task","status":"succeeded","model":"doubao-seedance","usage":{"completion_tokens":20}}`, recorder.Body.String())
 	require.Equal(t, 1, upstream.calls)
 	require.Equal(t, int32(1), atomic.LoadInt32(&settlement.calls))
+}
+
+func TestSeedanceDurableLookupUsesPersistedGroupAfterAPIKeyMoves(t *testing.T) {
+	groupID := int64(24)
+	repo := &seedanceDurableTaskRepoStub{owned: &service.AsyncVideoBillingTask{
+		ID: 4, Provider: service.AsyncVideoBillingProviderSeedance, UpstreamTaskID: "task",
+		TaskKey: "seedance:task", UserID: 10, APIKeyID: 20, AccountID: 1,
+		GroupID: &groupID, Status: service.AsyncVideoBillingStatusPending,
+	}}
+	settlement := &seedanceSettlementObserverStub{}
+	h, _, _, upstream := newGrokMediaSlotHandlerWithRunMode(t, config.RunModeStandard, false, false, service.PlatformOpenAI)
+	h.seedanceTasks = repo
+	h.seedanceSettlement = settlement
+	upstream.call = func(req *http.Request, accountID int64) (*http.Response, error) {
+		require.Equal(t, http.MethodGet, req.Method)
+		require.Equal(t, int64(1), accountID)
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Header:     http.Header{"Content-Type": []string{"application/json"}},
+			Body:       io.NopCloser(strings.NewReader(`{"id":"task","status":"succeeded","model":"doubao-seedance","usage":{"completion_tokens":20}}`)),
+		}, nil
+	}
+	c, recorder := grokMediaSlotContext(context.Background(), false)
+	c.Request = httptest.NewRequest(http.MethodGet, "/api/v3/contents/generations/tasks/task", nil)
+	c.Params = gin.Params{{Key: "task_id", Value: "task"}}
+	key, ok := middleware.GetAPIKeyFromContext(c)
+	require.True(t, ok)
+	key.Group.Platform = service.PlatformOpenAI
+	movedGroupID := int64(99)
+	key.GroupID = &movedGroupID
+	key.Group = &service.Group{ID: movedGroupID, Platform: service.PlatformOpenAI, AllowImageGeneration: true}
+
+	h.SeedanceTasks(c)
+
+	require.Equal(t, http.StatusOK, recorder.Code, recorder.Body.String())
+	require.Equal(t, 1, upstream.calls)
+}
+
+func TestSeedanceCreateUsesConfiguredPollDeadline(t *testing.T) {
+	repo := &seedanceDurableTaskRepoStub{}
+	h, c, _, _ := newSeedanceDurableCreateRequest(t, repo)
+	h.cfg.Gateway.SeedanceReconciler.PollDeadlineHours = 6
+	key, ok := middleware.GetAPIKeyFromContext(c)
+	require.True(t, ok)
+	subject, ok := middleware.GetAuthSubjectFromContext(c)
+	require.True(t, ok)
+	requestStart := time.Date(2026, time.September, 20, 1, 2, 3, 0, time.UTC)
+
+	err := h.persistSeedanceCreate(
+		context.Background(),
+		c,
+		zap.NewNop(),
+		&service.Account{ID: 1, Platform: service.PlatformOpenAI},
+		key,
+		subject,
+		nil,
+		requestStart,
+		"doubao-seedance",
+		[]byte(`{"model":"doubao-seedance","content":[{"type":"text","text":"waves"}]}`),
+		&service.OpenAIForwardResult{ResponseID: "seedance:task-durable"},
+	)
+
+	require.NoError(t, err)
+	creates, _ := repo.snapshot()
+	require.Len(t, creates, 1)
+	require.Equal(t, requestStart.Add(6*time.Hour), creates[0].PollDeadlineAt)
 }
 
 func TestSeedanceGetOwnerMismatchDoesNotCallUpstream(t *testing.T) {

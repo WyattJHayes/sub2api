@@ -200,19 +200,22 @@ func (r *SeedanceReconcilerRuntime) ProcessDue(ctx context.Context) (result Seed
 		failures = append(failures, err)
 		resultMu.Unlock()
 	}
+taskLoop:
 	for _, task := range tasks {
 		if err := ctx.Err(); err != nil {
 			appendFailure(err)
-			break
+			break taskLoop
 		}
 		select {
 		case semaphore <- struct{}{}:
 		case <-ctx.Done():
 			appendFailure(ctx.Err())
-			break
+			break taskLoop
 		}
 		if ctx.Err() != nil {
-			break
+			<-semaphore
+			appendFailure(ctx.Err())
+			break taskLoop
 		}
 		wg.Add(1)
 		go func(task AsyncVideoBillingTask) {

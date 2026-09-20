@@ -153,6 +153,10 @@ func (h *OpenAIGatewayHandler) persistSeedanceCreate(
 		subscriptionID = &value
 	}
 	now := time.Now()
+	pollDeadlineHours := 24
+	if h.cfg != nil && h.cfg.Gateway.SeedanceReconciler.PollDeadlineHours >= 1 && h.cfg.Gateway.SeedanceReconciler.PollDeadlineHours <= 168 {
+		pollDeadlineHours = h.cfg.Gateway.SeedanceReconciler.PollDeadlineHours
+	}
 	input := service.CreateAsyncVideoBillingTaskInput{
 		Provider:            service.AsyncVideoBillingProviderSeedance,
 		UpstreamTaskID:      strings.TrimPrefix(result.ResponseID, "seedance:"),
@@ -170,7 +174,7 @@ func (h *OpenAIGatewayHandler) persistSeedanceCreate(
 		SubscriptionBilling: subscription != nil,
 		PricingAt:           requestStart,
 		NextPollAt:          now.Add(5 * time.Second),
-		PollDeadlineAt:      requestStart.Add(24 * time.Hour),
+		PollDeadlineAt:      requestStart.Add(time.Duration(pollDeadlineHours) * time.Hour),
 		RequestPayloadHash:  service.HashUsageRequestPayload(body),
 		InboundEndpoint:     GetInboundEndpoint(c),
 		UpstreamEndpoint:    firstNonEmptyString(result.UpstreamEndpoint, GetUpstreamEndpoint(c, account.Platform)),
