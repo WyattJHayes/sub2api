@@ -72,6 +72,31 @@ describe('radar admin API', () => {
     expect(apiClient.post).toHaveBeenCalledWith('/admin/radar/plans', payload)
   })
 
+  it('creates a cron plan with frozen comparison references', async () => {
+    const payload = {
+      name: 'quality-v6-4models-daily',
+      dataset_version_id: 'dataset-1',
+      gateway_api_key_id: 221,
+      trigger_type: 'cron',
+      cron_expression: '0 9 * * *',
+      baseline_ref: { release: 'v0.2.7-sol' },
+      candidate_ref: { release: 'v0.2.7-4models' },
+      model_matrix: [{
+        route: 'gpt-5.6-luna',
+        baseline: { route: 'gpt-5.6-sol', temperature: 0, max_output_tokens: 64 },
+        candidate: { route: 'gpt-5.6-luna', temperature: 0, max_output_tokens: 64 }
+      }],
+      max_run_cost: '2',
+      daily_cost_limit: '2',
+      max_concurrency: 1
+    }
+    vi.mocked(apiClient.post).mockResolvedValueOnce({ data: { id: 'plan-cron', ...payload } })
+
+    await radarAdminAPI.createPlan(payload)
+
+    expect(apiClient.post).toHaveBeenCalledWith('/admin/radar/plans', payload)
+  })
+
   it('starts a paired evaluation run from a plan', async () => {
     const payload = {
       plan_id: 'plan-1',

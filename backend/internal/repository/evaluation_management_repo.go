@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/Wei-Shaw/sub2api/internal/service"
 	"github.com/google/uuid"
@@ -137,6 +138,28 @@ func radarCaseRows(input service.CreateRadarDatasetInput) ([]radarCaseRow, strin
 
 var decimalZero = decimal.Zero
 
+// canonicalPlanReference normalizes a stored comparison reference. Scheduled
+// runs require a non-empty object so the runner never compares an unknown
+// revision; manual plans may omit it and supply references per run.
+func canonicalPlanReference(raw json.RawMessage) ([]byte, error) {
+	trimmed := bytes.TrimSpace(raw)
+	if len(trimmed) == 0 {
+		return nil, errors.New("scheduled evaluation plan requires a baseline and candidate reference")
+	}
+	canonical, err := canonicalRadarJSON(trimmed)
+	if err != nil {
+		return nil, err
+	}
+	var object map[string]any
+	if err := json.Unmarshal(canonical, &object); err != nil {
+		return nil, err
+	}
+	if len(object) == 0 {
+		return nil, errors.New("scheduled evaluation plan requires a non-empty baseline and candidate reference")
+	}
+	return canonical, nil
+}
+
 func (r *radarGovernanceRepository) CreateDataset(ctx context.Context, input service.CreateRadarDatasetInput) (*service.RadarDatasetRecord, error) {
 	if err := r.valid(); err != nil {
 		return nil, err
@@ -227,11 +250,43 @@ func (r *radarGovernanceRepository) CreatePlan(ctx context.Context, input servic
 	if err := r.valid(); err != nil {
 		return nil, err
 	}
+	input.TriggerType = strings.TrimSpace(input.TriggerType)
+	input.CronExpression = strings.TrimSpace(input.CronExpression)
 	if strings.TrimSpace(input.Name) == "" || input.DatasetVersionID == uuid.Nil ||
-		input.GatewayAPIKeyID <= 0 || input.TriggerType != "manual" || input.CreatedBy <= 0 ||
+		input.GatewayAPIKeyID <= 0 || input.CreatedBy <= 0 ||
 		input.MaxRunCost.LessThanOrEqual(decimalZero) || input.DailyCostLimit.LessThanOrEqual(decimalZero) ||
 		input.MaxConcurrency < 1 || input.MaxConcurrency > 1000 {
 		return nil, errors.New("invalid evaluation plan")
+	}
+	if input.TriggerType != "manual" && input.TriggerType != "cron" {
+		return nil, errors.New("evaluation plan trigger type must be manual or cron")
+	}
+	// A cron plan must be fully self-describing: the stored references are the
+	// only source of truth at run time, and a missing pair skips the plan
+	// instead of comparing unknown revisions.
+	var (
+		nextRunAt     sql.NullTime
+		cronExprSQL   sql.NullString
+		baselineJSON  []byte
+		candidateJSON []byte
+	)
+	if input.TriggerType == "cron" {
+		firstRun, err := service.NextEvaluationPlanRun(input.CronExpression, time.Now())
+		if err != nil {
+			return nil, err
+		}
+		baseline, err := canonicalPlanReference(input.BaselineRef)
+		if err != nil {
+			return nil, fmt.Errorf("canonicalize plan baseline reference: %w", err)
+		}
+		candidate, err := canonicalPlanReference(input.CandidateRef)
+		if err != nil {
+			return nil, fmt.Errorf("canonicalize plan candidate reference: %w", err)
+		}
+		nextRunAt = sql.NullTime{Time: firstRun, Valid: true}
+		cronExprSQL = sql.NullString{String: input.CronExpression, Valid: true}
+		baselineJSON = baseline
+		candidateJSON = candidate
 	}
 	if _, err := evaluationMatrixEntries(input.ModelMatrix); err != nil {
 		return nil, err
@@ -240,12 +295,21 @@ func (r *radarGovernanceRepository) CreatePlan(ctx context.Context, input servic
 		return nil, service.ErrRadarForbidden
 	}
 	record := &service.RadarPlanRecord{ID: uuid.New()}
+	var (
+		scannedCron      string
+		scannedBaseline  sql.NullString
+		scannedCandidate sql.NullString
+		scannedNextRun   sql.NullTime
+		scannedLastRun   sql.NullTime
+	)
 	err := r.db.QueryRowContext(ctx, `
 		INSERT INTO evaluation_plans (
-			id, name, dataset_version_id, gateway_api_key_id, trigger_type, model_matrix,
+			id, name, dataset_version_id, gateway_api_key_id, trigger_type, cron_expression,
+			baseline_ref, candidate_ref, next_run_at, model_matrix,
 			max_run_cost, daily_cost_limit, max_concurrency, created_by, tenant_id
 		)
-		SELECT $1, $2, d.id, k.id, $5, $6::jsonb, $7, $8, $9, $10, d.tenant_id
+		SELECT $1, $2, d.id, k.id, $5, NULLIF($6, ''), $7::jsonb, $8::jsonb, $9,
+		       $10::jsonb, $11, $12, $13, $14, d.tenant_id
 		FROM evaluation_dataset_versions d
 		JOIN api_keys k ON k.id = $4
 		JOIN users u ON u.id = k.user_id
@@ -256,21 +320,41 @@ func (r *radarGovernanceRepository) CreatePlan(ctx context.Context, input servic
 		  AND (k.quota = 0 OR k.quota_used < k.quota)
 		  AND u.status = 'active' AND u.deleted_at IS NULL
 		  AND (g.id IS NULL OR (g.status = 'active' AND g.deleted_at IS NULL))
-		  AND d.tenant_id = $10
-		  AND k.user_id = $10
+		  AND d.tenant_id = $14
+		  AND k.user_id = $14
 		RETURNING id, name, dataset_version_id, gateway_api_key_id, trigger_type,
+		          COALESCE(cron_expression, ''), baseline_ref::text, candidate_ref::text,
+		          next_run_at, last_run_at,
 		          model_matrix, max_run_cost, daily_cost_limit, max_concurrency,
 		          enabled, created_by, created_at`, record.ID, strings.TrimSpace(input.Name),
-		input.DatasetVersionID, input.GatewayAPIKeyID, input.TriggerType, string(input.ModelMatrix),
+		input.DatasetVersionID, input.GatewayAPIKeyID, input.TriggerType, cronExprSQL.String,
+		baselineJSON, candidateJSON, nextRunAt, string(input.ModelMatrix),
 		input.MaxRunCost, input.DailyCostLimit, input.MaxConcurrency, input.CreatedBy).Scan(
 		&record.ID, &record.Name, &record.DatasetVersionID, &record.GatewayAPIKeyID,
-		&record.TriggerType, &record.ModelMatrix, &record.MaxRunCost, &record.DailyCostLimit,
+		&record.TriggerType, &scannedCron, &scannedBaseline, &scannedCandidate,
+		&scannedNextRun, &scannedLastRun,
+		&record.ModelMatrix, &record.MaxRunCost, &record.DailyCostLimit,
 		&record.MaxConcurrency, &record.Enabled, &record.CreatedBy, &record.CreatedAt)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, errors.New("published dataset and usable dedicated evaluation API key are required")
 	}
 	if err != nil {
 		return nil, fmt.Errorf("create evaluation plan: %w", err)
+	}
+	record.CronExpression = scannedCron
+	if scannedBaseline.Valid {
+		record.BaselineRef = json.RawMessage(scannedBaseline.String)
+	}
+	if scannedCandidate.Valid {
+		record.CandidateRef = json.RawMessage(scannedCandidate.String)
+	}
+	if scannedNextRun.Valid {
+		next := scannedNextRun.Time
+		record.NextRunAt = &next
+	}
+	if scannedLastRun.Valid {
+		last := scannedLastRun.Time
+		record.LastRunAt = &last
 	}
 	return record, nil
 }

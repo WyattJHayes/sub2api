@@ -8,6 +8,7 @@ import (
 	"github.com/Wei-Shaw/sub2api/internal/config"
 	"github.com/Wei-Shaw/sub2api/internal/handler"
 	"github.com/Wei-Shaw/sub2api/internal/service"
+	"github.com/google/uuid"
 	"github.com/stretchr/testify/require"
 )
 
@@ -34,6 +35,18 @@ type cleanupSeedanceAccountRepoStub struct {
 }
 
 type cleanupSeedanceClientStub struct{}
+
+// evaluationPlanScheduleStoreStub satisfies the schedule store port so the
+// cleanup wiring can construct a real runtime without a database.
+type evaluationPlanScheduleStoreStub struct{}
+
+func (*evaluationPlanScheduleStoreStub) ClaimDueScheduledPlans(context.Context, time.Time, int, time.Duration) ([]service.ScheduledEvaluationPlanClaim, error) {
+	return nil, nil
+}
+
+func (*evaluationPlanScheduleStoreStub) CompleteScheduledPlanClaim(context.Context, uuid.UUID, string, time.Time, time.Time) error {
+	return nil
+}
 
 func (*cleanupSeedanceClientStub) CreateSeedanceTask(context.Context, *service.Account, []byte) (*service.SeedanceUpstreamResponse, error) {
 	return nil, nil
@@ -100,6 +113,8 @@ func TestProvideCleanup_WithMinimalDependencies_NoPanic(t *testing.T) {
 	seedanceRuntime.SetScheduler(seedanceScheduler)
 	seedanceRuntime.Start()
 
+	planScheduleRuntime := service.NewEvaluationPlanScheduleRuntime(&evaluationPlanScheduleStoreStub{}, nil, service.EvaluationPlanScheduleRuntimeOptions{Enabled: true})
+
 	cleanup := provideCleanup(
 		nil, // entClient
 		nil, // redis
@@ -124,6 +139,7 @@ func TestProvideCleanup_WithMinimalDependencies_NoPanic(t *testing.T) {
 		&service.RouteEvidenceTerminalizationRuntime{},
 		outboxRuntime,
 		seedanceRuntime,
+		planScheduleRuntime,
 		&service.EvaluationArtifactCleanupService{},
 		idempotencyCleanupSvc,
 		&service.BatchImageCleanupService{},

@@ -105,6 +105,7 @@ func provideCleanup(
 	terminalizationRuntime *service.RouteEvidenceTerminalizationRuntime,
 	outboxConsumerRuntime *service.EvaluationOutboxConsumerRuntime,
 	seedanceReconciler *service.SeedanceReconcilerRuntime,
+	evaluationPlanSchedule *service.EvaluationPlanScheduleRuntime,
 	artifactCleanup *service.EvaluationArtifactCleanupService,
 	idempotencyCleanup *service.IdempotencyCleanupService,
 	batchImageCleanup *service.BatchImageCleanupService,
@@ -147,6 +148,12 @@ func provideCleanup(
 			{"SeedanceReconcilerRuntime", func() error {
 				if seedanceReconciler != nil {
 					seedanceReconciler.Stop()
+				}
+				return nil
+			}},
+			{"EvaluationPlanScheduleRuntime", func() error {
+				if evaluationPlanSchedule != nil {
+					evaluationPlanSchedule.Stop()
 				}
 				return nil
 			}},

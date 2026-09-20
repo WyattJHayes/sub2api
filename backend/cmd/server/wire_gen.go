@@ -373,6 +373,9 @@ func initializeApplication(buildInfo handler.BuildInfo) (*Application, error) {
 	evaluationOutboxDispatcher := service.NewEvaluationOutboxDispatcher(evaluationOutboxDomainRepository, evaluationOutboxConsumerMode)
 	evaluationOutboxConsumerRuntime := service.ProvideEvaluationOutboxConsumerRuntime(evaluationOutboxRepository, evaluationOutboxDispatcher, timingWheelService, configConfig)
 	seedanceReconcilerRuntime := service.ProvideSeedanceReconcilerRuntime(asyncVideoBillingTaskRepository, seedanceTaskSettlementService, openAIGatewayService, timingWheelService, configConfig)
+	evaluationPlanScheduleStore := repository.NewEvaluationPlanScheduleRepository(db)
+	evaluationRepository := repository.NewEvaluationRepository(db)
+	evaluationPlanScheduleRuntime := service.ProvideEvaluationPlanScheduleRuntime(evaluationPlanScheduleStore, evaluationRepository, configConfig)
 	evaluationArtifactCleanupRepository := repository.NewEvaluationArtifactCleanupRepository(db)
 	artifactObjectDeleter := service.ProvideArtifactObjectDeleter(evaluationArtifactObjectStore)
 	evaluationArtifactCleanupService := service.ProvideEvaluationArtifactCleanupService(evaluationArtifactCleanupRepository, artifactObjectDeleter, timingWheelService, configConfig)
@@ -383,7 +386,7 @@ func initializeApplication(buildInfo handler.BuildInfo) (*Application, error) {
 	channelMonitorRunner := service.ProvideChannelMonitorRunner(channelMonitorService, settingService, channelMonitorQuotaFetcher)
 	channelMonitorV2Aggregator := service.ProvideChannelMonitorV2Aggregator(channelMonitorV2Repository, db, settingService)
 	userPlatformQuotaUsageFlusher := service.ProvideUserPlatformQuotaUsageFlusher(configConfig, billingCache, serviceUserPlatformQuotaRepository, timingWheelService)
-	v := provideCleanup(client, redisClient, opsMetricsCollector, opsAggregationService, opsAlertEvaluatorService, opsCleanupService, opsScheduledReportService, opsSystemLogSink, opsService, opsIngressRejectAggregator, apiKeyService, authCacheInvalidationWorker, schedulerSnapshotService, tokenRefreshService, accountExpiryService, cnProviderBalanceCheckService, openAICodexVersionSyncService, proxyExpiryService, subscriptionExpiryService, usageCleanupService, routeEvidenceTerminalizationRuntime, evaluationOutboxConsumerRuntime, seedanceReconcilerRuntime, evaluationArtifactCleanupService, idempotencyCleanupService, batchImageCleanupService, batchImageWorkerRuntime, pricingService, emailQueueService, billingCacheService, usageRecordWorkerPool, subscriptionService, oAuthService, openAIOAuthService, geminiOAuthService, antigravityOAuthService, grokOAuthService, openAIGatewayService, scheduledTestRunnerService, backupService, paymentOrderExpiryService, channelMonitorRunner, channelMonitorV2Aggregator, userPlatformQuotaUsageFlusher, upstreamBillingProbeService, ollamaCloudUsageService, auditLogService, openAIQuotaAutoResetService, promptService, pluginManager)
+	v := provideCleanup(client, redisClient, opsMetricsCollector, opsAggregationService, opsAlertEvaluatorService, opsCleanupService, opsScheduledReportService, opsSystemLogSink, opsService, opsIngressRejectAggregator, apiKeyService, authCacheInvalidationWorker, schedulerSnapshotService, tokenRefreshService, accountExpiryService, cnProviderBalanceCheckService, openAICodexVersionSyncService, proxyExpiryService, subscriptionExpiryService, usageCleanupService, routeEvidenceTerminalizationRuntime, evaluationOutboxConsumerRuntime, seedanceReconcilerRuntime, evaluationPlanScheduleRuntime, evaluationArtifactCleanupService, idempotencyCleanupService, batchImageCleanupService, batchImageWorkerRuntime, pricingService, emailQueueService, billingCacheService, usageRecordWorkerPool, subscriptionService, oAuthService, openAIOAuthService, geminiOAuthService, antigravityOAuthService, grokOAuthService, openAIGatewayService, scheduledTestRunnerService, backupService, paymentOrderExpiryService, channelMonitorRunner, channelMonitorV2Aggregator, userPlatformQuotaUsageFlusher, upstreamBillingProbeService, ollamaCloudUsageService, auditLogService, openAIQuotaAutoResetService, promptService, pluginManager)
 	application := &Application{
 		Server:        httpServer,
 		PromptAudit:   promptService,
@@ -444,6 +447,7 @@ func provideCleanup(
 	terminalizationRuntime *service.RouteEvidenceTerminalizationRuntime,
 	outboxConsumerRuntime *service.EvaluationOutboxConsumerRuntime,
 	seedanceReconciler *service.SeedanceReconcilerRuntime,
+	evaluationPlanSchedule *service.EvaluationPlanScheduleRuntime,
 	artifactCleanup *service.EvaluationArtifactCleanupService,
 	idempotencyCleanup *service.IdempotencyCleanupService,
 	batchImageCleanup *service.BatchImageCleanupService,
@@ -485,6 +489,12 @@ func provideCleanup(
 			{"SeedanceReconcilerRuntime", func() error {
 				if seedanceReconciler != nil {
 					seedanceReconciler.Stop()
+				}
+				return nil
+			}},
+			{"EvaluationPlanScheduleRuntime", func() error {
+				if evaluationPlanSchedule != nil {
+					evaluationPlanSchedule.Stop()
 				}
 				return nil
 			}},
