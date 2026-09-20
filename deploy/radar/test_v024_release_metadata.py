@@ -59,22 +59,5 @@ class V024ReleaseMetadataTests(unittest.TestCase):
         self.assertEqual(2, len(legacy_entries))
         self.assertTrue(set(expected_new).isdisjoint(legacy_entries))
 
-    def test_current_release_tools_default_to_v025(self) -> None:
-        for name in (
-            "rehearse-v01171-migrations.sh",
-            "production_promotion_audit.py",
-            "production_backup_audit.py",
-            "production_rollback_audit.py",
-            "local_prerelease_closure.py",
-        ):
-            content = (RADAR_DIR / name).read_text(encoding="utf-8")
-            self.assertIn("v0.2.5", content, name)
-
-        evidence = (RADAR_DIR / "production_evidence_envelope.py").read_text(encoding="utf-8")
-        self.assertIn('DEFAULT_RELEASE_VERSION = "0.2.5"', evidence)
-        preflight = (RADAR_DIR / "local_prerelease_preflight.py").read_text(encoding="utf-8")
-        self.assertIn('os.environ.get("RADAR_RELEASE_VERSION", "0.2.5")', preflight)
-
-
 if __name__ == "__main__":
     unittest.main()

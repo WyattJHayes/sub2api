@@ -2361,6 +2361,10 @@ func (r *stubApiKeyRepo) GetByID(ctx context.Context, id int64) (*service.APIKey
 	return &clone, nil
 }
 
+func (r *stubApiKeyRepo) GetByIDIncludeDeleted(ctx context.Context, id int64) (*service.APIKey, error) {
+	return r.GetByID(ctx, id)
+}
+
 func (r *stubApiKeyRepo) GetKeyAndOwnerID(ctx context.Context, id int64) (string, int64, error) {
 	key, ok := r.byID[id]
 	if !ok {

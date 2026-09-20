@@ -120,10 +120,22 @@ func (s *grokMediaSlotsCache) assertReleased(t *testing.T) {
 
 type grokMediaSlotBindings struct {
 	testutil.StubGatewayCache
-	owner  int64
-	writes int
-	key    string
-	billed map[string]bool
+	owner   int64
+	writes  int
+	key     string
+	billed  map[string]bool
+	pending map[string][]byte
+}
+
+func (s *grokMediaSlotBindings) SetGrokVideoPendingBilling(_ context.Context, key string, body []byte, _ time.Duration) error {
+	if s.pending == nil {
+		s.pending = make(map[string][]byte)
+	}
+	s.pending[key] = append([]byte(nil), body...)
+	return nil
+}
+func (s *grokMediaSlotBindings) GetGrokVideoPendingBilling(_ context.Context, key string) ([]byte, error) {
+	return s.pending[key], nil
 }
 
 func (s *grokMediaSlotBindings) GetSessionAccountID(_ context.Context, groupID int64, key string) (int64, error) {
@@ -162,6 +174,14 @@ type grokMediaSlotRepo struct {
 	mismatch bool
 }
 
+type grokMediaSlotUserRepo struct {
+	service.UserRepository
+}
+
+func (grokMediaSlotUserRepo) GetByID(_ context.Context, id int64) (*service.User, error) {
+	return &service.User{ID: id, Balance: 100}, nil
+}
+
 func (r grokMediaSlotRepo) GetByID(ctx context.Context, id int64) (*service.Account, error) {
 	if r.mismatch {
 		return r.openAIImagesFailoverAccountRepo.GetByID(ctx, 2)
@@ -186,7 +206,11 @@ func (p grokMediaSlotProber) ProbeMediaEligibility(ctx context.Context, id int64
 	return p(ctx, id)
 }
 
-func newGrokMediaSlotHandler(t *testing.T, oauth, mismatch bool) (*OpenAIGatewayHandler, *grokMediaSlotsCache, *grokMediaSlotBindings, *grokMediaSlotUpstream) {
+func newGrokMediaSlotHandler(t *testing.T, oauth, mismatch bool, platforms ...string) (*OpenAIGatewayHandler, *grokMediaSlotsCache, *grokMediaSlotBindings, *grokMediaSlotUpstream) {
+	return newGrokMediaSlotHandlerWithRunMode(t, config.RunModeSimple, oauth, mismatch, platforms...)
+}
+
+func newGrokMediaSlotHandlerWithRunMode(t *testing.T, runMode string, oauth, mismatch bool, platforms ...string) (*OpenAIGatewayHandler, *grokMediaSlotsCache, *grokMediaSlotBindings, *grokMediaSlotUpstream) {
 	t.Helper()
 	gin.SetMode(gin.TestMode)
 	accounts := make([]service.Account, 3)
@@ -194,6 +218,11 @@ func newGrokMediaSlotHandler(t *testing.T, oauth, mismatch bool) (*OpenAIGateway
 		accounts[i] = service.Account{ID: int64(i + 1), Platform: service.PlatformGrok, Type: service.AccountTypeAPIKey,
 			Status: service.StatusActive, Schedulable: true, Concurrency: 50, Priority: i,
 			GroupIDs: []int64{24}, Credentials: map[string]any{"api_key": "test-key", "access_token": "test-token"}}
+		if len(platforms) > 0 {
+			accounts[i].Platform = platforms[0]
+			accounts[i].Credentials["base_url"] = "https://ark.cn-beijing.volces.com/api/v3"
+			accounts[i].Credentials["openai_capabilities"] = []string{"seedance"}
+		}
 		if oauth {
 			accounts[i].Type = service.AccountTypeOAuth
 			accounts[i].Credentials["refresh_token"] = "test-refresh"
@@ -207,7 +236,7 @@ func newGrokMediaSlotHandler(t *testing.T, oauth, mismatch bool) (*OpenAIGateway
 		return &http.Response{StatusCode: 200, Header: http.Header{"Content-Type": []string{"application/json"}},
 			Body: io.NopCloser(strings.NewReader(`{"request_id":"task","status":"pending"}`))}, nil
 	}}
-	cfg := &config.Config{RunMode: config.RunModeSimple}
+	cfg := &config.Config{RunMode: runMode}
 	cfg.Gateway.Scheduling.StickySessionWaitTimeout = 20 * time.Millisecond
 	cfg.Gateway.Scheduling.StickySessionMaxWaiting = 3
 	cfg.Gateway.OpenAIScheduler.StickyEscapeEnabled = true
@@ -221,7 +250,11 @@ func newGrokMediaSlotHandler(t *testing.T, oauth, mismatch bool) (*OpenAIGateway
 	groupID := int64(24)
 	require.NoError(t, gateway.BindGrokMediaVideoRequestAccount(context.Background(), &groupID, "task", 10, 20, 1))
 	bindings.writes = 0
-	billing := service.NewBillingCacheService(nil, nil, nil, nil, nil, nil, cfg, nil)
+	var userRepo service.UserRepository
+	if runMode == config.RunModeStandard {
+		userRepo = grokMediaSlotUserRepo{}
+	}
+	billing := service.NewBillingCacheService(nil, userRepo, nil, nil, nil, nil, cfg, nil)
 	t.Cleanup(billing.Stop)
 	handler := NewOpenAIGatewayHandler(gateway, concurrency, billing, service.NewAPIKeyService(nil, nil, nil, nil, nil, nil, cfg), nil, nil, nil, nil, cfg)
 	return handler, slots, bindings, upstream

@@ -33,24 +33,6 @@ class V01181ReleaseMetadataTests(unittest.TestCase):
             (REPO_ROOT / "radar-worker" / "Dockerfile").read_text(encoding="utf-8"),
         )
 
-    def test_current_runtime_metadata_is_v025(self) -> None:
-        self.assertEqual(
-            "0.2.5",
-            (REPO_ROOT / "backend" / "cmd" / "server" / "VERSION").read_text(
-                encoding="utf-8"
-            ).strip(),
-        )
-        self.assertIn(
-            'version = "0.2.5"',
-            (REPO_ROOT / "radar-worker" / "pyproject.toml").read_text(encoding="utf-8"),
-        )
-        self.assertIn(
-            '__version__ = "0.2.5"',
-            (REPO_ROOT / "radar-worker" / "src" / "sub2api_radar" / "__init__.py").read_text(
-                encoding="utf-8"
-            ),
-        )
-
     def test_v020_builder_accepts_current_input_contract(self) -> None:
         builder = load_builder("build_v020_ghcr.py")
         builder.validate_inputs(

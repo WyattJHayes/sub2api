@@ -85,6 +85,7 @@ func (f APIKeyUpdateFields) IsEmpty() bool {
 type APIKeyRepository interface {
 	Create(ctx context.Context, key *APIKey) error
 	GetByID(ctx context.Context, id int64) (*APIKey, error)
+	GetByIDIncludeDeleted(ctx context.Context, id int64) (*APIKey, error)
 	// GetKeyAndOwnerID 仅获取 API Key 的 key 与所有者 ID，用于删除等轻量场景
 	GetKeyAndOwnerID(ctx context.Context, id int64) (string, int64, error)
 	GetByKey(ctx context.Context, key string) (*APIKey, error)

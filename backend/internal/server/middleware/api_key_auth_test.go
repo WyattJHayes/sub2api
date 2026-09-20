@@ -1535,6 +1535,10 @@ func (r *stubApiKeyRepo) GetByID(ctx context.Context, id int64) (*service.APIKey
 	return nil, errors.New("not implemented")
 }
 
+func (r *stubApiKeyRepo) GetByIDIncludeDeleted(ctx context.Context, id int64) (*service.APIKey, error) {
+	return r.GetByID(ctx, id)
+}
+
 func (r *stubApiKeyRepo) GetKeyAndOwnerID(ctx context.Context, id int64) (string, int64, error) {
 	return "", 0, errors.New("not implemented")
 }

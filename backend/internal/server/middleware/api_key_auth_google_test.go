@@ -94,6 +94,9 @@ func (f fakeAPIKeyRepo) Create(ctx context.Context, key *service.APIKey) error {
 func (f fakeAPIKeyRepo) GetByID(ctx context.Context, id int64) (*service.APIKey, error) {
 	return nil, errors.New("not implemented")
 }
+func (f fakeAPIKeyRepo) GetByIDIncludeDeleted(ctx context.Context, id int64) (*service.APIKey, error) {
+	return f.GetByID(ctx, id)
+}
 func (f fakeAPIKeyRepo) GetKeyAndOwnerID(ctx context.Context, id int64) (string, int64, error) {
 	return "", 0, errors.New("not implemented")
 }

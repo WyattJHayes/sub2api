@@ -988,6 +988,18 @@ type ImageConcurrencyConfig struct {
 	MaxWaitingRequests int `mapstructure:"max_waiting_requests"`
 }
 
+// GatewaySeedanceReconcilerConfig controls the bounded background reconciliation
+// of accepted Seedance tasks. Defaults are intentionally conservative for 2 GB hosts.
+type GatewaySeedanceReconcilerConfig struct {
+	Enabled               bool `mapstructure:"enabled"`
+	PollIntervalSeconds   int  `mapstructure:"poll_interval_seconds"`
+	ClaimBatch            int  `mapstructure:"claim_batch"`
+	MaxConcurrency        int  `mapstructure:"max_concurrency"`
+	RequestTimeoutSeconds int  `mapstructure:"request_timeout_seconds"`
+	LeaseSeconds          int  `mapstructure:"lease_seconds"`
+	PollDeadlineHours     int  `mapstructure:"poll_deadline_hours"`
+}
+
 const (
 	ImageConcurrencyOverflowModeReject = "reject"
 	ImageConcurrencyOverflowModeWait   = "wait"
@@ -1057,6 +1069,8 @@ type GatewayConfig struct {
 	OpenAIWS GatewayOpenAIWSConfig `mapstructure:"openai_ws"`
 	// Live: ChatGPT Frameless Live 会话配置。
 	Live GatewayLiveConfig `mapstructure:"live"`
+	// SeedanceReconciler: Seedance 持久任务后台对账配置。
+	SeedanceReconciler GatewaySeedanceReconcilerConfig `mapstructure:"seedance_reconciler"`
 	// OpenAIScheduler: OpenAI 高级调度器粘性逃逸配置
 	OpenAIScheduler GatewayOpenAISchedulerConfig `mapstructure:"openai_scheduler"`
 	// OpenAIHTTP2: OpenAI HTTP 上游协议策略（默认启用 HTTP/2，可按代理能力回退 HTTP/1.1）
@@ -2470,6 +2484,13 @@ func setDefaults() {
 	viper.SetDefault("gateway.grok_response_header_timeout", 120)
 	viper.SetDefault("gateway.openai_first_output_timeout_seconds", 0)
 	viper.SetDefault("gateway.openai_high_effort_first_output_timeout_seconds", 0)
+	viper.SetDefault("gateway.seedance_reconciler.enabled", true)
+	viper.SetDefault("gateway.seedance_reconciler.poll_interval_seconds", 5)
+	viper.SetDefault("gateway.seedance_reconciler.claim_batch", 8)
+	viper.SetDefault("gateway.seedance_reconciler.max_concurrency", 1)
+	viper.SetDefault("gateway.seedance_reconciler.request_timeout_seconds", 20)
+	viper.SetDefault("gateway.seedance_reconciler.lease_seconds", 60)
+	viper.SetDefault("gateway.seedance_reconciler.poll_deadline_hours", 24)
 	viper.SetDefault("gateway.log_upstream_error_body", true)
 	viper.SetDefault("gateway.log_upstream_error_body_max_bytes", 2048)
 	viper.SetDefault("gateway.inject_beta_for_apikey", false)
@@ -3450,6 +3471,25 @@ func (c *Config) Validate() error {
 	}
 	if c.Gateway.ProxyProbeResponseReadMaxBytes <= 0 {
 		return fmt.Errorf("gateway.proxy_probe_response_read_max_bytes must be positive")
+	}
+	if c.Gateway.SeedanceReconciler.PollIntervalSeconds < 1 || c.Gateway.SeedanceReconciler.PollIntervalSeconds > 300 {
+		return fmt.Errorf("gateway.seedance_reconciler.poll_interval_seconds must be between 1 and 300")
+	}
+	if c.Gateway.SeedanceReconciler.ClaimBatch < 1 || c.Gateway.SeedanceReconciler.ClaimBatch > 64 {
+		return fmt.Errorf("gateway.seedance_reconciler.claim_batch must be between 1 and 64")
+	}
+	if c.Gateway.SeedanceReconciler.MaxConcurrency < 1 || c.Gateway.SeedanceReconciler.MaxConcurrency > 4 {
+		return fmt.Errorf("gateway.seedance_reconciler.max_concurrency must be between 1 and 4")
+	}
+	if c.Gateway.SeedanceReconciler.RequestTimeoutSeconds < 1 || c.Gateway.SeedanceReconciler.RequestTimeoutSeconds > 120 {
+		return fmt.Errorf("gateway.seedance_reconciler.request_timeout_seconds must be between 1 and 120")
+	}
+	if c.Gateway.SeedanceReconciler.LeaseSeconds < 2 || c.Gateway.SeedanceReconciler.LeaseSeconds > 600 ||
+		c.Gateway.SeedanceReconciler.LeaseSeconds <= c.Gateway.SeedanceReconciler.RequestTimeoutSeconds {
+		return fmt.Errorf("gateway.seedance_reconciler.lease_seconds must be between 2 and 600 and greater than request_timeout_seconds")
+	}
+	if c.Gateway.SeedanceReconciler.PollDeadlineHours < 1 || c.Gateway.SeedanceReconciler.PollDeadlineHours > 168 {
+		return fmt.Errorf("gateway.seedance_reconciler.poll_deadline_hours must be between 1 and 168")
 	}
 	if c.Gateway.ResponseHeaderTimeout < 0 {
 		return fmt.Errorf("gateway.response_header_timeout must be non-negative")

@@ -64,6 +64,10 @@ func (s *apiKeyRepoStub) GetByID(ctx context.Context, id int64) (*APIKey, error)
 	panic("unexpected GetByID call")
 }
 
+func (s *apiKeyRepoStub) GetByIDIncludeDeleted(ctx context.Context, id int64) (*APIKey, error) {
+	return s.GetByID(ctx, id)
+}
+
 func (s *apiKeyRepoStub) GetKeyAndOwnerID(ctx context.Context, id int64) (string, int64, error) {
 	if s.getByIDErr != nil {
 		return "", 0, s.getByIDErr

@@ -413,6 +413,81 @@ func TestLoadDefaultOpenAIFirstOutputTimeoutsDisabled(t *testing.T) {
 	require.Zero(t, cfg.Gateway.OpenAIHighEffortFirstOutputTimeoutSeconds)
 }
 
+func TestLoadDefaultSeedanceReconcilerConfig(t *testing.T) {
+	resetViperWithJWTSecret(t)
+
+	cfg, err := Load()
+	require.NoError(t, err)
+	require.True(t, cfg.Gateway.SeedanceReconciler.Enabled)
+	require.Equal(t, 5, cfg.Gateway.SeedanceReconciler.PollIntervalSeconds)
+	require.Equal(t, 8, cfg.Gateway.SeedanceReconciler.ClaimBatch)
+	require.Equal(t, 1, cfg.Gateway.SeedanceReconciler.MaxConcurrency)
+	require.Equal(t, 20, cfg.Gateway.SeedanceReconciler.RequestTimeoutSeconds)
+	require.Equal(t, 60, cfg.Gateway.SeedanceReconciler.LeaseSeconds)
+	require.Equal(t, 24, cfg.Gateway.SeedanceReconciler.PollDeadlineHours)
+}
+
+func TestValidateSeedanceReconcilerBounds(t *testing.T) {
+	tests := []struct {
+		name   string
+		mutate func(*GatewaySeedanceReconcilerConfig)
+		want   string
+	}{
+		{
+			name: "poll interval",
+			mutate: func(cfg *GatewaySeedanceReconcilerConfig) {
+				cfg.PollIntervalSeconds = 0
+			},
+			want: "gateway.seedance_reconciler.poll_interval_seconds",
+		},
+		{
+			name: "claim batch",
+			mutate: func(cfg *GatewaySeedanceReconcilerConfig) {
+				cfg.ClaimBatch = 65
+			},
+			want: "gateway.seedance_reconciler.claim_batch",
+		},
+		{
+			name: "max concurrency",
+			mutate: func(cfg *GatewaySeedanceReconcilerConfig) {
+				cfg.MaxConcurrency = 5
+			},
+			want: "gateway.seedance_reconciler.max_concurrency",
+		},
+		{
+			name: "request timeout",
+			mutate: func(cfg *GatewaySeedanceReconcilerConfig) {
+				cfg.RequestTimeoutSeconds = 0
+			},
+			want: "gateway.seedance_reconciler.request_timeout_seconds",
+		},
+		{
+			name: "lease not greater than timeout",
+			mutate: func(cfg *GatewaySeedanceReconcilerConfig) {
+				cfg.LeaseSeconds = cfg.RequestTimeoutSeconds
+			},
+			want: "gateway.seedance_reconciler.lease_seconds",
+		},
+		{
+			name: "poll deadline",
+			mutate: func(cfg *GatewaySeedanceReconcilerConfig) {
+				cfg.PollDeadlineHours = 0
+			},
+			want: "gateway.seedance_reconciler.poll_deadline_hours",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			resetViperWithJWTSecret(t)
+			cfg, err := Load()
+			require.NoError(t, err)
+			tt.mutate(&cfg.Gateway.SeedanceReconciler)
+			require.ErrorContains(t, cfg.Validate(), tt.want)
+		})
+	}
+}
+
 func TestLoadOpenAIFirstOutputTimeoutsFromEnv(t *testing.T) {
 	resetViperWithJWTSecret(t)
 	t.Setenv("GATEWAY_OPENAI_FIRST_OUTPUT_TIMEOUT_SECONDS", "90")

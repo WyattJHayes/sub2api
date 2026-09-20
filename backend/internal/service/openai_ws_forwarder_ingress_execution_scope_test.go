@@ -314,7 +314,12 @@ func runOpenAIWSCodexThreadPair(t *testing.T, threadA, threadB string) (serverEr
 	cancelA()
 	if aReadErr == nil {
 		require.Equal(t, "resp_thread_a", gjson.GetBytes(completedA, "response.id").String())
-		require.NoError(t, connA.Close(coderws.StatusNormalClosure, "done"))
+		// The final upstream event and the preemption close frame are written by
+		// separate goroutines. Either may reach the client first. Preserve the
+		// close result so the caller can still verify that a same-thread reconnect
+		// eventually preempted A instead of treating the valid ordering as a test
+		// failure.
+		aReadErr = connA.Close(coderws.StatusNormalClosure, "done")
 	}
 	require.NoError(t, connB.Close(coderws.StatusNormalClosure, "done"))
 
