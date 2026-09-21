@@ -131,6 +131,11 @@ export interface RadarPlan {
   dataset_version_id: string
   gateway_api_key_id: number
   trigger_type: string
+  cron_expression?: string
+  baseline_ref?: Record<string, unknown>
+  candidate_ref?: Record<string, unknown>
+  next_run_at?: string
+  last_run_at?: string
   model_matrix: Array<Record<string, unknown>>
   max_run_cost: string
   daily_cost_limit: string
@@ -143,6 +148,9 @@ export interface CreateRadarPlanPayload {
   dataset_version_id: string
   gateway_api_key_id: number
   trigger_type: string
+  cron_expression?: string
+  baseline_ref?: Record<string, unknown>
+  candidate_ref?: Record<string, unknown>
   model_matrix: Array<Record<string, unknown>>
   max_run_cost: string
   daily_cost_limit: string

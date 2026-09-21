@@ -89,6 +89,25 @@
             </button>
           </span>
         </label>
+        <label class="block">
+          <span class="input-label">{{ t('admin.radar.runs.planDialog.triggerType') }}</span>
+          <select v-model="planForm.triggerType" data-test="plan-trigger-type" class="input w-full">
+            <option value="manual">{{ t('admin.radar.runs.planDialog.triggerManual') }}</option>
+            <option value="cron">{{ t('admin.radar.runs.planDialog.triggerCron') }}</option>
+          </select>
+        </label>
+        <label v-if="planForm.triggerType === 'cron'" class="block">
+          <span class="input-label">{{ t('admin.radar.runs.planDialog.cronExpression') }}</span>
+          <input v-model.trim="planForm.cronExpression" data-test="plan-cron" class="input w-full font-mono text-xs" autocomplete="off" placeholder="0 9 * * *" />
+        </label>
+        <label v-if="planForm.triggerType === 'cron'" class="block">
+          <span class="input-label">{{ t('admin.radar.runs.planDialog.baselineRelease') }}</span>
+          <input v-model.trim="planForm.baselineRelease" data-test="plan-baseline-release" class="input w-full" autocomplete="off" :placeholder="t('admin.radar.runs.planDialog.releasePlaceholder')" />
+        </label>
+        <label v-if="planForm.triggerType === 'cron'" class="block">
+          <span class="input-label">{{ t('admin.radar.runs.planDialog.candidateRelease') }}</span>
+          <input v-model.trim="planForm.candidateRelease" data-test="plan-candidate-release" class="input w-full" autocomplete="off" :placeholder="t('admin.radar.runs.planDialog.releasePlaceholder')" />
+        </label>
       </div>
 
       <div class="border-t border-gray-200 pt-5 dark:border-dark-700">
@@ -195,6 +214,10 @@ const planForm = reactive({
   name: '',
   datasetVersionId: '',
   gatewayAPIKeyId: 0,
+  triggerType: 'manual',
+  cronExpression: '',
+  baselineRelease: '',
+  candidateRelease: '',
   modelRoute: '',
   baselineRoute: '',
   candidateRoute: '',
@@ -301,7 +324,14 @@ async function createPlan(): Promise<void> {
       name: planForm.name,
       dataset_version_id: planForm.datasetVersionId,
       gateway_api_key_id: planForm.gatewayAPIKeyId,
-      trigger_type: 'manual',
+      trigger_type: planForm.triggerType,
+      ...(planForm.triggerType === 'cron'
+        ? {
+            cron_expression: planForm.cronExpression,
+            baseline_ref: { release: planForm.baselineRelease },
+            candidate_ref: { release: planForm.candidateRelease }
+          }
+        : {}),
       model_matrix: [{
         route: planForm.modelRoute,
         baseline: { route: planForm.baselineRoute },

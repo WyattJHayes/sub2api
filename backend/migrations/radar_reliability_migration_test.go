@@ -175,8 +175,8 @@ func TestMigrationInventoryPreservesAppliedFiles(t *testing.T) {
 	if err != nil {
 		t.Fatalf("list SQL migrations: %v", err)
 	}
-	if len(paths) != 315 {
-		t.Fatalf("controlled source must contain 315 SQL migrations, found %d", len(paths))
+	if len(paths) != 316 {
+		t.Fatalf("controlled source must contain 316 SQL migrations, found %d", len(paths))
 	}
 
 	expected := map[string]string{
@@ -191,6 +191,7 @@ func TestMigrationInventoryPreservesAppliedFiles(t *testing.T) {
 		"238_opencode_go_platform.sql":                         "35ce9b168aef3fdf29ac1ab02041abf6ce568d41b9dc18f32924d6fde67cb093",
 		"238_purge_unlimited_user_platform_quotas.sql":         "2ea9aea4b152531184b14559dc413ad2c33eadc9985b49ff90c579b3e1f1592e",
 		"239_async_video_billing_tasks.sql":                    "35391bde535dc66eca56dadeda4207b3041288a2e01a232cdddbe2baca5e1c34",
+		"240_add_radar_plan_schedule.sql":                      "482db7056de0778559b52a74cd76a570e356b62af824d0d969088006bfd2c973",
 	}
 	for name, want := range expected {
 		contents, err := os.ReadFile(name)

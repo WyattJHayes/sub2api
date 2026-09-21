@@ -490,6 +490,23 @@ func ProvideArtifactObjectDeleter(store EvaluationArtifactObjectStore) ArtifactO
 	return store
 }
 
+// ProvideEvaluationPlanScheduleRuntime wires the cron plan scheduler to the
+// existing run-creation path so scheduled runs reuse every budget, dataset,
+// and evaluation-key guard already enforced by the repository.
+func ProvideEvaluationPlanScheduleRuntime(
+	store EvaluationPlanScheduleStore,
+	creator EvaluationRunCreator,
+	cfg *config.Config,
+) *EvaluationPlanScheduleRuntime {
+	options := EvaluationPlanScheduleRuntimeOptions{Enabled: true}
+	if cfg != nil {
+		options.Enabled = cfg.Radar.Enabled
+	}
+	runtime := NewEvaluationPlanScheduleRuntime(store, creator, options)
+	runtime.Start()
+	return runtime
+}
+
 func ProvideEvaluationArtifactCleanupService(repo EvaluationArtifactCleanupRepository, store ArtifactObjectDeleter, scheduler ArtifactCleanupScheduler, cfg *config.Config) *EvaluationArtifactCleanupService {
 	interval := 5 * time.Minute
 	batchSize := 100
@@ -1047,6 +1064,7 @@ var ProviderSet = wire.NewSet(
 	wire.Bind(new(EvaluationOutboxDispatchHandler), new(*EvaluationOutboxDispatcher)),
 	ProvideEvaluationOutboxConsumerRuntime,
 	ProvideArtifactObjectDeleter,
+	ProvideEvaluationPlanScheduleRuntime,
 	ProvideEvaluationArtifactCleanupService,
 	wire.Bind(new(ArtifactCleanupScheduler), new(*TimingWheelService)),
 	ProvideDeferredService,

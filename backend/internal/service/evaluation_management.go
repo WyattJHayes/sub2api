@@ -70,6 +70,9 @@ type CreateRadarPlanInput struct {
 	DatasetVersionID uuid.UUID       `json:"dataset_version_id" binding:"required"`
 	GatewayAPIKeyID  int64           `json:"gateway_api_key_id" binding:"required,gt=0"`
 	TriggerType      string          `json:"trigger_type" binding:"required"`
+	CronExpression   string          `json:"cron_expression"`
+	BaselineRef      json.RawMessage `json:"baseline_ref"`
+	CandidateRef     json.RawMessage `json:"candidate_ref"`
 	ModelMatrix      json.RawMessage `json:"model_matrix" binding:"required"`
 	MaxRunCost       decimal.Decimal `json:"max_run_cost" binding:"required"`
 	DailyCostLimit   decimal.Decimal `json:"daily_cost_limit" binding:"required"`
@@ -83,6 +86,11 @@ type RadarPlanRecord struct {
 	DatasetVersionID uuid.UUID       `json:"dataset_version_id"`
 	GatewayAPIKeyID  int64           `json:"gateway_api_key_id"`
 	TriggerType      string          `json:"trigger_type"`
+	CronExpression   string          `json:"cron_expression,omitempty"`
+	BaselineRef      json.RawMessage `json:"baseline_ref,omitempty"`
+	CandidateRef     json.RawMessage `json:"candidate_ref,omitempty"`
+	NextRunAt        *time.Time      `json:"next_run_at,omitempty"`
+	LastRunAt        *time.Time      `json:"last_run_at,omitempty"`
 	ModelMatrix      json.RawMessage `json:"model_matrix"`
 	MaxRunCost       decimal.Decimal `json:"max_run_cost"`
 	DailyCostLimit   decimal.Decimal `json:"daily_cost_limit"`
