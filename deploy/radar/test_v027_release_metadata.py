@@ -6,12 +6,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from deploy.radar.migration_ledger import (
-    audit_candidate,
-    candidate_manifest,
-    read_manifest,
-    read_name_list,
-)
+from deploy.radar.migration_ledger import read_manifest, read_name_list
 
 
 RADAR_DIR = Path(__file__).resolve().parent
@@ -71,39 +66,24 @@ class V027ReleaseMetadataTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "worker package version"):
                 builder.validate_current_source(inputs)
 
-    def test_v027_manifest_covers_all_current_schema_migrations(self) -> None:
+    def test_v027_manifest_remains_an_immutable_historical_contract(self) -> None:
+        # This manifest records what the v0.2.7 release shipped. Later releases
+        # add migrations, so it must not be re-checked against the live tree.
         manifest_dir = RADAR_DIR / "manifests" / "v0.2.7"
         baseline = read_manifest(manifest_dir / "migration-baseline.tsv")
         expected_new = read_name_list(manifest_dir / "expected-new.txt")
         legacy_entries = read_name_list(manifest_dir / "legacy-entries.txt")
-        result = audit_candidate(
-            baseline,
-            candidate_manifest(REPO_ROOT / "backend" / "migrations"),
-            expected_new=expected_new,
-            legacy_entries=legacy_entries,
-        )
-        self.assertTrue(result["ok"], result)
         self.assertEqual(285, len(baseline))
         self.assertEqual(31, len(expected_new))
         self.assertEqual(2, len(legacy_entries))
-        self.assertEqual(316, result["expected_schema_migrations"])
-        self.assertEqual(314, result["candidate_file_count"])
+        self.assertTrue(set(expected_new).isdisjoint(legacy_entries))
 
-    def test_current_release_tools_default_to_v027(self) -> None:
-        for name in (
-            "rehearse-v01171-migrations.sh",
-            "production_promotion_audit.py",
-            "production_backup_audit.py",
-            "production_rollback_audit.py",
-            "local_prerelease_closure.py",
-        ):
-            content = (RADAR_DIR / name).read_text(encoding="utf-8")
-            self.assertIn("v0.2.7", content, name)
-
-        evidence = (RADAR_DIR / "production_evidence_envelope.py").read_text(encoding="utf-8")
-        self.assertIn('DEFAULT_RELEASE_VERSION = "0.2.7"', evidence)
-        preflight = (RADAR_DIR / "local_prerelease_preflight.py").read_text(encoding="utf-8")
-        self.assertIn('os.environ.get("RADAR_RELEASE_VERSION", "0.2.7")', preflight)
+    def test_v027_release_tools_stay_pinned_to_their_own_release(self) -> None:
+        # v0.2.7 is a historical release. Its builder must keep targeting the
+        # v0.2.7 image tag/SHA contract even after newer releases exist.
+        builder = load_builder()
+        self.assertEqual("0.2.7", builder._BASE.APP_VERSION)
+        self.assertEqual("radar-v027-image-record-v1", builder._BASE.SCHEMA_VERSION)
 
 
 if __name__ == "__main__":

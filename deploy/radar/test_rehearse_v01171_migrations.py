@@ -668,13 +668,14 @@ class MigrationRehearsalContractTests(unittest.TestCase):
 
 
 class MigrationManifestSelectionTests(unittest.TestCase):
-    def test_current_rehearsal_defaults_to_the_v027_migration_manifest(self) -> None:
+    def test_current_rehearsal_defaults_to_the_v028_migration_manifest(self) -> None:
         body = IMPLEMENTATION_SCRIPT.read_text(encoding="utf-8")
-        self.assertIn("/deploy/radar/manifests/v0.2.7", body)
+        self.assertIn("/deploy/radar/manifests/v0.2.8", body)
         self.assertNotIn("/deploy/radar/manifests/v0.1.178", body)
         self.assertNotIn("/deploy/radar/manifests/v0.1.181", body)
         self.assertNotIn("/deploy/radar/manifests/v0.2.4", body)
         self.assertNotIn("/deploy/radar/manifests/v0.2.5", body)
+        self.assertNotIn("/deploy/radar/manifests/v0.2.7", body)
 
 
 if __name__ == "__main__":
