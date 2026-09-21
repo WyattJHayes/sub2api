@@ -12,13 +12,12 @@ import (
 
 	"github.com/Wei-Shaw/sub2api/internal/service"
 	"github.com/google/uuid"
-	"github.com/shopspring/decimal"
 	"github.com/stretchr/testify/require"
 )
 
-// seedScheduledPlan inserts a due cron plan directly so the claim semantics can
-// be exercised without the governance API.
-func seedScheduledPlan(t *testing.T, cronExpression string, baseline, candidate any) uuid.UUID {
+// seedScheduleFixture inserts a due cron plan directly so the claim semantics
+// can be exercised without the governance API.
+func seedScheduleFixture(t *testing.T, cronExpression string, baseline, candidate any) uuid.UUID {
 	t.Helper()
 	ctx := context.Background()
 
@@ -46,14 +45,20 @@ func seedScheduledPlan(t *testing.T, cronExpression string, baseline, candidate 
 		 VALUES ($1, $2, $3, $4, 'cron', $5, $6::jsonb, 2, 2, 1, TRUE, $7::jsonb, $8::jsonb, NOW() - interval '1 minute', $9, $9, NOW(), NOW())`,
 		planID, "sched-"+suffix[:8], datasetID, userID, cronExpression,
 		`[{"route":"r","baseline":{"route":"a"},"candidate":{"route":"b"}}]`,
-		mustScheduleJSON(t, baseline), mustScheduleJSON(t, candidate), tenantID)
+		nullableScheduleJSON(t, baseline), nullableScheduleJSON(t, candidate), tenantID)
 	require.NoError(t, err)
 	_ = userID
 	return planID
 }
 
-func mustScheduleJSON(t *testing.T, value any) string {
+// nullableScheduleJSON encodes an optional reference. A nil reference must be
+// inserted as SQL NULL rather than the JSON literal null, because the runner
+// treats a missing reference as "skip this plan".
+func nullableScheduleJSON(t *testing.T, value any) any {
 	t.Helper()
+	if value == nil {
+		return nil
+	}
 	encoded, err := json.Marshal(value)
 	require.NoError(t, err)
 	return string(encoded)
@@ -75,7 +80,7 @@ func TestEvaluationPlanScheduleMigrationAddsScheduleColumns(t *testing.T) {
 }
 
 func TestClaimDueScheduledPlansIsExclusiveAcrossConcurrentClaimants(t *testing.T) {
-	planID := seedScheduledPlan(t, "0 9 * * *", map[string]any{"release": "v0.2.7-sol"}, map[string]any{"release": "v0.2.7-4models"})
+	planID := seedScheduleFixture(t, "0 9 * * *", map[string]any{"release": "v0.2.7-sol"}, map[string]any{"release": "v0.2.7-4models"})
 	ctx := context.Background()
 	repo := NewEvaluationPlanScheduleRepository(integrationDB)
 
@@ -110,7 +115,7 @@ func TestClaimDueScheduledPlansIsExclusiveAcrossConcurrentClaimants(t *testing.T
 }
 
 func TestExpiredScheduleLeaseIsReclaimable(t *testing.T) {
-	planID := seedScheduledPlan(t, "0 9 * * *", map[string]any{"release": "a"}, map[string]any{"release": "b"})
+	planID := seedScheduleFixture(t, "0 9 * * *", map[string]any{"release": "a"}, map[string]any{"release": "b"})
 	ctx := context.Background()
 	repo := NewEvaluationPlanScheduleRepository(integrationDB)
 
@@ -148,7 +153,7 @@ func TestExpiredScheduleLeaseIsReclaimable(t *testing.T) {
 }
 
 func TestCompleteScheduledPlanClaimRejectsStaleTokenAndAdvancesSchedule(t *testing.T) {
-	planID := seedScheduledPlan(t, "0 9 * * *", map[string]any{"release": "a"}, map[string]any{"release": "b"})
+	planID := seedScheduleFixture(t, "0 9 * * *", map[string]any{"release": "a"}, map[string]any{"release": "b"})
 	ctx := context.Background()
 	repo := NewEvaluationPlanScheduleRepository(integrationDB)
 
@@ -162,7 +167,7 @@ func TestCompleteScheduledPlanClaimRejectsStaleTokenAndAdvancesSchedule(t *testi
 	}
 	require.NotEmpty(t, token)
 
-	err = repo.CompleteScheduledPlanClaim(ctx, planID, "stale-token", time.Now(), time.Now().Add(24*time.Hour))
+	err = repo.CompleteScheduledPlanClaim(ctx, planID, uuid.NewString(), time.Now(), time.Now().Add(24*time.Hour))
 	require.ErrorIs(t, err, service.ErrEvaluationPlanScheduleFenced, "a stale token must not advance the schedule")
 
 	ranAt := time.Now()
@@ -181,7 +186,7 @@ func TestCompleteScheduledPlanClaimRejectsStaleTokenAndAdvancesSchedule(t *testi
 }
 
 func TestScheduledPlanWithMissingReferenceRemainsClaimableButReferenceLess(t *testing.T) {
-	planID := seedScheduledPlan(t, "0 9 * * *", nil, map[string]any{"release": "b"})
+	planID := seedScheduleFixture(t, "0 9 * * *", nil, map[string]any{"release": "b"})
 	ctx := context.Background()
 	repo := NewEvaluationPlanScheduleRepository(integrationDB)
 
@@ -199,15 +204,19 @@ func TestScheduledPlanWithMissingReferenceRemainsClaimableButReferenceLess(t *te
 }
 
 func TestManualPlanIsNeverClaimedBySchedule(t *testing.T) {
-	_, err := integrationDB.ExecContext(context.Background(),
-		`UPDATE evaluation_plans SET trigger_type='manual', cron_expression=NULL WHERE trigger_type='cron' AND cron_expression IS NOT NULL AND created_at > NOW() - interval '5 minutes'`)
+	ctx := context.Background()
+	planID := seedScheduleFixture(t, "0 9 * * *", map[string]any{"release": "a"}, map[string]any{"release": "b"})
+
+	// Flip this plan to manual so it must no longer be claimable.
+	_, err := integrationDB.ExecContext(ctx,
+		`UPDATE evaluation_plans SET trigger_type='manual', cron_expression=NULL, next_run_at=NULL WHERE id=$1`, planID)
 	require.NoError(t, err)
 
 	repo := NewEvaluationPlanScheduleRepository(integrationDB)
-	claims, err := repo.ClaimDueScheduledPlans(context.Background(), time.Now(), 64, time.Minute)
+	claims, err := repo.ClaimDueScheduledPlans(ctx, time.Now(), 64, time.Minute)
 	require.NoError(t, err)
 	for _, claim := range claims {
+		require.NotEqual(t, planID, claim.PlanID, "a manual plan must never be claimed by the scheduler")
 		require.NotEmpty(t, claim.CronExpression, "a cron claim must always carry its expression")
 	}
-	_ = decimal.Zero
 }

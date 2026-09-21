@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/Wei-Shaw/sub2api/internal/service"
@@ -154,6 +155,11 @@ WHERE id = $1
 
 func rawJSONOrNil(value sql.NullString) json.RawMessage {
 	if !value.Valid || value.String == "" {
+		return nil
+	}
+	// A JSON null is a stored reference that names nothing. Report it as
+	// absent so the runner skips the plan instead of failing to decode it.
+	if trimmed := strings.TrimSpace(value.String); trimmed == "null" || trimmed == "" {
 		return nil
 	}
 	return json.RawMessage(value.String)

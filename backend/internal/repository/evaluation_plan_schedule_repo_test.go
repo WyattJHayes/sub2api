@@ -51,6 +51,31 @@ func TestClaimDueScheduledPlansLeasesEachPlanOnce(t *testing.T) {
 	require.NoError(t, mock.ExpectationsWereMet())
 }
 
+func TestClaimDueScheduledPlansTreatsJSONNullReferenceAsAbsent(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = db.Close() })
+
+	planID := uuid.New()
+	now := time.Date(2026, 9, 21, 9, 0, 0, 0, time.UTC)
+	expectEvaluationScheduleWriter(t, mock)
+	mock.ExpectQuery(`(?s)SELECT id, cron_expression, baseline_ref::text, candidate_ref::text`).
+		WithArgs(now, 16).
+		WillReturnRows(sqlmock.NewRows([]string{"id", "cron_expression", "baseline_ref", "candidate_ref", "created_by", "tenant_id"}).
+			AddRow(planID, "0 9 * * *", "null", `{"release":"b"}`, int64(41), int64(41)))
+	mock.ExpectExec(`(?s)UPDATE evaluation_plans.*SET schedule_lease_token = \$2`).
+		WithArgs(planID, sqlmock.AnyArg(), sqlmock.AnyArg(), now).
+		WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectCommit()
+
+	claims, err := NewEvaluationPlanScheduleRepository(db).ClaimDueScheduledPlans(context.Background(), now, 16, 5*time.Minute)
+	require.NoError(t, err)
+	require.Len(t, claims, 1)
+	require.Empty(t, claims[0].BaselineRef, "a JSON null reference must read as absent so the runner skips the plan")
+	require.NotEmpty(t, claims[0].CandidateRef)
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
 func TestClaimDueScheduledPlansKeepsUnconfiguredReferencesEmpty(t *testing.T) {
 	db, mock, err := sqlmock.New()
 	require.NoError(t, err)
