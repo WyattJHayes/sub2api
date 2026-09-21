@@ -50,23 +50,17 @@ class V025ReleaseMetadataTests(unittest.TestCase):
             )
         )
 
-    def test_v025_manifest_covers_all_current_schema_migrations(self) -> None:
+    def test_v025_manifest_remains_an_immutable_historical_contract(self) -> None:
+        # This manifest records what the v0.2.5 release shipped. Later releases
+        # add migrations, so it must not be re-checked against the live tree.
         manifest_dir = RADAR_DIR / "manifests" / "v0.2.5"
         baseline = read_manifest(manifest_dir / "migration-baseline.tsv")
         expected_new = read_name_list(manifest_dir / "expected-new.txt")
         legacy_entries = read_name_list(manifest_dir / "legacy-entries.txt")
-        result = audit_candidate(
-            baseline,
-            candidate_manifest(REPO_ROOT / "backend" / "migrations"),
-            expected_new=expected_new,
-            legacy_entries=legacy_entries,
-        )
-        self.assertTrue(result["ok"], result)
         self.assertEqual(285, len(baseline))
         self.assertEqual(31, len(expected_new))
         self.assertEqual(2, len(legacy_entries))
-        self.assertEqual(316, result["expected_schema_migrations"])
-        self.assertEqual(314, result["candidate_file_count"])
+        self.assertTrue(set(expected_new).isdisjoint(legacy_entries))
 
 if __name__ == "__main__":
     unittest.main()

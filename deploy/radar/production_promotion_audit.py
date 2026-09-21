@@ -30,7 +30,7 @@ BOUND_MANIFEST_SCHEMA_VERSION = "radar-production-promotion-manifest-v3"
 MIGRATION_MANIFEST_DIR = Path(
     os.environ.get(
         "RADAR_MIGRATION_MANIFEST_DIR",
-        str(Path(__file__).resolve().parent / "manifests" / "v0.2.7"),
+        str(Path(__file__).resolve().parent / "manifests" / "v0.2.8"),
     )
 ).resolve()
 EXPECTED_SCHEMA_MIGRATIONS = expected_schema_migrations(MIGRATION_MANIFEST_DIR)
