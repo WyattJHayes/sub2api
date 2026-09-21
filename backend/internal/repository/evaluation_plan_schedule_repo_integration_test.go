@@ -22,7 +22,6 @@ func seedScheduleFixture(t *testing.T, cronExpression string, baseline, candidat
 	ctx := context.Background()
 
 	suffix := uuid.NewString()
-	userID := int64(910000000) + int64(uuid.New().ID()%1000000)
 	datasetID := uuid.New()
 	planID := uuid.New()
 
@@ -32,22 +31,29 @@ func seedScheduleFixture(t *testing.T, cronExpression string, baseline, candidat
 		 VALUES ($1, $2, 'x', 'admin', 'active', NOW(), NOW()) RETURNING id`,
 		suffix+"@sched.test", "sched-"+suffix[:8]).Scan(&tenantID))
 
+	// A published dataset version requires published_at, and a plan requires a
+	// real dedicated evaluation key so the gateway key foreign key holds.
 	_, err := integrationDB.ExecContext(ctx,
-		`INSERT INTO evaluation_dataset_versions (id, dataset_key, version, manifest_sha256, source_type, status, created_by, tenant_id, created_at, updated_at)
-		 VALUES ($1, 'sched', $2, $3, 'synthetic', 'published', $4, $4, NOW(), NOW())`,
+		`INSERT INTO evaluation_dataset_versions (id, dataset_key, version, manifest_sha256, source_type, status, published_at, created_by, tenant_id, created_at, updated_at)
+		 VALUES ($1, 'sched', $2, $3, 'synthetic', 'published', NOW(), $4, $4, NOW(), NOW())`,
 		datasetID, "v-"+suffix[:8], suffix, tenantID)
 	require.NoError(t, err)
+
+	var keyID int64
+	require.NoError(t, integrationDB.QueryRowContext(ctx,
+		`INSERT INTO api_keys (user_id, key, name, status, is_evaluation, created_at, updated_at)
+		 VALUES ($1, $2, 'sched-eval', 'active', TRUE, NOW(), NOW()) RETURNING id`,
+		tenantID, "sk-sched-"+suffix[:24]).Scan(&keyID))
 
 	_, err = integrationDB.ExecContext(ctx,
 		`INSERT INTO evaluation_plans (id, name, dataset_version_id, gateway_api_key_id, trigger_type,
 		   cron_expression, model_matrix, max_run_cost, daily_cost_limit, max_concurrency, enabled,
 		   baseline_ref, candidate_ref, next_run_at, created_by, tenant_id, created_at, updated_at)
 		 VALUES ($1, $2, $3, $4, 'cron', $5, $6::jsonb, 2, 2, 1, TRUE, $7::jsonb, $8::jsonb, NOW() - interval '1 minute', $9, $9, NOW(), NOW())`,
-		planID, "sched-"+suffix[:8], datasetID, userID, cronExpression,
+		planID, "sched-"+suffix[:8], datasetID, keyID, cronExpression,
 		`[{"route":"r","baseline":{"route":"a"},"candidate":{"route":"b"}}]`,
 		nullableScheduleJSON(t, baseline), nullableScheduleJSON(t, candidate), tenantID)
 	require.NoError(t, err)
-	_ = userID
 	return planID
 }
 
