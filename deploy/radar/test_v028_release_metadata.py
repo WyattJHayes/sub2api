@@ -18,6 +18,11 @@ from deploy.radar.migration_ledger import (
 RADAR_DIR = Path(__file__).resolve().parent
 REPO_ROOT = RADAR_DIR.parents[1]
 MANIFEST_DIR = RADAR_DIR / "manifests" / "v0.2.8"
+V029_MIGRATIONS = (
+    "238b_content_moderation_engine_meta.sql",
+    "239_channel_reasoning_effort_multipliers.sql",
+    "240_affiliate_ledger_operation_id.sql",
+)
 
 
 def load_builder():
@@ -73,13 +78,17 @@ class V028ReleaseMetadataTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "worker package version"):
                 builder.validate_current_source(inputs)
 
-    def test_v028_manifest_covers_all_current_schema_migrations(self) -> None:
+    def test_v028_manifest_covers_its_source_snapshot(self) -> None:
         baseline = read_manifest(MANIFEST_DIR / "migration-baseline.tsv")
         expected_new = read_name_list(MANIFEST_DIR / "expected-new.txt")
         legacy_entries = read_name_list(MANIFEST_DIR / "legacy-entries.txt")
+        candidate = candidate_manifest(REPO_ROOT / "backend" / "migrations")
+        for name in V029_MIGRATIONS:
+            self.assertIn(name, candidate)
+            candidate.pop(name)
         result = audit_candidate(
             baseline,
-            candidate_manifest(REPO_ROOT / "backend" / "migrations"),
+            candidate,
             expected_new=expected_new,
             legacy_entries=legacy_entries,
         )
@@ -93,21 +102,23 @@ class V028ReleaseMetadataTests(unittest.TestCase):
         self.assertEqual(316, result["candidate_file_count"])
         self.assertEqual([], result["checksum_mismatches"])
 
-    def test_current_release_tools_default_to_v028(self) -> None:
+    def test_historical_rehearsal_stays_on_v028_and_active_tools_default_to_v029(self) -> None:
+        historical = (RADAR_DIR / "rehearse-v01171-migrations.sh").read_text(encoding="utf-8")
+        self.assertIn("v0.2.8", historical)
+
         for name in (
-            "rehearse-v01171-migrations.sh",
             "production_promotion_audit.py",
             "production_backup_audit.py",
             "production_rollback_audit.py",
             "local_prerelease_closure.py",
         ):
             content = (RADAR_DIR / name).read_text(encoding="utf-8")
-            self.assertIn("v0.2.8", content, name)
+            self.assertIn("v0.2.9", content, name)
 
         evidence = (RADAR_DIR / "production_evidence_envelope.py").read_text(encoding="utf-8")
-        self.assertIn('DEFAULT_RELEASE_VERSION = "0.2.8"', evidence)
+        self.assertIn('DEFAULT_RELEASE_VERSION = "0.2.9"', evidence)
         preflight = (RADAR_DIR / "local_prerelease_preflight.py").read_text(encoding="utf-8")
-        self.assertIn('os.environ.get("RADAR_RELEASE_VERSION", "0.2.8")', preflight)
+        self.assertIn('os.environ.get("RADAR_RELEASE_VERSION", "0.2.9")', preflight)
 
 
 if __name__ == "__main__":

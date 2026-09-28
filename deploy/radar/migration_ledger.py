@@ -192,6 +192,11 @@ def audit_runtime(
         if canonical not in normalized_actual or normalized_actual[alias] != normalized_actual[canonical]:
             alias_errors.append(f"duplicate alias checksum mismatch: {alias}->{canonical}")
             continue
+        if alias in expected_runtime:
+            if canonical not in expected_runtime or expected_runtime[alias] != expected_runtime[canonical]:
+                alias_errors.append(f"duplicate alias manifest checksum mismatch: {alias}->{canonical}")
+                continue
+            expected_runtime.pop(alias)
         normalized_actual.pop(alias)
     runtime_missing = sorted(set(expected_runtime) - set(normalized_actual))
     runtime_unknown = sorted(set(normalized_actual) - set(expected_runtime))

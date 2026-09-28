@@ -175,8 +175,8 @@ func TestMigrationInventoryPreservesAppliedFiles(t *testing.T) {
 	if err != nil {
 		t.Fatalf("list SQL migrations: %v", err)
 	}
-	if len(paths) != 316 {
-		t.Fatalf("controlled source must contain 316 SQL migrations, found %d", len(paths))
+	if len(paths) != 319 {
+		t.Fatalf("controlled source must contain 319 SQL migrations, found %d", len(paths))
 	}
 
 	expected := map[string]string{
@@ -189,9 +189,12 @@ func TestMigrationInventoryPreservesAppliedFiles(t *testing.T) {
 		"234_channel_max_reasoning_effort_multiplier.sql":      "448b59b3168fe4dfe2417f1abd9657d124708c279e2245d55149087838d8c8d6",
 		"234_group_codex_models_manifest_config.sql":           "8ef9cd9a6a963e79823f8f5d703a6b31fa30ebfca9f8d2337dd451765178e5a0",
 		"238_opencode_go_platform.sql":                         "35ce9b168aef3fdf29ac1ab02041abf6ce568d41b9dc18f32924d6fde67cb093",
+		"238b_content_moderation_engine_meta.sql":              "0ca7cbaf70c5365dc9f2d580bb324f35a5bef77de2543299068b6e902d19b644",
 		"238_purge_unlimited_user_platform_quotas.sql":         "2ea9aea4b152531184b14559dc413ad2c33eadc9985b49ff90c579b3e1f1592e",
 		"239_async_video_billing_tasks.sql":                    "35391bde535dc66eca56dadeda4207b3041288a2e01a232cdddbe2baca5e1c34",
+		"239_channel_reasoning_effort_multipliers.sql":         "12a03c49e6c9c15edbbc992e36cbc140da849556176569fd987ade49610707ac",
 		"240_add_radar_plan_schedule.sql":                      "482db7056de0778559b52a74cd76a570e356b62af824d0d969088006bfd2c973",
+		"240_affiliate_ledger_operation_id.sql":                "74da6bfc98405c437891be026cc53dc1f1909f89d2fc79c426bdfffcd709d38f",
 	}
 	for name, want := range expected {
 		contents, err := os.ReadFile(name)
