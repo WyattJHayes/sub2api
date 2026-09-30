@@ -42,3 +42,15 @@ func TestGPT6SolLunaModelIdentity(t *testing.T) {
 	require.False(t, IsGPT6SolOrLunaModelSpelling("gpt-6-solitude"))
 	require.False(t, IsGPT6SolOrLunaModelSpelling("gpt-6-luna-preview"))
 }
+
+func TestGPT61SolModelIdentityAndReasoningValidation(t *testing.T) {
+	require.Contains(t, DefaultModelIDs(), "gpt-6.1-sol")
+	for _, model := range []string{"gpt-6.1-sol", "openai/gpt-6.1-sol-high", "gpt-6.1-sol-openai-compact"} {
+		require.True(t, IsGPT61SolModelSpelling(model), model)
+	}
+	for _, model := range []string{"gpt-6-sol", "gpt-6.1-solitude", "gpt-6.1-sol-preview"} {
+		require.False(t, IsGPT61SolModelSpelling(model), model)
+	}
+	require.NoError(t, ValidateGPT61SolReasoningEffort("gpt-6.1-sol", "high"))
+	require.Error(t, ValidateGPT61SolReasoningEffort("gpt-6.1-sol", "none"))
+}
