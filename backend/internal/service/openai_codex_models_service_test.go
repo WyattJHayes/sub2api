@@ -2368,6 +2368,11 @@ func TestAdjustAPIKeyCodexModelsManifest(t *testing.T) {
 			body: `{"models":[{"slug":"gpt-5.6-sol","use_responses_lite":false},{"slug":"gpt-5.6-terra"},null,"gpt-5.6-luna",{"slug":17,"use_responses_lite":true}]}`,
 			want: `{"models":[{"slug":"gpt-5.6-sol","use_responses_lite":false},{"slug":"gpt-5.6-terra"},null,"gpt-5.6-luna",{"slug":17,"use_responses_lite":true}]}`,
 		},
+		{
+			name: "mapped model aliases are normalized before lookup",
+			body: `{"models":[{"slug":"gpt-6.1-sol-high","use_responses_lite":true},{"slug":"openai/gpt-6.1-sol","use_responses_lite":true}]}`,
+			want: `{"models":[{"slug":"gpt-6.1-sol-high","use_responses_lite":false},{"slug":"openai/gpt-6.1-sol","use_responses_lite":false}]}`,
+		},
 	}
 
 	for _, tt := range tests {
