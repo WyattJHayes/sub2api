@@ -50,6 +50,8 @@ func TestIsSonnet55(t *testing.T) {
 		"us.anthropic.claude-sonnet-5-5",
 		"us-gov.anthropic.claude-sonnet-5-5",
 		"global.anthropic.claude-sonnet-5-5-thinking",
+		"claude-sonnet-5-5@20260928",
+		"us.anthropic.claude-sonnet-5-5@20260928",
 	} {
 		require.True(t, IsSonnet55(model), model)
 	}

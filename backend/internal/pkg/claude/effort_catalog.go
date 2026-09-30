@@ -75,7 +75,7 @@ func normalizeEffortModelID(model string) string {
 	}
 	if len(id) >= 9 {
 		suffix := id[len(id)-9:]
-		if suffix[0] == '-' {
+		if suffix[0] == '-' || suffix[0] == '@' {
 			digits := true
 			for _, r := range suffix[1:] {
 				if !unicode.IsDigit(r) {
