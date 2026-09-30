@@ -159,6 +159,7 @@ const { t } = useI18n()
 
 const props = defineProps<{
   modelValue: string[]
+  modelMappings?: { from: string; to: string }[]
   platform?: string
   platforms?: string[]
   accountId?: number
@@ -259,6 +260,11 @@ const toggleModel = (model: string) => {
   if (props.modelValue.includes(model)) {
     removeModel(model)
   } else {
+    const conflict = findMappingConflict(model)
+    if (conflict) {
+      showMappingConflict(conflict)
+      return
+    }
     emit('update:modelValue', [...props.modelValue, model])
   }
 }
@@ -267,11 +273,36 @@ const copyModelId = async (model: string) => {
   await copyToClipboard(model)
 }
 
+const findMappingConflict = (model: string) => {
+  const normalizedModel = model.trim()
+  return props.modelMappings?.find(mapping => {
+    const from = mapping.from.trim()
+    const to = mapping.to.trim()
+    if (!from || !to || to === normalizedModel) return false
+    const matches = from.endsWith('*')
+      ? normalizedModel.startsWith(from.slice(0, -1))
+      : from === normalizedModel
+    return matches
+  })
+}
+
+const showMappingConflict = (conflict: { from: string; to: string }) => {
+  appStore.showInfo(t('admin.accounts.modelMappingConflict', {
+    from: conflict.from.trim(),
+    to: conflict.to.trim()
+  }))
+}
+
 const addCustom = () => {
   const model = customModel.value.trim()
   if (!model) return
   if (props.modelValue.includes(model)) {
     appStore.showInfo(t('admin.accounts.modelExists'))
+    return
+  }
+  const conflict = findMappingConflict(model)
+  if (conflict) {
+    showMappingConflict(conflict)
     return
   }
   emit('update:modelValue', [...props.modelValue, model])
@@ -284,14 +315,21 @@ const handleEnter = () => {
 
 const fillRelated = () => {
   const newModels = [...props.modelValue]
+  let firstConflict: { from: string; to: string } | undefined
   for (const platform of normalizedPlatforms.value) {
     for (const model of getModelsByPlatform(platform)) {
       if (!newModels.includes(model)) {
+        const conflict = findMappingConflict(model)
+        if (conflict) {
+          firstConflict ??= conflict
+          continue
+        }
         newModels.push(model)
       }
     }
   }
   emit('update:modelValue', newModels)
+  if (firstConflict) showMappingConflict(firstConflict)
 }
 
 const syncUpstreamModels = async () => {
@@ -321,14 +359,21 @@ const syncUpstreamModels = async () => {
 
     const newModels = [...props.modelValue]
     let addedCount = 0
+    let firstConflict: { from: string; to: string } | undefined
     for (const model of upstreamModels) {
       if (!newModels.includes(model)) {
+        const conflict = findMappingConflict(model)
+        if (conflict) {
+          firstConflict ??= conflict
+          continue
+        }
         newModels.push(model)
         addedCount += 1
       }
     }
 
     emit('update:modelValue', newModels)
+    if (firstConflict) showMappingConflict(firstConflict)
     const warnings = result.warnings ?? []
     const hasPartialMetadata = warnings.some(
       warning => warning.code === 'upstream_model_metadata_partial'
