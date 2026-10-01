@@ -82,6 +82,9 @@ type quotaBaseAPIKeyRepoStub struct {
 func (s *quotaBaseAPIKeyRepoStub) Create(context.Context, *APIKey) error {
 	panic("unexpected Create call")
 }
+func (s *quotaBaseAPIKeyRepoStub) CreateWithActiveLimit(context.Context, *APIKey, int64) error {
+	panic("unexpected CreateWithActiveLimit call")
+}
 func (s *quotaBaseAPIKeyRepoStub) GetByID(context.Context, int64) (*APIKey, error) {
 	s.getByIDCalls++
 	return nil, nil

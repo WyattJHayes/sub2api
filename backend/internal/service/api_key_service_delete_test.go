@@ -53,6 +53,10 @@ func (s *apiKeyRepoStub) Create(ctx context.Context, key *APIKey) error {
 	panic("unexpected Create call")
 }
 
+func (s *apiKeyRepoStub) CreateWithActiveLimit(ctx context.Context, key *APIKey, maxActive int64) error {
+	panic("unexpected CreateWithActiveLimit call")
+}
+
 func (s *apiKeyRepoStub) GetByID(ctx context.Context, id int64) (*APIKey, error) {
 	if s.getByIDErr != nil {
 		return nil, s.getByIDErr

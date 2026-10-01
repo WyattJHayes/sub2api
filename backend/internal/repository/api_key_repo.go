@@ -74,6 +74,47 @@ func (r *apiKeyRepository) Create(ctx context.Context, key *service.APIKey) erro
 	return translatePersistenceError(err, nil, service.ErrAPIKeyExists)
 }
 
+// CreateWithActiveLimit holds the owner row lock until the count check and insert
+// commit, so independent application instances cannot spend the same key slot.
+func (r *apiKeyRepository) CreateWithActiveLimit(ctx context.Context, key *service.APIKey, maxActive int64) (err error) {
+	if maxActive <= 0 {
+		return r.Create(ctx, key)
+	}
+	tx, err := r.client.BeginTx(ctx, &sql.TxOptions{Isolation: sql.LevelReadCommitted})
+	if err != nil {
+		return fmt.Errorf("begin api key creation: %w", err)
+	}
+	committed := false
+	defer func() {
+		if !committed {
+			if rollbackErr := tx.Rollback(); rollbackErr != nil && !errors.Is(rollbackErr, sql.ErrTxDone) {
+				err = errors.Join(err, fmt.Errorf("rollback api key creation: %w", rollbackErr))
+			}
+		}
+	}()
+	if _, err := tx.User.Query().Where(user.IDEQ(key.UserID)).ForUpdate().OnlyID(ctx); err != nil {
+		return translatePersistenceError(err, service.ErrUserNotFound, nil)
+	}
+	transactionRepo := &apiKeyRepository{client: tx.Client()}
+	count, err := transactionRepo.CountByUserID(ctx, key.UserID)
+	if err != nil {
+		return fmt.Errorf("count api keys: %w", err)
+	}
+	if count >= maxActive {
+		return service.ErrAPIKeyCountExceeded
+	}
+	created := *key
+	if err := transactionRepo.Create(ctx, &created); err != nil {
+		return err
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit api key creation: %w", err)
+	}
+	committed = true
+	*key = created
+	return nil
+}
+
 func (r *apiKeyRepository) GetByID(ctx context.Context, id int64) (*service.APIKey, error) {
 	m, err := r.activeQuery().
 		Where(apikey.IDEQ(id)).

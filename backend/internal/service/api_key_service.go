@@ -87,6 +87,8 @@ func (f APIKeyUpdateFields) IsEmpty() bool {
 
 type APIKeyRepository interface {
 	Create(ctx context.Context, key *APIKey) error
+	// CreateWithActiveLimit serializes the final count check and insert per user.
+	CreateWithActiveLimit(ctx context.Context, key *APIKey, maxActive int64) error
 	GetByID(ctx context.Context, id int64) (*APIKey, error)
 	GetByIDIncludeDeleted(ctx context.Context, id int64) (*APIKey, error)
 	// GetKeyAndOwnerID 仅获取 API Key 的 key 与所有者 ID，用于删除等轻量场景
@@ -588,8 +590,14 @@ func (s *APIKeyService) Create(ctx context.Context, userID int64, req CreateAPIK
 		apiKey.ExpiresAt = &expiresAt
 	}
 
-	if err := s.apiKeyRepo.Create(ctx, apiKey); err != nil {
-		return nil, fmt.Errorf("create api key: %w", err)
+	var createErr error
+	if s.cfg != nil && s.cfg.APIKeyCreate.MaxActivePerUser > 0 {
+		createErr = s.apiKeyRepo.CreateWithActiveLimit(ctx, apiKey, int64(s.cfg.APIKeyCreate.MaxActivePerUser))
+	} else {
+		createErr = s.apiKeyRepo.Create(ctx, apiKey)
+	}
+	if createErr != nil {
+		return nil, fmt.Errorf("create api key: %w", createErr)
 	}
 
 	s.InvalidateAuthCacheByKey(ctx, apiKey.Key)

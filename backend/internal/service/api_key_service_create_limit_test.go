@@ -14,9 +14,12 @@ import (
 
 type createLimitAPIKeyRepoStub struct {
 	*apiKeyRepoStub
-	activeCount int64
-	countErr    error
-	created     []*APIKey
+	activeCount      int64
+	countErr         error
+	created          []*APIKey
+	limitedCreateErr error
+	limitedCalls     int
+	lastActiveLimit  int64
 }
 
 func (s *createLimitAPIKeyRepoStub) CountByUserID(ctx context.Context, userID int64) (int64, error) {
@@ -30,6 +33,15 @@ func (s *createLimitAPIKeyRepoStub) ExistsByKey(ctx context.Context, key string)
 func (s *createLimitAPIKeyRepoStub) Create(ctx context.Context, key *APIKey) error {
 	s.created = append(s.created, key)
 	return nil
+}
+
+func (s *createLimitAPIKeyRepoStub) CreateWithActiveLimit(ctx context.Context, key *APIKey, maxActive int64) error {
+	s.limitedCalls++
+	s.lastActiveLimit = maxActive
+	if s.limitedCreateErr != nil {
+		return s.limitedCreateErr
+	}
+	return s.Create(ctx, key)
 }
 
 type createLimitCacheStub struct {
@@ -155,4 +167,18 @@ func TestAPIKeyServiceCreate_RedisErrorFailsOpen(t *testing.T) {
 		_, err := svc.Create(context.Background(), 7, CreateAPIKeyRequest{Name: "k"})
 		require.NoError(t, err)
 	}
+}
+
+func TestAPIKeyServiceCreate_ConcurrentCapRecheckRejectsStaleCount(t *testing.T) {
+	repo, cache := newCreateLimitStubs()
+	// The preflight sees room, but another request fills it before the insert.
+	repo.activeCount = 0
+	repo.limitedCreateErr = ErrAPIKeyCountExceeded
+	svc := newCreateLimitService(repo, cache, 1, 0)
+
+	_, err := svc.Create(context.Background(), 7, CreateAPIKeyRequest{Name: "concurrent"})
+	require.ErrorIs(t, err, ErrAPIKeyCountExceeded)
+	require.Empty(t, repo.created)
+	require.Equal(t, 1, repo.limitedCalls)
+	require.Equal(t, int64(1), repo.lastActiveLimit)
 }

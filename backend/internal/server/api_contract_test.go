@@ -2360,6 +2360,17 @@ func (r *stubApiKeyRepo) Create(ctx context.Context, key *service.APIKey) error 
 	return nil
 }
 
+func (r *stubApiKeyRepo) CreateWithActiveLimit(ctx context.Context, key *service.APIKey, maxActive int64) error {
+	count, err := r.CountByUserID(ctx, key.UserID)
+	if err != nil {
+		return err
+	}
+	if maxActive > 0 && count >= maxActive {
+		return service.ErrAPIKeyCountExceeded
+	}
+	return r.Create(ctx, key)
+}
+
 func (r *stubApiKeyRepo) GetByID(ctx context.Context, id int64) (*service.APIKey, error) {
 	key, ok := r.byID[id]
 	if !ok {

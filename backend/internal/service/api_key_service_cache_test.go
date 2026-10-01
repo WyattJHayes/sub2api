@@ -27,6 +27,10 @@ func (s *authRepoStub) Create(ctx context.Context, key *APIKey) error {
 	panic("unexpected Create call")
 }
 
+func (s *authRepoStub) CreateWithActiveLimit(ctx context.Context, key *APIKey, maxActive int64) error {
+	panic("unexpected CreateWithActiveLimit call")
+}
+
 func (s *authRepoStub) GetByID(ctx context.Context, id int64) (*APIKey, error) {
 	panic("unexpected GetByID call")
 }
