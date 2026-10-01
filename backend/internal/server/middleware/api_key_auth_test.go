@@ -1531,6 +1531,10 @@ func (r *stubApiKeyRepo) Create(ctx context.Context, key *service.APIKey) error 
 	return errors.New("not implemented")
 }
 
+func (r *stubApiKeyRepo) CreateWithActiveLimit(ctx context.Context, key *service.APIKey, maxActive int64) error {
+	return errors.New("not implemented")
+}
+
 func (r *stubApiKeyRepo) GetByID(ctx context.Context, id int64) (*service.APIKey, error) {
 	return nil, errors.New("not implemented")
 }

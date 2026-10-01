@@ -42,8 +42,8 @@ func (s *quotaStateCacheStub) IncrementCreateAttemptCount(context.Context, int64
 	return nil
 }
 
-func (s *quotaStateCacheStub) DeleteCreateAttemptCount(context.Context, int64) error {
-	return nil
+func (s *quotaStateCacheStub) IncrementCreateCount(context.Context, int64, time.Duration) (int64, error) {
+	return 0, nil
 }
 
 func (s *quotaStateCacheStub) IncrementDailyUsage(context.Context, string) error {
@@ -81,6 +81,9 @@ type quotaBaseAPIKeyRepoStub struct {
 
 func (s *quotaBaseAPIKeyRepoStub) Create(context.Context, *APIKey) error {
 	panic("unexpected Create call")
+}
+func (s *quotaBaseAPIKeyRepoStub) CreateWithActiveLimit(context.Context, *APIKey, int64) error {
+	panic("unexpected CreateWithActiveLimit call")
 }
 func (s *quotaBaseAPIKeyRepoStub) GetByID(context.Context, int64) (*APIKey, error) {
 	s.getByIDCalls++

@@ -91,6 +91,9 @@ type fakeGoogleSubscriptionRepo struct {
 func (f fakeAPIKeyRepo) Create(ctx context.Context, key *service.APIKey) error {
 	return errors.New("not implemented")
 }
+func (f fakeAPIKeyRepo) CreateWithActiveLimit(ctx context.Context, key *service.APIKey, maxActive int64) error {
+	return errors.New("not implemented")
+}
 func (f fakeAPIKeyRepo) GetByID(ctx context.Context, id int64) (*service.APIKey, error) {
 	return nil, errors.New("not implemented")
 }

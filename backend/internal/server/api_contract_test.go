@@ -1739,8 +1739,8 @@ func (stubApiKeyCache) IncrementCreateAttemptCount(ctx context.Context, userID i
 	return nil
 }
 
-func (stubApiKeyCache) DeleteCreateAttemptCount(ctx context.Context, userID int64) error {
-	return nil
+func (stubApiKeyCache) IncrementCreateCount(ctx context.Context, userID int64, window time.Duration) (int64, error) {
+	return 0, nil
 }
 
 func (stubApiKeyCache) IncrementDailyUsage(ctx context.Context, apiKey string) error {
@@ -2358,6 +2358,17 @@ func (r *stubApiKeyRepo) Create(ctx context.Context, key *service.APIKey) error 
 	r.byID[clone.ID] = &clone
 	r.byKey[clone.Key] = &clone
 	return nil
+}
+
+func (r *stubApiKeyRepo) CreateWithActiveLimit(ctx context.Context, key *service.APIKey, maxActive int64) error {
+	count, err := r.CountByUserID(ctx, key.UserID)
+	if err != nil {
+		return err
+	}
+	if maxActive > 0 && count >= maxActive {
+		return service.ErrAPIKeyCountExceeded
+	}
+	return r.Create(ctx, key)
 }
 
 func (r *stubApiKeyRepo) GetByID(ctx context.Context, id int64) (*service.APIKey, error) {

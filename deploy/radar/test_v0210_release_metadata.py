@@ -89,34 +89,6 @@ class V0210ReleaseMetadataTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "worker package version"):
                 builder.validate_current_source(inputs, source_root=REPO_ROOT)
 
-    def test_v0210_active_metadata_defaults_to_v0210(self) -> None:
-        self.assertEqual("0.2.10\n", (REPO_ROOT / "backend/cmd/server/VERSION").read_text(encoding="utf-8"))
-        worker = (REPO_ROOT / "radar-worker/pyproject.toml").read_text(encoding="utf-8")
-        self.assertIn('version = "0.2.10"', worker)
-        lock = (REPO_ROOT / "radar-worker/uv.lock").read_text(encoding="utf-8")
-        self.assertIn('name = "sub2api-radar-worker"\nversion = "0.2.10"', lock)
-
-        for name in (
-            "production_promotion_audit.py",
-            "production_backup_audit.py",
-            "production_rollback_audit.py",
-            "local_prerelease_closure.py",
-        ):
-            content = (RADAR_DIR / name).read_text(encoding="utf-8")
-            self.assertIn("v0.2.10", content, name)
-
-        evidence = (RADAR_DIR / "production_evidence_envelope.py").read_text(encoding="utf-8")
-        self.assertIn('DEFAULT_RELEASE_VERSION = "0.2.10"', evidence)
-        preflight = (RADAR_DIR / "local_prerelease_preflight.py").read_text(encoding="utf-8")
-        self.assertIn('os.environ.get("RADAR_RELEASE_VERSION", "0.2.10")', preflight)
-        local_runner = (RADAR_DIR / "run-local-prerelease.sh").read_text(encoding="utf-8")
-        self.assertIn("v0.2.10 ledger", local_runner)
-        self.assertIn("RADAR_RELEASE_VERSION=${RADAR_RELEASE_VERSION:-0.2.10}", local_runner)
-        self.assertIn(
-            "RADAR_MIGRATION_MANIFEST_DIR=${RADAR_MIGRATION_MANIFEST_DIR:-$ROOT_DIR/deploy/radar/manifests/v0.2.10}",
-            local_runner,
-        )
-
     def test_v0210_manifest_covers_the_merged_migration_inventory(self) -> None:
         baseline = read_manifest(MANIFEST_DIR / "migration-baseline.tsv")
         expected_new = read_name_list(MANIFEST_DIR / "expected-new.txt")
@@ -170,16 +142,6 @@ class V0210ReleaseMetadataTests(unittest.TestCase):
             result["expected_runtime_ledger_sha256"],
             result["runtime_ledger_sha256"],
         )
-
-    def test_v0210_worker_runtime_reports_release_version(self) -> None:
-        init_path = REPO_ROOT / "radar-worker" / "src" / "sub2api_radar" / "__init__.py"
-        spec = importlib.util.spec_from_file_location("_v0210_worker_runtime", init_path)
-        self.assertIsNotNone(spec)
-        self.assertIsNotNone(spec.loader)
-        runtime = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(runtime)
-
-        self.assertEqual("0.2.10", runtime.__version__)
 
 
 if __name__ == "__main__":

@@ -1012,45 +1012,6 @@ func buildCodexModelsManifest(
 	}{Models: models})
 }
 
-// MarshalJSON preserves official Codex metadata fields that are not represented
-// in the local descriptor, while keeping locally derived routing fields authoritative.
-func (d configuredCodexModelDescriptor) MarshalJSON() ([]byte, error) {
-	type descriptor configuredCodexModelDescriptor
-	encoded, err := json.Marshal(descriptor(d))
-	if err != nil || len(d.officialMetadata) == 0 {
-		return encoded, err
-	}
-	var fields, official map[string]json.RawMessage
-	if err := json.Unmarshal(encoded, &fields); err != nil {
-		return nil, err
-	}
-	if err := json.Unmarshal(d.officialMetadata, &official); err != nil {
-		return nil, err
-	}
-	for key, value := range official {
-		if _, exists := fields[key]; !exists {
-			fields[key] = value
-		}
-	}
-	var messages, officialMessages map[string]json.RawMessage
-	if err := json.Unmarshal(fields["model_messages"], &messages); err != nil {
-		return nil, err
-	}
-	if err := json.Unmarshal(official["model_messages"], &officialMessages); err != nil {
-		return nil, err
-	}
-	for key, value := range officialMessages {
-		if _, exists := messages[key]; !exists {
-			messages[key] = value
-		}
-	}
-	fields["model_messages"], err = json.Marshal(messages)
-	if err != nil {
-		return nil, err
-	}
-	return json.Marshal(fields)
-}
-
 func codexCatalogMetadataModels(
 	platform string,
 	modelIDs []string,
@@ -2681,4 +2642,43 @@ func buildCodexModelsManifestURL(endpoint string, appendModelsPath bool, clientV
 	query.Set("client_version", clientVersion)
 	requestURL.RawQuery = query.Encode()
 	return requestURL, nil
+}
+
+// MarshalJSON keeps fields added by the official client, including nested tool
+// instructions, while the generated descriptor still controls routing metadata.
+func (d configuredCodexModelDescriptor) MarshalJSON() ([]byte, error) {
+	type descriptor configuredCodexModelDescriptor
+	encoded, err := json.Marshal(descriptor(d))
+	if err != nil || len(d.officialMetadata) == 0 {
+		return encoded, err
+	}
+	var fields, official map[string]json.RawMessage
+	if err := json.Unmarshal(encoded, &fields); err != nil {
+		return nil, err
+	}
+	if err := json.Unmarshal(d.officialMetadata, &official); err != nil {
+		return nil, err
+	}
+	for key, value := range official {
+		if _, exists := fields[key]; !exists {
+			fields[key] = value
+		}
+	}
+	var messages, officialMessages map[string]json.RawMessage
+	if err := json.Unmarshal(fields["model_messages"], &messages); err != nil {
+		return nil, err
+	}
+	if err := json.Unmarshal(official["model_messages"], &officialMessages); err != nil {
+		return nil, err
+	}
+	for key, value := range officialMessages {
+		if _, exists := messages[key]; !exists {
+			messages[key] = value
+		}
+	}
+	fields["model_messages"], err = json.Marshal(messages)
+	if err != nil {
+		return nil, err
+	}
+	return json.Marshal(fields)
 }
