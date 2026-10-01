@@ -81,8 +81,8 @@ var instructionsGPT55 string
 //go:embed instructions_gpt6_astra.txt
 var instructionsGPT6Astra string
 
-// CodexGPT61SolMetadata is the official Codex model descriptor used to select
-// the GPT-6.1 Sol instructions template.
+// CodexGPT61SolMetadata is the complete official descriptor from openai/codex
+// b1e72963c3b71a9265a551e54beff078384efed9, codex-rs/models-manager/models.json.
 //
 //go:embed codex_gpt61_sol.json
 var CodexGPT61SolMetadata []byte
@@ -179,8 +179,26 @@ func CodexBaseInstructionsForModel(model string) string {
 	return latestCodexInstructions()
 }
 
-// IsGPT61SolModelSpelling recognizes the published model and local effort or
-// compact spellings without accepting unrelated model IDs.
+// IsGPT6SolOrLunaModelSpelling recognizes official IDs and existing local effort/compact suffixes.
+func IsGPT6SolOrLunaModelSpelling(model string) bool {
+	canonical := CanonicalizeOpenAIModelAliasSpelling(model)
+	for _, base := range []string{"gpt-6-sol", "gpt-6-luna"} {
+		if canonical == base {
+			return true
+		}
+		suffix, ok := strings.CutPrefix(canonical, base+"-")
+		if ok {
+			switch suffix {
+			case "none", "low", "medium", "high", "xhigh", "max", "openai-compact":
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// IsGPT61SolModelSpelling recognizes the published model and local effort/compact
+// spellings. Invalid effort suffixes remain identifiable for request validation.
 func IsGPT61SolModelSpelling(model string) bool {
 	canonical := CanonicalizeOpenAIModelAliasSpelling(model)
 	if canonical == "gpt-6.1-sol" {
@@ -198,7 +216,8 @@ func IsGPT61SolModelSpelling(model string) bool {
 	}
 }
 
-// ValidateGPT61SolReasoningEffort rejects disabled reasoning for GPT-6.1 Sol.
+// ValidateGPT61SolReasoningEffort rejects disabled reasoning instead of silently
+// increasing the client's requested effort on compatibility paths.
 func ValidateGPT61SolReasoningEffort(model, effort string) error {
 	if IsGPT61SolModelSpelling(model) {
 		switch strings.ToLower(strings.TrimSpace(effort)) {
@@ -207,22 +226,4 @@ func ValidateGPT61SolReasoningEffort(model, effort string) error {
 		}
 	}
 	return nil
-}
-
-// IsGPT6SolOrLunaModelSpelling recognizes official IDs and existing local effort/compact suffixes.
-func IsGPT6SolOrLunaModelSpelling(model string) bool {
-	canonical := CanonicalizeOpenAIModelAliasSpelling(model)
-	for _, base := range []string{"gpt-6-sol", "gpt-6-luna"} {
-		if canonical == base {
-			return true
-		}
-		suffix, ok := strings.CutPrefix(canonical, base+"-")
-		if ok {
-			switch suffix {
-			case "none", "low", "medium", "high", "xhigh", "max", "openai-compact":
-				return true
-			}
-		}
-	}
-	return false
 }

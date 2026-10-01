@@ -93,3 +93,13 @@ jobs:
       - run: python -m pip install -r .github/release-tools/requirements-release.txt
       - run: python -m unittest discover -s .github/release-tools -p 'test_release_matrix.py'
       - run: bash -n .github/release-tools/release-images.sh
+      - name: Verify Radar release identity and migration ledger
+        run: |
+          python -m unittest \
+            deploy.radar.test_v0211_release_metadata \
+            deploy.radar.test_migration_ledger \
+            deploy.radar.test_production_evidence_envelope \
+            deploy.radar.test_production_promotion_audit \
+            deploy.radar.test_production_backup_audit \
+            deploy.radar.test_production_rollback_audit \
+            deploy.radar.test_local_prerelease_preflight

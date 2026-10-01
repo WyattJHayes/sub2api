@@ -229,7 +229,7 @@ def build_bound_backup(
             Path(
                 os.environ.get(
                     "RADAR_MIGRATION_MANIFEST_DIR",
-                    str(Path(__file__).resolve().parent / "manifests" / "v0.2.10"),
+                    str(Path(__file__).resolve().parent / "manifests" / "v0.2.11"),
                 )
             ).resolve()
         )
