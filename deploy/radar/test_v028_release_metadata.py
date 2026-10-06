@@ -86,6 +86,10 @@ class V028ReleaseMetadataTests(unittest.TestCase):
         for name in V029_MIGRATIONS:
             self.assertIn(name, candidate)
             candidate.pop(name)
+        # Exclude only the reviewed migrations introduced after this release.
+        for name in ("241_add_payment_order_bonus_amount.sql", "241_add_typesafe_platform.sql"):
+            self.assertIn(name, candidate)
+            candidate.pop(name)
         result = audit_candidate(
             baseline,
             candidate,
@@ -102,7 +106,7 @@ class V028ReleaseMetadataTests(unittest.TestCase):
         self.assertEqual(316, result["candidate_file_count"])
         self.assertEqual([], result["checksum_mismatches"])
 
-    def test_historical_rehearsal_stays_on_v028_and_active_tools_default_to_v0211(self) -> None:
+    def test_historical_rehearsal_stays_on_v028_and_active_tools_default_to_v0213(self) -> None:
         historical = (RADAR_DIR / "rehearse-v01171-migrations.sh").read_text(encoding="utf-8")
         self.assertIn("v0.2.8", historical)
 
@@ -113,12 +117,12 @@ class V028ReleaseMetadataTests(unittest.TestCase):
             "local_prerelease_closure.py",
         ):
             content = (RADAR_DIR / name).read_text(encoding="utf-8")
-            self.assertIn("v0.2.11", content, name)
+            self.assertIn("v0.2.13", content, name)
 
         evidence = (RADAR_DIR / "production_evidence_envelope.py").read_text(encoding="utf-8")
-        self.assertIn('DEFAULT_RELEASE_VERSION = "0.2.11"', evidence)
+        self.assertIn('DEFAULT_RELEASE_VERSION = "0.2.13"', evidence)
         preflight = (RADAR_DIR / "local_prerelease_preflight.py").read_text(encoding="utf-8")
-        self.assertIn('os.environ.get("RADAR_RELEASE_VERSION", "0.2.11")', preflight)
+        self.assertIn('os.environ.get("RADAR_RELEASE_VERSION", "0.2.13")', preflight)
 
 
 if __name__ == "__main__":
