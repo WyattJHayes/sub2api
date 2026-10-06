@@ -30,7 +30,9 @@ func (c timingFakeConnector) Connect(context.Context) (driver.Conn, error) {
 
 func (timingFakeConnector) Driver() driver.Driver { return timingFakeDriver{} }
 
-type timingFakeConn struct{}
+type timingFakeConn struct {
+	execDelay time.Duration
+}
 
 func newTimingFakeConn() *timingFakeConn { return &timingFakeConn{} }
 
@@ -57,7 +59,11 @@ func (c *timingFakeConn) BeginTx(context.Context, driver.TxOptions) (driver.Tx, 
 }
 
 func (c *timingFakeConn) ExecContext(context.Context, string, []driver.NamedValue) (driver.Result, error) {
-	time.Sleep(fakeDriverDelay)
+	delay := c.execDelay
+	if delay == 0 {
+		delay = fakeDriverDelay
+	}
+	time.Sleep(delay)
 	return driver.RowsAffected(1), nil
 }
 
@@ -150,11 +156,26 @@ func metricDuration(t *testing.T, header, metric string) float64 {
 }
 
 func TestServerTimingConnectorRecordsDriverCallsWithoutRowLifetime(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		execDelay time.Duration
+	}{
+		{name: "normal_driver", execDelay: fakeDriverDelay},
+		{name: "slow_driver", execDelay: 50 * time.Millisecond},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			testServerTimingDriverCallsWithoutRowLifetime(t, tc.execDelay)
+		})
+	}
+}
+
+func testServerTimingDriverCallsWithoutRowLifetime(t *testing.T, execDelay time.Duration) {
+	t.Helper()
 	startedAt := time.Now()
 	collector := servertiming.New(startedAt)
 	ctx := servertiming.WithCollector(context.Background(), collector)
 
-	wrapped := newServerTimingConnector(timingFakeConnector{conn: newTimingFakeConn()})
+	wrapped := newServerTimingConnector(timingFakeConnector{conn: &timingFakeConn{execDelay: execDelay}})
 	rawConn, err := wrapped.Connect(ctx)
 	if err != nil {
 		t.Fatal(err)
@@ -177,7 +198,15 @@ func TestServerTimingConnectorRecordsDriverCallsWithoutRowLifetime(t *testing.T)
 	}
 
 	// Application work between row reads must remain app time.
+	gapStartedAt := time.Now()
+	dbBeforeGap := metricDuration(t, collector.HeaderValue(gapStartedAt, "bypass"), "db")
 	time.Sleep(30 * time.Millisecond)
+	gapEndedAt := time.Now()
+	gapMilliseconds := float64(gapEndedAt.Sub(gapStartedAt)) / float64(time.Millisecond)
+	dbAfterGap := metricDuration(t, collector.HeaderValue(gapEndedAt, "bypass"), "db")
+	if dbAfterGap != dbBeforeGap {
+		t.Fatalf("DB time increased between driver calls: before=%.1fms after=%.1fms", dbBeforeGap, dbAfterGap)
+	}
 	if err := rows.Next(values); err != io.EOF {
 		t.Fatalf("rows.Next() = %v, want EOF", err)
 	}
@@ -192,8 +221,11 @@ func TestServerTimingConnectorRecordsDriverCallsWithoutRowLifetime(t *testing.T)
 	if strings.Contains(header, "sensitive") {
 		t.Fatalf("SQL text leaked into header: %q", header)
 	}
-	if app, db := metricDuration(t, header, "app"), metricDuration(t, header, "db"); app <= db {
-		t.Fatalf("row processing gap was counted as DB time: app=%.1fms db=%.1fms header=%q", app, db, header)
+	// Header durations are rounded to one decimal millisecond. Database calls
+	// may be slower than the application gap, so their relative sizes do not
+	// establish whether the gap was excluded from database time.
+	if app := metricDuration(t, header, "app"); app+0.05 < gapMilliseconds {
+		t.Fatalf("row processing gap was counted as DB time: app=%.1fms gap=%.3fms header=%q", app, gapMilliseconds, header)
 	}
 }
 
