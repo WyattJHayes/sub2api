@@ -80,8 +80,9 @@ import { update as updateAccount } from '@/api/admin/accounts'
 import { extractApiErrorMessage } from '@/utils/apiError'
 import type { Account } from '@/types'
 
-const MIN_PRIORITY = 1
-const MAX_PRIORITY = 9999
+const MIN_PRIORITY = 0
+// accounts.priority is a PostgreSQL INT; preserve its nonnegative range.
+const MAX_PRIORITY = 2147483647
 // 连续点击时合并为一次保存，避免每次 +/- 都打一次接口
 const SAVE_DEBOUNCE_MS = 450
 

@@ -23,6 +23,31 @@ afterEach(() => {
 })
 
 describe('AccountPriorityCell', () => {
+  it.each([0, 100000])('preserves unchanged supported priority %i', async (priority) => {
+    const wrapper = mountCell(account({ priority }))
+    await wrapper.get('[data-testid="account-priority-value"]').trigger('click')
+    await wrapper.get('[data-testid="account-priority-input"]').trigger('keydown', { key: 'Enter' })
+    await flushPromises()
+    expect(update).not.toHaveBeenCalled()
+    expect(wrapper.get('[data-testid="account-priority-value"]').text()).toBe(String(priority))
+  })
+
+  it('decrements a large priority by exactly one', async () => {
+    const wrapper = mountCell(account({ priority: 100000 }))
+    await wrapper.get('[data-testid="account-priority-decrement"]').trigger('click')
+    await vi.runAllTimersAsync()
+    await flushPromises()
+    expect(update).toHaveBeenCalledWith(7, { priority: 99999 })
+  })
+
+  it('allows decrementing one to zero', async () => {
+    const wrapper = mountCell(account({ priority: 1 }))
+    await wrapper.get('[data-testid="account-priority-decrement"]').trigger('click')
+    await vi.runAllTimersAsync()
+    await flushPromises()
+    expect(update).toHaveBeenCalledWith(7, { priority: 0 })
+  })
+
   it('batches rapid +/- clicks into a single priority-only update', async () => {
     const wrapper = mountCell()
     await wrapper.get('[data-testid="account-priority-increment"]').trigger('click')
@@ -39,8 +64,8 @@ describe('AccountPriorityCell', () => {
     expect(wrapper.emitted('updated')?.[0]?.[0]).toMatchObject({ id: 7, priority: 4 })
   })
 
-  it('does not go below 1', async () => {
-    const wrapper = mountCell(account({ priority: 1 }))
+  it('does not go below zero', async () => {
+    const wrapper = mountCell(account({ priority: 0 }))
     const dec = wrapper.get('[data-testid="account-priority-decrement"]')
     expect(dec.attributes('disabled')).toBeDefined()
     // 到达下限时按钮仍应随悬停显隐，而不是常驻半透明
