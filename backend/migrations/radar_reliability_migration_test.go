@@ -175,8 +175,8 @@ func TestMigrationInventoryPreservesAppliedFiles(t *testing.T) {
 	if err != nil {
 		t.Fatalf("list SQL migrations: %v", err)
 	}
-	if len(paths) != 319 {
-		t.Fatalf("controlled source must contain 319 SQL migrations, found %d", len(paths))
+	if len(paths) != 321 {
+		t.Fatalf("controlled source must contain 321 SQL migrations, found %d", len(paths))
 	}
 
 	expected := map[string]string{
@@ -195,6 +195,8 @@ func TestMigrationInventoryPreservesAppliedFiles(t *testing.T) {
 		"239_channel_reasoning_effort_multipliers.sql":         "12a03c49e6c9c15edbbc992e36cbc140da849556176569fd987ade49610707ac",
 		"240_add_radar_plan_schedule.sql":                      "482db7056de0778559b52a74cd76a570e356b62af824d0d969088006bfd2c973",
 		"240_affiliate_ledger_operation_id.sql":                "74da6bfc98405c437891be026cc53dc1f1909f89d2fc79c426bdfffcd709d38f",
+		"241_add_payment_order_bonus_amount.sql":               "ddd45f14154ea6d6b5b612bee7eb49436e1f2a1665f9a71eb8304e48475ed12d",
+		"241_add_typesafe_platform.sql":                        "419fceaa3e6f1bd089a454fda30b9d343a83fff75ad3b6dffdc44287bf99d171",
 	}
 	for name, want := range expected {
 		contents, err := os.ReadFile(name)

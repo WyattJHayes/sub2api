@@ -97,6 +97,10 @@ class V0210ReleaseMetadataTests(unittest.TestCase):
             (MANIFEST_DIR / "duplicate-aliases.json").read_text(encoding="utf-8")
         )
         candidate = candidate_manifest(REPO_ROOT / "backend" / "migrations")
+        # This audit describes the v0.2.10 snapshot, before the v0.2.13 additions.
+        for name in ("241_add_payment_order_bonus_amount.sql", "241_add_typesafe_platform.sql"):
+            self.assertIn(name, candidate)
+            candidate.pop(name)
         result = audit_candidate(
             baseline,
             candidate,
@@ -121,6 +125,9 @@ class V0210ReleaseMetadataTests(unittest.TestCase):
             (MANIFEST_DIR / "duplicate-aliases.json").read_text(encoding="utf-8")
         )
         candidate = candidate_manifest(REPO_ROOT / "backend" / "migrations")
+        for name in ("241_add_payment_order_bonus_amount.sql", "241_add_typesafe_platform.sql"):
+            self.assertIn(name, candidate)
+            candidate.pop(name)
         actual = dict(baseline)
         actual.update({name: candidate[name] for name in expected_new})
 
