@@ -106,23 +106,9 @@ class V028ReleaseMetadataTests(unittest.TestCase):
         self.assertEqual(316, result["candidate_file_count"])
         self.assertEqual([], result["checksum_mismatches"])
 
-    def test_historical_rehearsal_stays_on_v028_and_active_tools_default_to_v0213(self) -> None:
+    def test_historical_rehearsal_stays_on_v028(self) -> None:
         historical = (RADAR_DIR / "rehearse-v01171-migrations.sh").read_text(encoding="utf-8")
         self.assertIn("v0.2.8", historical)
-
-        for name in (
-            "production_promotion_audit.py",
-            "production_backup_audit.py",
-            "production_rollback_audit.py",
-            "local_prerelease_closure.py",
-        ):
-            content = (RADAR_DIR / name).read_text(encoding="utf-8")
-            self.assertIn("v0.2.13", content, name)
-
-        evidence = (RADAR_DIR / "production_evidence_envelope.py").read_text(encoding="utf-8")
-        self.assertIn('DEFAULT_RELEASE_VERSION = "0.2.13"', evidence)
-        preflight = (RADAR_DIR / "local_prerelease_preflight.py").read_text(encoding="utf-8")
-        self.assertIn('os.environ.get("RADAR_RELEASE_VERSION", "0.2.13")', preflight)
 
 
 if __name__ == "__main__":

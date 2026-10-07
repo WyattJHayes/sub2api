@@ -40,6 +40,56 @@ describe('UseKeyModal', () => {
     saveAsMock.mockClear()
   })
 
+  it.each([
+    ['openai', 'keys.useKeyModal.cliTabs.codexCli', 'legacy'],
+    ['openai', 'keys.useKeyModal.cliTabs.codexCli', 'api-key'],
+    ['openai', 'keys.useKeyModal.cliTabs.codexCliWs', 'legacy'],
+    ['openai', 'keys.useKeyModal.cliTabs.codexCliWs', 'api-key'],
+    ['grok', 'keys.useKeyModal.cliTabs.codexCli', 'legacy'],
+    ['composite', 'keys.useKeyModal.cliTabs.codexCli', 'legacy']
+  ] as const)('enables API-key discovery only for remote catalogs (%s, %s, %s)', async (platform, transport, authMode) => {
+    const fetchMock = vi.fn()
+    vi.stubGlobal('fetch', fetchMock)
+    const wrapper = mount(UseKeyModal, {
+      props: { show: true, apiKey: 'sk-config-fixture', baseUrl: 'https://example.com/v1', platform },
+      global: {
+        stubs: {
+          BaseDialog: { template: '<div><slot /><slot name="footer" /></div>' },
+          Icon: { template: '<span />' }
+        }
+      }
+    })
+    await wrapper.findAll('button').find((button) => button.text().trim() === transport)!.trigger('click')
+    if (authMode === 'api-key') {
+      await wrapper.get('[data-testid="codex-auth-mode-api-key"]').trigger('click')
+    }
+    for (const os of ['macOS / Linux', 'Windows']) {
+      await wrapper.findAll('button').find((button) => button.text().trim() === os)!.trigger('click')
+      for (const mode of ['remote', 'file', 'remote']) {
+        await wrapper.get('[data-testid="codex-model-catalog-mode"]').setValue(mode)
+        const config = wrapper.findAll('pre code').map((code) => code.text())
+          .find((content) => content.includes('model_provider ='))!
+        expect(config).toBeDefined()
+        const featureLines = config.split(/\r?\n/).filter((line) => !line.trimStart().startsWith('#'))
+        const featureIndex = featureLines.indexOf('[features]')
+        const discoveryIndex = featureLines.indexOf('api_key_model_discovery = true')
+        if (mode === 'remote') {
+          expect(config).toContain('model_catalog_url = "https://example.com/v1/models"')
+          expect(discoveryIndex).toBeGreaterThan(featureIndex)
+          expect(featureIndex).toBeGreaterThanOrEqual(0)
+          expect(featureLines.slice(featureIndex + 1, discoveryIndex).some((line) => line.startsWith('['))).toBe(false)
+          expect(config).not.toContain('model_catalog_json')
+        } else {
+          expect(config).toContain('model_catalog_json = "~/.codex/codex-models.json"')
+          expect(discoveryIndex).toBe(-1)
+          expect(config).not.toContain('model_catalog_url')
+        }
+      }
+    }
+    expect(fetchMock).not.toHaveBeenCalled()
+    wrapper.unmount()
+  })
+
   it('shows only Claude Code for Claude Code-only groups', async () => {
     const wrapper = mount(UseKeyModal, {
       props: {
@@ -415,7 +465,7 @@ describe('UseKeyModal', () => {
     expect(configToml).not.toContain('image_generation')
     expect(configToml).not.toContain('supports_websockets')
     expect(configToml).not.toContain('responses_websockets_v2')
-    expect(configToml).toContain('[features]\ngoals = true')
+    expect(configToml).toContain('[features]\napi_key_model_discovery = true\ngoals = true')
     expect(configToml).not.toContain('model_reasoning_effort = "xhigh"')
     expect(codeBlocks).toContain('{\n  "OPENAI_API_KEY": "sk-test"\n}')
     expect(wrapper.text()).toContain('auth.json')
@@ -557,7 +607,7 @@ describe('UseKeyModal', () => {
     expect(configToml).not.toContain('env_key')
     expect(configToml).not.toContain('image_generation')
     expect(configToml).toContain('supports_websockets = true')
-    expect(configToml).toContain('[features]\nresponses_websockets_v2 = true\ngoals = true')
+    expect(configToml).toContain('[features]\napi_key_model_discovery = true\nresponses_websockets_v2 = true\ngoals = true')
     expect(codeBlocks).toContain('{\n  "OPENAI_API_KEY": "sk-test"\n}')
     expect(wrapper.text()).toContain('auth.json')
   })
@@ -605,7 +655,7 @@ describe('UseKeyModal', () => {
     expect(configToml).not.toContain('env_key')
     expect(configToml).not.toContain('image_generation')
     expect(configToml).toContain('supports_websockets = true')
-    expect(configToml).toContain('[features]\nresponses_websockets_v2 = true\ngoals = true')
+    expect(configToml).toContain('[features]\napi_key_model_discovery = true\nresponses_websockets_v2 = true\ngoals = true')
     expect(codeBlocks).not.toContain('{\n  "OPENAI_API_KEY": "sk-test"\n}')
     expect(wrapper.text()).not.toContain('auth.json')
   })

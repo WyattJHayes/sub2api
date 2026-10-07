@@ -1,10 +1,11 @@
 import { describe, expect, it, vi, beforeEach, afterEach } from 'vitest'
 import { flushPromises, mount } from '@vue/test-utils'
 import { defineComponent, ref } from 'vue'
+import * as XLSX from 'xlsx'
 
 import UsageView from '../UsageView.vue'
 
-const { list, exportList, getStats, getSnapshotV2, getById, getModelStats, listErrorLogs, routeQuery, aoaToSheet, sheetAddAoa, saveAs, xlsxWrite } = vi.hoisted(() => {
+const { list, exportList, getStats, getSnapshotV2, getById, getModelStats, listErrorLogs, routeQuery, saveAs, showError } = vi.hoisted(() => {
   vi.stubGlobal('localStorage', {
     getItem: vi.fn(() => null),
     setItem: vi.fn(),
@@ -20,10 +21,8 @@ const { list, exportList, getStats, getSnapshotV2, getById, getModelStats, listE
     getModelStats: vi.fn(),
     listErrorLogs: vi.fn(),
     routeQuery: {} as Record<string, string>,
-		aoaToSheet: vi.fn(() => ({})),
-		sheetAddAoa: vi.fn(),
 		saveAs: vi.fn(),
-		xlsxWrite: vi.fn(() => new Uint8Array([1, 2, 3])),
+    showError: vi.fn(),
   }
 })
 
@@ -73,23 +72,13 @@ vi.mock('@/api/admin/usage', () => ({
 
 vi.mock('file-saver', () => ({ saveAs }))
 
-vi.mock('xlsx', () => ({
-	utils: {
-		aoa_to_sheet: aoaToSheet,
-		sheet_add_aoa: sheetAddAoa,
-		book_new: vi.fn(() => ({})),
-		book_append_sheet: vi.fn(),
-	},
-	write: xlsxWrite,
-}))
-
 vi.mock('@/api/admin/ops', () => ({
   listErrorLogs,
 }))
 
 vi.mock('@/stores/app', () => ({
   useAppStore: () => ({
-    showError: vi.fn(),
+    showError,
     showWarning: vi.fn(),
     showSuccess: vi.fn(),
     showInfo: vi.fn(),
@@ -737,24 +726,25 @@ describe('admin UsageView ranking tab', () => {
 })
 
 describe('admin UsageView model audit export', () => {
+  const exportLog = {
+    id: 1,
+    created_at: '2026-08-04T00:00:00Z',
+    model: 'gpt-5.6-sol',
+    upstream_model: 'gpt-5.5',
+    upstream_response_model: 'gpt-5.4',
+    upstream_model_mismatch: true,
+    request_type: 'sync',
+    input_tokens: 1,
+    output_tokens: 1,
+    cache_read_tokens: 0,
+    cache_creation_tokens: 0,
+    duration_ms: 10,
+  }
 	beforeEach(() => {
 		vi.useFakeTimers()
 		list.mockReset().mockResolvedValue({ items: [], total: 0, pages: 0 })
 		exportList.mockReset().mockResolvedValue({
-			items: [{
-				id: 1,
-				created_at: '2026-08-04T00:00:00Z',
-				model: 'gpt-5.6-sol',
-				upstream_model: 'gpt-5.5',
-				upstream_response_model: 'gpt-5.4',
-				upstream_model_mismatch: true,
-				request_type: 'sync',
-				input_tokens: 1,
-				output_tokens: 1,
-				cache_read_tokens: 0,
-				cache_creation_tokens: 0,
-				duration_ms: 10,
-			}],
+      items: [exportLog],
 			total: 1,
 			pages: 1,
 		})
@@ -764,15 +754,32 @@ describe('admin UsageView model audit export', () => {
 		})
 		getSnapshotV2.mockReset().mockResolvedValue({ trend: [], models: [], groups: [] })
 		getModelStats.mockReset().mockResolvedValue({ models: [] })
-		aoaToSheet.mockClear()
-		sheetAddAoa.mockClear()
 		saveAs.mockClear()
-		xlsxWrite.mockClear()
+    showError.mockClear()
 	})
 
 	afterEach(() => {
 		vi.useRealTimers()
+    vi.restoreAllMocks()
 	})
+
+  const readExport = async () => {
+    expect(saveAs).toHaveBeenCalledTimes(1)
+    const [blob, filename] = saveAs.mock.calls[0] as [Blob, string]
+    expect(blob.type).toBe('application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')
+    expect(filename).toMatch(/^usage_\d{4}-\d{2}-\d{2}_to_\d{4}-\d{2}-\d{2}\.xlsx$/)
+    vi.useRealTimers()
+    const data = await new Promise<ArrayBuffer>((resolve, reject) => {
+      const reader = new FileReader()
+      reader.onload = () => resolve(reader.result as ArrayBuffer)
+      reader.onerror = () => reject(reader.error)
+      reader.readAsArrayBuffer(blob)
+    })
+    const workbook = XLSX.read(data, { type: 'array' })
+    expect(workbook.SheetNames).toEqual(['Usage'])
+    const sheet = workbook.Sheets.Usage
+    return { sheet, rows: XLSX.utils.sheet_to_json<unknown[]>(sheet, { header: 1, defval: '' }) }
+  }
 
 	it('exports requested, sent, response, and mismatch as separate admin columns', async () => {
 		const wrapper = mountRouteFilteredUsageView()
@@ -788,15 +795,98 @@ describe('admin UsageView model audit export', () => {
 			expect.anything()
 		)
 
-		const headers = aoaToSheet.mock.calls[0][0][0]
+		const { rows, sheet } = await readExport()
+    const headers = rows[0]
+    expect(headers).toHaveLength(33)
 		expect(headers.slice(4, 8)).toEqual([
 			'Requested model',
 			'Sent upstream model',
 			'Upstream response model',
 			'Upstream model mismatch',
 		])
-		const row = sheetAddAoa.mock.calls[0][1][0]
+		const row = rows[1]
 		expect(row.slice(4, 8)).toEqual(['gpt-5.6-sol', 'gpt-5.5', 'gpt-5.4', 'Yes'])
-		expect(saveAs).toHaveBeenCalledTimes(1)
+    expect(sheet.O2).toMatchObject({ t: 'n', v: 1 })
+    expect(sheet.AC2).toMatchObject({ t: 'n', v: 10 })
 	})
+
+  it.each(['=1+1', '+SUM(1,2)', '-1+1', '@SUM(1,2)', '\t=1+1', '\r=1+1'])(
+    'preserves formula-like text %j as string cells without formulas', async (value) => {
+      exportList.mockResolvedValue({ items: [{
+        ...exportLog, model: value,
+        user: { email: value }, api_key: { name: value }, account: { name: value },
+        group: { name: value }, upstream_model: value, upstream_response_model: value,
+        request_id: value, upstream_request_id: value, user_agent: value,
+      }], total: 1 })
+      const wrapper = mountRouteFilteredUsageView()
+      await flushPromises()
+      await (wrapper.vm as any).exportToExcel()
+      const { sheet } = await readExport()
+      for (const address of ['B2', 'C2', 'D2', 'E2', 'F2', 'G2', 'K2', 'AD2', 'AE2', 'AF2']) {
+        expect(sheet[address]).toMatchObject({ t: 's', v: value })
+        expect(sheet[address].f).toBeUndefined()
+      }
+    }
+  )
+
+  it('exports all pages in order with Unicode text and fixed cost precision', async () => {
+    const first = { ...exportLog, model: '中文模型', input_cost: 0.1234567, total_cost: 1.25 }
+    exportList.mockResolvedValueOnce({ items: Array.from({ length: 100 }, () => first), total: 101 })
+      .mockResolvedValueOnce({ items: [{ ...first, model: '最后一条' }], total: 101 })
+    const wrapper = mountRouteFilteredUsageView()
+    await flushPromises()
+    await (wrapper.vm as any).exportToExcel()
+    const { sheet, rows } = await readExport()
+    expect(exportList).toHaveBeenCalledTimes(2)
+    expect(exportList.mock.calls.map(([params]) => [params.page, params.page_size])).toEqual([[1, 100], [2, 100]])
+    expect(rows).toHaveLength(102)
+    expect(rows[1][4]).toBe('中文模型')
+    expect(rows[101][4]).toBe('最后一条')
+    expect(sheet.S2).toMatchObject({ t: 's', v: '0.123457' })
+    expect(sheet.Y2).toMatchObject({ t: 's', v: '1.250000' })
+  })
+
+  it('exports headers only for an empty result', async () => {
+    exportList.mockResolvedValue({ items: [], total: 0 })
+    const wrapper = mountRouteFilteredUsageView()
+    await flushPromises()
+    await (wrapper.vm as any).exportToExcel()
+    const { rows } = await readExport()
+    expect(rows).toHaveLength(1)
+    expect(rows[0]).toHaveLength(33)
+    expect(exportList).toHaveBeenCalledTimes(1)
+  })
+
+  it('does not download partial data after cancellation', async () => {
+    const wrapper = mountRouteFilteredUsageView()
+    await flushPromises()
+    const view = wrapper.vm as any
+    exportList.mockResolvedValueOnce({ items: Array.from({ length: 100 }, () => exportLog), total: 101 })
+      .mockImplementationOnce(async (_params, { signal }) => {
+        view.cancelExport()
+        expect(signal.aborted).toBe(true)
+        return { items: [exportLog], total: 101 }
+      })
+    await view.exportToExcel()
+    expect(exportList).toHaveBeenCalledTimes(2)
+    expect(saveAs).not.toHaveBeenCalled()
+    expect(view.exporting).toBe(false)
+    expect(view.exportProgress.show).toBe(false)
+  })
+
+  it('reports a later-page failure without downloading a partial workbook', async () => {
+    const error = new Error('export page unavailable')
+    const logError = vi.spyOn(console, 'error').mockImplementation(() => {})
+    exportList.mockResolvedValueOnce({ items: Array.from({ length: 100 }, () => exportLog), total: 101 })
+      .mockRejectedValueOnce(error)
+    const wrapper = mountRouteFilteredUsageView()
+    await flushPromises()
+    await (wrapper.vm as any).exportToExcel()
+    expect(exportList).toHaveBeenCalledTimes(2)
+    expect(saveAs).not.toHaveBeenCalled()
+    expect(logError).toHaveBeenCalledWith('Failed to export:', error)
+    expect(showError).toHaveBeenCalledWith('Export Failed')
+    expect((wrapper.vm as any).exporting).toBe(false)
+    expect((wrapper.vm as any).exportProgress.show).toBe(false)
+  })
 })
