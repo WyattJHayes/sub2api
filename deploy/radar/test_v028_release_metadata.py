@@ -83,6 +83,8 @@ class V028ReleaseMetadataTests(unittest.TestCase):
         expected_new = read_name_list(MANIFEST_DIR / "expected-new.txt")
         legacy_entries = read_name_list(MANIFEST_DIR / "legacy-entries.txt")
         candidate = candidate_manifest(REPO_ROOT / "backend" / "migrations")
+        self.assertIn("242_drop_platform_check_constraints.sql", candidate)
+        candidate.pop("242_drop_platform_check_constraints.sql")
         for name in V029_MIGRATIONS:
             self.assertIn(name, candidate)
             candidate.pop(name)
