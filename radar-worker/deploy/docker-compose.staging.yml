@@ -13,6 +13,7 @@ services:
     pull_policy: ${RADAR_IMAGE_PULL_POLICY:-build}
     restart: unless-stopped
     entrypoint: ["/usr/local/bin/radar-runner"]
+    stop_grace_period: ${RADAR_WORKER_STOP_GRACE_PERIOD:-180s}
     environment:
       RADAR_CONTROL_PLANE_URL: ${RADAR_CONTROL_PLANE_URL:-http://sub2api-staging:8080}
       RADAR_ALLOW_INSECURE_HTTP: ${RADAR_ALLOW_INSECURE_HTTP:-true}
@@ -58,6 +59,7 @@ services:
         RADAR_WORKER_BASE_IMAGE: ${RADAR_WORKER_BASE_IMAGE:-sub2api/radar-worker:staging}
     restart: unless-stopped
     entrypoint: ["/usr/local/bin/radar-grader"]
+    stop_grace_period: ${RADAR_WORKER_STOP_GRACE_PERIOD:-180s}
     environment:
       RADAR_CONTROL_PLANE_URL: ${RADAR_CONTROL_PLANE_URL:-http://sub2api-staging:8080}
       RADAR_ALLOW_INSECURE_HTTP: ${RADAR_ALLOW_INSECURE_HTTP:-true}
@@ -100,6 +102,7 @@ services:
         RADAR_WORKER_BASE_IMAGE: ${RADAR_WORKER_BASE_IMAGE:-sub2api/radar-worker:staging}
     restart: unless-stopped
     entrypoint: ["/usr/local/bin/radar-statistics"]
+    stop_grace_period: ${RADAR_WORKER_STOP_GRACE_PERIOD:-180s}
     environment:
       RADAR_CONTROL_PLANE_URL: ${RADAR_CONTROL_PLANE_URL:-http://sub2api-staging:8080}
       RADAR_ALLOW_INSECURE_HTTP: ${RADAR_ALLOW_INSECURE_HTTP:-true}
