@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"crypto/sha256"
 	"fmt"
 	"io"
 	"log/slog"
@@ -189,8 +190,8 @@ func (s *OpenAIGatewayService) modelCatalogProtocols(ctx context.Context, accoun
 		return nil
 	}
 	url := buildOpenAIModelsURL(base)
-	key := modelProtocolCatalogKey(account, url)
 	headers := modelProtocolCatalogHeaders(account, url)
+	key := modelProtocolCatalogKey(account, url, headers)
 	proxyURL := ""
 	if account.ProxyID != nil && account.Proxy != nil {
 		proxyURL = account.Proxy.URL()
@@ -209,10 +210,19 @@ func (s *OpenAIGatewayService) modelCatalogProtocols(ctx context.Context, accoun
 	})
 }
 
-// modelProtocolCatalogKey 按账号和地址隔离目录及刷新退避，避免一个账号的目录或
-// 鉴权失败影响同地址的其他账号。
-func modelProtocolCatalogKey(account *Account, url string) string {
-	return fmt.Sprintf("%s#account=%d", url, account.ID)
+// modelProtocolCatalogKey 按账号、地址和生效请求头隔离目录及刷新退避。
+// 凭据或租户变更后立即使用新目录；缓存键只保存请求头指纹，不保存明文凭据。
+func modelProtocolCatalogKey(account *Account, url string, headers http.Header) string {
+	names := make([]string, 0, len(headers))
+	for name := range headers {
+		names = append(names, name)
+	}
+	slices.Sort(names)
+	var identity []byte
+	for _, name := range names {
+		identity = fmt.Appendf(identity, "%q:%q\n", name, headers[name])
+	}
+	return fmt.Sprintf("%s#account=%d#headers=%x", url, account.ID, sha256.Sum256(identity))
 }
 
 // modelProtocolCatalogHeaders 构造目录请求头，UA 收敛与账号请求头覆写与转发一致

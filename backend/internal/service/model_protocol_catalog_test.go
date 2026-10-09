@@ -192,10 +192,16 @@ func TestModelProtocolCatalogKeyAndHeaders(t *testing.T) {
 	base := official.GetCNProtocolBaseURL(APIProtocolChatCompletions)
 	url := buildOpenAIModelsURL(base)
 	require.Equal(t, "https://api.commandcode.ai/provider/v1/models", url)
-	require.Equal(t, url+"#account=21", modelProtocolCatalogKey(official, url))
-	require.Equal(t, url+"#account=22", modelProtocolCatalogKey(commandCodeTestAccount(22), url))
-
 	headers := modelProtocolCatalogHeaders(official, url)
+	key := modelProtocolCatalogKey(official, url, headers)
+	other := commandCodeTestAccount(22)
+	require.NotEqual(t, key, modelProtocolCatalogKey(other, url, modelProtocolCatalogHeaders(other, url)))
+	require.NotContains(t, key, "user_test_key", "cache keys must not contain plaintext credentials")
+	reordered := http.Header{}
+	for _, name := range []string{"User-Agent", "Authorization", "Accept"} {
+		reordered[name] = headers[name]
+	}
+	require.Equal(t, key, modelProtocolCatalogKey(official, url, reordered), "map insertion order must not affect cache identity")
 	require.Equal(t, "Bearer user_test_key", headers.Get("Authorization"))
 	require.Equal(t, CodexCanonicalUserAgent(), headers.Get("User-Agent"), "official host gets the canonical UA like forwarding")
 
@@ -205,7 +211,6 @@ func TestModelProtocolCatalogKeyAndHeaders(t *testing.T) {
 	custom.Credentials["header_overrides"] = map[string]any{"X-Tenant": "t-1"}
 	customBase := custom.GetCNProtocolBaseURL(APIProtocolChatCompletions)
 	customURL := buildOpenAIModelsURL(customBase)
-	require.Equal(t, customURL+"#account=23", modelProtocolCatalogKey(custom, customURL))
 	headers = modelProtocolCatalogHeaders(custom, customURL)
 	require.Equal(t, "t-1", getHeaderRaw(headers, "x-tenant"))
 	require.Empty(t, headers.Get("User-Agent"))
@@ -259,7 +264,7 @@ func TestModelProtocolCatalogOfficialAccountsAreIsolated(t *testing.T) {
 				upstreamModelProtocols.mu.Lock()
 				defer upstreamModelProtocols.mu.Unlock()
 				for _, account := range []*Account{bad, chat, responses} {
-					delete(upstreamModelProtocols.entries, modelProtocolCatalogKey(account, url))
+					delete(upstreamModelProtocols.entries, modelProtocolCatalogKey(account, url, modelProtocolCatalogHeaders(account, url)))
 				}
 			})
 
@@ -273,6 +278,39 @@ func TestModelProtocolCatalogOfficialAccountsAreIsolated(t *testing.T) {
 			require.Len(t, upstream.requests, 3, "each healthy account fetches once; the failed account remains in its own backoff")
 			for _, req := range upstream.requests {
 				require.Equal(t, url, req.URL.String(), "all accounts use the same official model-list URL")
+			}
+		})
+	}
+}
+
+func TestModelProtocolCatalogRefreshesAfterAccountChanges(t *testing.T) {
+	for _, scenario := range []string{"tenant_header", "api_key_after_failure"} {
+		t.Run(scenario, func(t *testing.T) {
+			upstream := &modelCatalogAccountUpstream{failureStatus: http.StatusUnauthorized}
+			svc := &OpenAIGatewayService{cfg: rawChatCompletionsTestConfig(), httpUpstream: upstream}
+			account := commandCodeTestAccount(time.Now().UnixNano())
+			url := buildOpenAIModelsURL(account.GetCNProtocolBaseURL(APIProtocolChatCompletions))
+			keys := []string{modelProtocolCatalogKey(account, url, modelProtocolCatalogHeaders(account, url))}
+			t.Cleanup(func() {
+				upstreamModelProtocols.mu.Lock()
+				defer upstreamModelProtocols.mu.Unlock()
+				for _, key := range keys {
+					delete(upstreamModelProtocols.entries, key)
+				}
+			})
+			if scenario == "tenant_header" {
+				require.Equal(t, []string{APIProtocolChatCompletions}, svc.modelCatalogProtocols(t.Context(), account, "vendor/model"))
+				account.Credentials["header_override_enabled"] = true
+				account.Credentials["header_overrides"] = map[string]any{"X-Tenant": "responses-tenant"}
+				keys = append(keys, modelProtocolCatalogKey(account, url, modelProtocolCatalogHeaders(account, url)))
+				require.Equal(t, []string{APIProtocolResponses}, svc.modelCatalogProtocols(t.Context(), account, "vendor/model"), "a tenant change must not reuse the old successful catalog")
+			} else {
+				account.Credentials["api_key"] = "invalid-key"
+				keys = append(keys, modelProtocolCatalogKey(account, url, modelProtocolCatalogHeaders(account, url)))
+				require.Nil(t, svc.modelCatalogProtocols(t.Context(), account, "vendor/model"))
+				account.Credentials["api_key"] = "replacement-test-key"
+				keys = append(keys, modelProtocolCatalogKey(account, url, modelProtocolCatalogHeaders(account, url)))
+				require.Equal(t, []string{APIProtocolChatCompletions}, svc.modelCatalogProtocols(t.Context(), account, "vendor/model"), "replacement credentials must not inherit the old authentication backoff")
 			}
 		})
 	}
@@ -342,7 +380,7 @@ func TestCommandCodeGatewayPassesThroughCatalogProtocols(t *testing.T) {
 			APIProtocolAnthropic:       base + "/provider",
 		}
 		url := buildOpenAIModelsURL(base + "/provider/v1")
-		key := modelProtocolCatalogKey(account, url)
+		key := modelProtocolCatalogKey(account, url, modelProtocolCatalogHeaders(account, url))
 		if catalog != nil {
 			upstreamModelProtocols.store(key, catalog, nil, time.Now())
 		} else {
