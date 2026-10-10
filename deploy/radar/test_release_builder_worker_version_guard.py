@@ -70,8 +70,11 @@ class ReleaseBuilderWorkerVersionGuardTests(unittest.TestCase):
                     patch.object(builder, "worker_package_version", return_value=worker_version),
                 ):
                     go_version_patch = (
-                        patch.object(builder, "go_module_version", return_value="1.26.6")
-                        if filename == "build_v01178_ghcr.py"
+                        patch.object(
+                            builder, "go_module_version",
+                            return_value="1.26.6" if filename == "build_v01178_ghcr.py" else "1.27.0",
+                        )
+                        if hasattr(builder, "go_module_version")
                         else nullcontext()
                     )
                     with go_version_patch:

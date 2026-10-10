@@ -23,6 +23,7 @@ from ..models import (
     QualityAnalysisContext,
 )
 from ..observability import MetricsServer, RadarMetrics, trace_scope
+from ..shutdown import stop_on_signals
 from .bootstrap import bootstrap_delta, weighted_delta
 from .classification import count_failures
 from .cusum import cusum
@@ -473,7 +474,9 @@ async def run(settings: Settings) -> None:
         await metrics_server.start()
     try:
         async with ControlPlaneClient(settings, metrics=metrics) as client:
-            await StatisticsWorker(settings, client, metrics=metrics).run_forever()
+            worker = StatisticsWorker(settings, client, metrics=metrics)
+            with stop_on_signals(worker.stop):
+                await worker.run_forever()
     finally:
         if metrics_server is not None:
             await metrics_server.close()

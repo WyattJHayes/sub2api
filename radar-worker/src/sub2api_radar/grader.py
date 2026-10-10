@@ -25,6 +25,7 @@ from .graders.safety import safety_grade
 from .graders.tool_call import tool_call_grade
 from .models import ExecutionEvidence, GradingLease, ScoreSubmission
 from .observability import MetricsServer, RadarMetrics, trace_scope
+from .shutdown import stop_on_signals
 
 log = logging.getLogger(__name__)
 
@@ -295,7 +296,9 @@ async def run(settings: Settings) -> None:
         await metrics_server.start()
     try:
         async with ControlPlaneClient(settings, metrics=metrics) as client:
-            await GraderWorker(settings, client, metrics=metrics).run_forever()
+            worker = GraderWorker(settings, client, metrics=metrics)
+            with stop_on_signals(worker.stop):
+                await worker.run_forever()
     finally:
         if metrics_server is not None:
             await metrics_server.close()

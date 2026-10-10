@@ -3,8 +3,8 @@
 set -uo pipefail
 
 ROOT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)
-RADAR_RELEASE_VERSION=${RADAR_RELEASE_VERSION:-0.2.14}
-RADAR_MIGRATION_MANIFEST_DIR=${RADAR_MIGRATION_MANIFEST_DIR:-$ROOT_DIR/deploy/radar/manifests/v0.2.14}
+RADAR_RELEASE_VERSION=${RADAR_RELEASE_VERSION:-0.2.15}
+RADAR_MIGRATION_MANIFEST_DIR=${RADAR_MIGRATION_MANIFEST_DIR:-$ROOT_DIR/deploy/radar/manifests/v0.2.15}
 export RADAR_RELEASE_VERSION RADAR_MIGRATION_MANIFEST_DIR
 CLOSURE_TOOL="$ROOT_DIR/deploy/radar/local_prerelease_closure.py"
 PREFLIGHT_TOOL="$ROOT_DIR/deploy/radar/local_prerelease_preflight.py"
@@ -418,7 +418,7 @@ for field in required_fields:
     if left.get(field) is None or left.get(field) != right.get(field):
         raise SystemExit(f"migration replay {field} mismatch")
 if right.get("migration_ledger_ok") is not True:
-    raise SystemExit("migration replay did not close the v0.2.14 ledger")
+    raise SystemExit("migration replay did not close the v0.2.15 ledger")
 if right.get("candidate_pending_migrations") != [] or right.get("checksum_mismatches") != []:
     raise SystemExit("migration replay contains pending or mismatched files")
 if right.get("candidate_ledger_sha256") != right.get("expected_candidate_ledger_sha256"):

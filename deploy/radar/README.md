@@ -1,5 +1,27 @@
 # Radar Staging Reliability Harness
 
+## Worker shutdown
+
+Runner, Grader, and Statistics handle SIGTERM and SIGINT by stopping new lease
+claims and finishing the current operation. An in-flight claim is allowed to
+return and its lease is processed before exit, so shutdown does not abandon a
+newly assigned lease. Runner interrupts idle long polling immediately. After
+draining, each worker closes its control-plane client and exits with status 0.
+
+The worker Compose overlay defaults `RADAR_WORKER_STOP_GRACE_PERIOD` to `180s`.
+Set this value to cover the longest configured execution timeout plus evidence
+upload and result submission. Docker forcibly stops a process when this grace
+period expires; a permanently blocked dependency can therefore still require
+lease recovery after restart. Do not shorten the grace period during a drain.
+
+The signal regression suite runs the real worker CLI in subprocesses and covers
+idle polling, active work, and in-flight claims for all three worker roles:
+
+```bash
+cd radar-worker
+uv run --locked --extra dev pytest tests/test_shutdown_signals.py -q
+```
+
 The reliability services live in a separate Compose overlay so the default staging stack does not interpolate or receive load, chaos, or recovery credentials.
 
 Render the load generator and recovery verifier configuration without starting containers:

@@ -101,6 +101,8 @@ class V029ReleaseMetadataTests(unittest.TestCase):
             (MANIFEST_DIR / "duplicate-aliases.json").read_text(encoding="utf-8")
         )
         candidate = candidate_manifest(REPO_ROOT / "backend" / "migrations")
+        self.assertIn("242_drop_platform_check_constraints.sql", candidate)
+        candidate.pop("242_drop_platform_check_constraints.sql")
         # This audit describes the v0.2.9 snapshot, before the v0.2.13 additions.
         for name in ("241_add_payment_order_bonus_amount.sql", "241_add_typesafe_platform.sql"):
             self.assertIn(name, candidate)
@@ -130,6 +132,8 @@ class V029ReleaseMetadataTests(unittest.TestCase):
             (MANIFEST_DIR / "duplicate-aliases.json").read_text(encoding="utf-8")
         )
         candidate = candidate_manifest(REPO_ROOT / "backend" / "migrations")
+        self.assertIn("242_drop_platform_check_constraints.sql", candidate)
+        candidate.pop("242_drop_platform_check_constraints.sql")
         for name in ("241_add_payment_order_bonus_amount.sql", "241_add_typesafe_platform.sql"):
             self.assertIn(name, candidate)
             candidate.pop(name)

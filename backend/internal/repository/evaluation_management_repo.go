@@ -265,10 +265,12 @@ func (r *radarGovernanceRepository) CreatePlan(ctx context.Context, input servic
 	// only source of truth at run time, and a missing pair skips the plan
 	// instead of comparing unknown revisions.
 	var (
-		nextRunAt     sql.NullTime
-		cronExprSQL   sql.NullString
-		baselineJSON  []byte
-		candidateJSON []byte
+		nextRunAt   sql.NullTime
+		cronExprSQL sql.NullString
+		// Optional manual-plan references must be SQL NULL. A typed nil []byte
+		// is encoded by lib/pq as empty text and cannot be cast to jsonb.
+		baselineJSON  any
+		candidateJSON any
 	)
 	if input.TriggerType == "cron" {
 		firstRun, err := service.NextEvaluationPlanRun(input.CronExpression, time.Now())
@@ -285,8 +287,8 @@ func (r *radarGovernanceRepository) CreatePlan(ctx context.Context, input servic
 		}
 		nextRunAt = sql.NullTime{Time: firstRun, Valid: true}
 		cronExprSQL = sql.NullString{String: input.CronExpression, Valid: true}
-		baselineJSON = baseline
-		candidateJSON = candidate
+		baselineJSON = string(baseline)
+		candidateJSON = string(candidate)
 	}
 	if _, err := evaluationMatrixEntries(input.ModelMatrix); err != nil {
 		return nil, err

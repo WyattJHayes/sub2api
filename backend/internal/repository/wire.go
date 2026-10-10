@@ -16,6 +16,16 @@ import (
 	"github.com/redis/go-redis/v9"
 )
 
+// ProvideEvaluationRepository freezes scheduled runs against the same route
+// profile that the gateway signs into evaluation context tokens.
+func ProvideEvaluationRepository(db *sql.DB, cfg *config.Config) service.EvaluationRepository {
+	profile := ""
+	if cfg != nil {
+		profile = cfg.Radar.RouteProfileVersion
+	}
+	return NewEvaluationRepositoryWithRouteProfile(db, profile)
+}
+
 // ProvideConcurrencyCache 创建并发控制缓存，从配置读取 TTL 参数
 // 性能优化：TTL 可配置，支持长时间运行的 LLM 请求场景
 func ProvideConcurrencyCache(rdb *redis.Client, cfg *config.Config) service.ConcurrencyCache {
@@ -148,7 +158,7 @@ var ProviderSet = wire.NewSet(
 	NewEvaluationOutboxDomainRepository,
 	ProvideRadarGovernanceRepository,
 	NewEvaluationPlanScheduleRepository,
-	NewEvaluationRepository,
+	ProvideEvaluationRepository,
 	wire.Bind(new(service.EvaluationRunCreator), new(service.EvaluationRepository)),
 	ProvideRadarProjectionRepository,
 	NewModelQualityRepository,

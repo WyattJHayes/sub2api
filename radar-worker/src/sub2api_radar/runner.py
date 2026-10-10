@@ -25,6 +25,7 @@ from .models import (
     ExecutionEvidence,
 )
 from .observability import MetricsServer, RadarMetrics, trace_scope
+from .shutdown import stop_on_signals
 from .state import AtomicStateStore, LocalState, StateRecord
 
 log = logging.getLogger(__name__)
@@ -86,7 +87,7 @@ class Runner:
                 continue
             if lease is None:
                 try:
-                    await self.client.wait_assignment()
+                    await self._wait_assignment_or_stop(stop_event)
                 except Exception:
                     pass
                 try:
@@ -97,6 +98,18 @@ class Runner:
                     pass
                 continue
             await self.execute_lease(lease)
+
+    async def _wait_assignment_or_stop(self, stop: asyncio.Event) -> None:
+        poll = asyncio.create_task(self.client.wait_assignment())
+        stopped = asyncio.create_task(stop.wait())
+        try:
+            done, _ = await asyncio.wait({poll, stopped}, return_when=asyncio.FIRST_COMPLETED)
+            if poll in done:
+                await poll
+        finally:
+            poll.cancel()
+            stopped.cancel()
+            await asyncio.gather(poll, stopped, return_exceptions=True)
 
     async def _wait_for_control_plane_retry(
         self, stop_event: asyncio.Event, error: BaseException | None = None
@@ -374,14 +387,16 @@ async def run(settings: Settings) -> None:
         await metrics_server.start()
     try:
         async with ControlPlaneClient(settings, metrics=metrics) as client:
-            await Runner(
+            worker = Runner(
                 settings,
                 client,
                 executor,
                 capabilities=list(settings.capabilities),
                 slots=1,
                 metrics=metrics,
-            ).run_forever()
+            )
+            with stop_on_signals(worker.stop):
+                await worker.run_forever()
     finally:
         if metrics_server is not None:
             await metrics_server.close()

@@ -13,6 +13,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Wei-Shaw/sub2api/internal/config"
 	"github.com/Wei-Shaw/sub2api/internal/service"
 	"github.com/Wei-Shaw/sub2api/migrations"
 	"github.com/google/uuid"
@@ -125,6 +126,53 @@ func TestEvaluationRepository_FreezesConfiguredRouteProfileAcrossRunAndSides(t *
 		  AND side_spec.canonical_spec->>'route_profile_version' IS DISTINCT FROM $2`,
 		run.ID, configuredProfile).Scan(&mismatchedSides))
 	require.Zero(t, mismatchedSides)
+}
+
+func TestEvaluationProvider_CronRunFreezesGatewayConfiguredProfile(t *testing.T) {
+	ctx := context.Background()
+	fixture := createEvaluationRepositoryFixture(t, 1, []string{"route-a"}, 1)
+	cfg := &config.Config{}
+	cfg.Radar.RouteProfileVersion = " main-gateway-v1 "
+	repo := ProvideEvaluationRepository(integrationDB, cfg)
+	run, err := repo.CreateRunWithMatrix(ctx, service.CreateRunInput{
+		PlanID: fixture.planID, TriggerSource: "cron", CreatedBy: fixture.userID,
+	})
+	require.NoError(t, err)
+
+	var profile, trigger string
+	require.NoError(t, integrationDB.QueryRowContext(ctx,
+		`SELECT route_profile_version, trigger_source FROM evaluation_runs WHERE id = $1`,
+		run.ID).Scan(&profile, &trigger))
+	require.Equal(t, "main-gateway-v1", profile)
+	require.Equal(t, "cron", trigger)
+
+	var matchingSides int
+	require.NoError(t, integrationDB.QueryRowContext(ctx, `
+		SELECT COUNT(*) FROM evaluation_side_specs side_spec
+		JOIN evaluation_pair_specs pair_spec ON pair_spec.id = side_spec.pair_spec_id
+		WHERE pair_spec.run_id = $1
+		  AND side_spec.canonical_spec->>'route_profile_version' = 'main-gateway-v1'`,
+		run.ID).Scan(&matchingSides))
+	require.Equal(t, 2, matchingSides)
+
+	lease, err := repo.ClaimAssignment(ctx, fixture.workerIDs[0], []string{"coding"}, time.Minute)
+	require.NoError(t, err)
+	require.NotNil(t, lease)
+	require.Equal(t, run.ID, lease.RunID)
+	semantics, err := service.DeriveSingleRequestSemantics(lease.Case.PromptSpec)
+	require.NoError(t, err)
+	input := createOpenRouteEvidenceInput(lease, semantics)
+	evidenceRepo := &evaluationRouteEvidenceRepository{
+		sql: integrationDB, db: integrationDB,
+		semanticsVerifiers: service.NewRequestSemanticsVerifierRegistry(),
+	}
+	_, err = evidenceRepo.CreateOpen(ctx, input)
+	require.ErrorIs(t, err, service.ErrRouteEvidenceIdentityConflict)
+	input.RouteProfileVersion = "main-gateway-v1"
+	opened, err := evidenceRepo.CreateOpen(ctx, input)
+	require.NoError(t, err)
+	require.False(t, opened.Terminal)
+	require.Equal(t, "started", *opened.Transport.TransportStatus)
 }
 
 func TestEvaluationRepository_NewAssignmentsStartAtRunControlEpoch(t *testing.T) {

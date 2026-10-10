@@ -175,8 +175,8 @@ func TestMigrationInventoryPreservesAppliedFiles(t *testing.T) {
 	if err != nil {
 		t.Fatalf("list SQL migrations: %v", err)
 	}
-	if len(paths) != 321 {
-		t.Fatalf("controlled source must contain 321 SQL migrations, found %d", len(paths))
+	if len(paths) != 322 {
+		t.Fatalf("controlled source must contain 322 SQL migrations, found %d", len(paths))
 	}
 
 	expected := map[string]string{

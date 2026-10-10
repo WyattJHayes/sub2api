@@ -378,7 +378,7 @@ func initializeApplication(buildInfo handler.BuildInfo) (*Application, error) {
 	evaluationOutboxConsumerRuntime := service.ProvideEvaluationOutboxConsumerRuntime(evaluationOutboxRepository, evaluationOutboxDispatcher, timingWheelService, configConfig)
 	seedanceReconcilerRuntime := service.ProvideSeedanceReconcilerRuntime(asyncVideoBillingTaskRepository, seedanceTaskSettlementService, openAIGatewayService, timingWheelService, configConfig)
 	evaluationPlanScheduleStore := repository.NewEvaluationPlanScheduleRepository(db)
-	evaluationRepository := repository.NewEvaluationRepository(db)
+	evaluationRepository := repository.ProvideEvaluationRepository(db, configConfig)
 	evaluationPlanScheduleRuntime := service.ProvideEvaluationPlanScheduleRuntime(evaluationPlanScheduleStore, evaluationRepository, configConfig)
 	evaluationArtifactCleanupRepository := repository.NewEvaluationArtifactCleanupRepository(db)
 	artifactObjectDeleter := service.ProvideArtifactObjectDeleter(evaluationArtifactObjectStore)

@@ -100,6 +100,9 @@ class V0213ReleaseMetadataTests(unittest.TestCase):
             (MANIFEST_DIR / "duplicate-aliases.json").read_text(encoding="utf-8")
         )
         candidate = candidate_manifest(REPO_ROOT / "backend" / "migrations")
+        # Historical snapshot stops before the sole v0.2.15 migration.
+        self.assertIn("242_drop_platform_check_constraints.sql", candidate)
+        candidate.pop("242_drop_platform_check_constraints.sql")
         result = audit_candidate(
             baseline,
             candidate,
@@ -124,6 +127,9 @@ class V0213ReleaseMetadataTests(unittest.TestCase):
             (MANIFEST_DIR / "duplicate-aliases.json").read_text(encoding="utf-8")
         )
         candidate = candidate_manifest(REPO_ROOT / "backend" / "migrations")
+        # Historical snapshot stops before the sole v0.2.15 migration.
+        self.assertIn("242_drop_platform_check_constraints.sql", candidate)
+        candidate.pop("242_drop_platform_check_constraints.sql")
         actual = dict(baseline)
         actual.update({name: candidate[name] for name in expected_new})
 

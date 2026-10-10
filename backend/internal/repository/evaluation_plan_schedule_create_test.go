@@ -92,7 +92,7 @@ func TestCreatePlanKeepsManualPlanWithoutReferences(t *testing.T) {
 	mock.ExpectQuery(`(?s)INSERT INTO evaluation_plans.*RETURNING id, name`).
 		WithArgs(
 			sqlmock.AnyArg(), "manual-plan", datasetID, int64(221), "manual", "",
-			sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg(),
+			nil, nil, sqlmock.AnyArg(),
 			`[{"route":"r","baseline":{"route":"a"},"candidate":{"route":"b"}}]`,
 			sqlmock.AnyArg(), sqlmock.AnyArg(), 1, int64(41),
 		).
@@ -121,5 +121,7 @@ func TestCreatePlanKeepsManualPlanWithoutReferences(t *testing.T) {
 	require.Equal(t, "manual", record.TriggerType)
 	require.Empty(t, record.CronExpression)
 	require.Nil(t, record.NextRunAt)
+	require.Nil(t, record.BaselineRef)
+	require.Nil(t, record.CandidateRef)
 	require.NoError(t, mock.ExpectationsWereMet())
 }
