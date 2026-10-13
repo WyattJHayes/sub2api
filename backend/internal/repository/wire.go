@@ -164,6 +164,7 @@ var ProviderSet = wire.NewSet(
 	NewModelQualityRepository,
 	NewRadarReliabilityRepository,
 	NewBatchImageRepository,
+	NewGeminiCachedContentRepository,
 	NewIdempotencyRepository,
 	NewUsageCleanupRepository,
 	NewDashboardAggregationRepository,

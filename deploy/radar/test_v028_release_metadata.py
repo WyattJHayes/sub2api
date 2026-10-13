@@ -92,6 +92,8 @@ class V028ReleaseMetadataTests(unittest.TestCase):
         for name in ("241_add_payment_order_bonus_amount.sql", "241_add_typesafe_platform.sql"):
             self.assertIn(name, candidate)
             candidate.pop(name)
+        # Verify this historical release against only its declared migration inventory.
+        candidate = {name: digest for name, digest in candidate.items() if name in baseline or name in expected_new}
         result = audit_candidate(
             baseline,
             candidate,
