@@ -673,6 +673,13 @@ func TestFrontendServer_Middleware(t *testing.T) {
 		assert.Contains(t, strings.ToLower(w.Header().Get("Content-Type")), "javascript")
 		assert.NotContains(t, strings.ToLower(w.Header().Get("Content-Type")), "text/html")
 		assert.Equal(t, staticAssetsCacheControl, w.Header().Get("Cache-Control"))
+		logoWriter := httptest.NewRecorder()
+		logoRequest := httptest.NewRequest(http.MethodGet, "/logo.svg", nil)
+		router.ServeHTTP(logoWriter, logoRequest)
+
+		assert.Equal(t, http.StatusOK, logoWriter.Code)
+		assert.Contains(t, logoWriter.Header().Get("Content-Type"), "image/svg+xml")
+		assert.Empty(t, logoWriter.Header().Get("Cache-Control"))
 
 		entries, err := fs.ReadDir(server.distFS, "assets")
 		require.NoError(t, err)
@@ -841,6 +848,12 @@ func TestServeEmbeddedFrontend(t *testing.T) {
 		assert.Equal(t, http.StatusOK, w.Code)
 		assert.Contains(t, strings.ToLower(w.Header().Get("Content-Type")), "javascript")
 		assert.NotContains(t, strings.ToLower(w.Header().Get("Content-Type")), "text/html")
+		logoWriter := httptest.NewRecorder()
+		logoRequest := httptest.NewRequest(http.MethodGet, "/logo.svg", nil)
+		router.ServeHTTP(logoWriter, logoRequest)
+
+		assert.Equal(t, http.StatusOK, logoWriter.Code)
+		assert.Contains(t, logoWriter.Header().Get("Content-Type"), "image/svg+xml")
 	})
 
 	t.Run("serves_index_html_for_root", func(t *testing.T) {

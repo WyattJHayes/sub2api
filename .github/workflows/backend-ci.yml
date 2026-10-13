@@ -62,6 +62,18 @@ jobs:
         run: pnpm install --frozen-lockfile
       - name: Frontend typecheck and critical vitest
         run: make test-frontend
+      - name: Build frontend assets for embedded MIME regression tests
+        working-directory: frontend
+        run: pnpm run build
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: backend/go.mod
+          check-latest: false
+          cache: true
+          cache-dependency-path: backend/go.sum
+      - name: Verify embedded frontend JavaScript MIME and cache policy
+        working-directory: backend
+        run: go test -tags=embed ./internal/web
 
   radar-worker:
     runs-on: ubuntu-latest
@@ -117,6 +129,7 @@ jobs:
       - name: Verify Radar release identity and migration ledger
         run: |
           python -m unittest \
+            deploy.radar.test_v0216_release_metadata \
             deploy.radar.test_v0215_release_metadata \
             deploy.radar.test_v0214_release_metadata \
             deploy.radar.test_v0213_release_metadata \

@@ -1,10 +1,12 @@
 .PHONY: build build-backend build-frontend test test-backend test-frontend test-frontend-critical test-frontend-radar test-radar-e2e
 
 FRONTEND_CRITICAL_VITEST := \
+	src/i18n/__tests__/usageModelStatusLocales.spec.ts \
 	src/i18n/__tests__/localeKeyCompleteness.spec.ts \
 	src/api/__tests__/client.spec.ts \
 	src/api/__tests__/tokenRefresh.spec.ts \
 	src/api/__tests__/keys.bulkUpdate.spec.ts \
+	src/composables/__tests__/useModelWhitelist.spec.ts \
 	src/components/account/__tests__/OpenAIReferralCell.spec.ts \
 	src/components/account/__tests__/OpenAIReferralCell.transport.spec.ts \
 	src/components/account/__tests__/OpenAIQuotaResetCell.spark_shadow.spec.ts \
