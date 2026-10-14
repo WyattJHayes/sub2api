@@ -208,6 +208,7 @@ const pauseTarget = ref<RadarRun | null>(null)
 const pauseError = ref('')
 const pausingRun = ref(false)
 let pauseIdempotencyKey = ''
+let runCreationAttempt: { payload: string; key: string } | null = null
 const publishedDatasets = computed(() => store.datasets.filter((dataset) => dataset.status === 'published'))
 
 const planForm = reactive({
@@ -352,18 +353,30 @@ async function createPlan(): Promise<void> {
 }
 
 async function startRun(): Promise<void> {
+  if (startingRun.value) return
   if (!runForm.planId || !runForm.baselineRef || !runForm.candidateRef) {
     appStore.showError(t('admin.radar.messages.runReferencesRequired'))
     return
   }
   startingRun.value = true
   try {
-    await radarAdminAPI.startRun({
+    const payload = {
       plan_id: runForm.planId,
       trigger_source: 'manual',
       baseline_ref: { release: runForm.baselineRef },
       candidate_ref: { release: runForm.candidateRef }
-    })
+    }
+    const signature = JSON.stringify(payload)
+    // An uncertain response must retry the same operation. Only changed
+    // parameters or an acknowledged success start a new operation.
+    if (!runCreationAttempt || runCreationAttempt.payload !== signature) {
+      runCreationAttempt = {
+        payload: signature,
+        key: Array.from(crypto.getRandomValues(new Uint8Array(32)), (byte) => byte.toString(16).padStart(2, '0')).join('')
+      }
+    }
+    await radarAdminAPI.startRun(payload, runCreationAttempt.key)
+    runCreationAttempt = null
     showRun.value = false
     await store.loadSection('runs')
     appStore.showSuccess(t('admin.radar.messages.runStarted'))

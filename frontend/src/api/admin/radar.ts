@@ -183,7 +183,9 @@ export const radarAdminAPI = {
   publishDataset: (id: string) => apiClient.post<RadarDataset>(`/admin/radar/datasets/${id}/publish`).then((response) => response.data),
   createPlan: (payload: CreateRadarPlanPayload) => apiClient.post<RadarPlan>('/admin/radar/plans', payload).then((response) => response.data),
   enableEvaluationKey: (id: number) => apiClient.post(`/admin/radar/evaluation-keys/${id}/enable`).then((response) => response.data),
-  startRun: (payload: StartRadarRunPayload) => apiClient.post<RadarRun>('/admin/radar/runs', payload).then((response) => response.data),
+  startRun: (payload: StartRadarRunPayload, idempotencyKey: string) => apiClient.post<RadarRun>('/admin/radar/runs', payload, {
+    headers: { 'Idempotency-Key': idempotencyKey }
+  }).then((response) => response.data),
   pauseRun: (id: string, idempotencyKey: string) => apiClient.post<RadarRunControlResult>(`/admin/radar/runs/${encodeURIComponent(id)}/pause`, { reason: 'operator' }, {
     headers: { 'Idempotency-Key': idempotencyKey }
   }).then((response) => response.data),

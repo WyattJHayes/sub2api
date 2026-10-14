@@ -106,9 +106,11 @@ describe('radar admin API', () => {
     }
     vi.mocked(apiClient.post).mockResolvedValueOnce({ data: { id: 'run-1', status: 'pending' } })
 
-    await radarAdminAPI.startRun(payload)
+    await radarAdminAPI.startRun(payload, 'run-create-retry-1')
 
-    expect(apiClient.post).toHaveBeenCalledWith('/admin/radar/runs', payload)
+    expect(apiClient.post).toHaveBeenCalledWith('/admin/radar/runs', payload, {
+      headers: { 'Idempotency-Key': 'run-create-retry-1' }
+    })
   })
 
   it('pauses the exact run using the caller idempotency key and returns its transition', async () => {

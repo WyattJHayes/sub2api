@@ -28,7 +28,7 @@ const CONCLUSION_LABELS = {
   observe: '需要观察',
   suspected: '疑似异常',
   high_risk: '高风险',
-  insufficient_coverage: '检测覆盖不足'
+  insufficient_coverage: '覆盖不足'
 } as const
 
 type Conclusion = keyof typeof CONCLUSION_LABELS

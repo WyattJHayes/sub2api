@@ -18,11 +18,12 @@ var (
 const AssignmentCompleted = AssignmentStatusCompleted
 
 type CreateRunInput struct {
-	PlanID        uuid.UUID
-	TriggerSource string
-	BaselineRef   map[string]any
-	CandidateRef  map[string]any
-	CreatedBy     int64
+	PlanID         uuid.UUID
+	TriggerSource  string
+	BaselineRef    map[string]any
+	CandidateRef   map[string]any
+	CreatedBy      int64
+	IdempotencyKey string
 }
 
 type EvaluationRun struct {
@@ -34,6 +35,7 @@ type EvaluationRun struct {
 	CreatedAt      time.Time        `json:"created_at"`
 	ContractStatus string           `json:"contract_status"`
 	PairBindings   []PairBindingRef `json:"pair_bindings,omitempty"`
+	Replayed       bool             `json:"-"`
 }
 
 type AssignmentLease struct {
