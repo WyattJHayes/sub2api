@@ -168,8 +168,62 @@ describe('Radar management views', () => {
       trigger_source: 'manual',
       baseline_ref: { release: 'baseline-2026-07-20' },
       candidate_ref: { release: 'candidate-2026-07-27' }
-    })
+    }, expect.stringMatching(/^[a-f0-9]{64}$/))
     expect(showSuccess).toHaveBeenCalledWith('评测运行已启动')
+  })
+
+  it('keeps the run creation key on an uncertain failure and rotates it for changed parameters and a new run', async () => {
+    radarAPI.startRun.mockRejectedValue(new Error('response lost'))
+    const wrapper = mountView(RadarRunsView)
+    await flushPromises()
+    await wrapper.get('[data-test="start-run"]').trigger('click')
+    await wrapper.get('[data-test="run-plan-id"]').setValue('plan-1')
+    await wrapper.get('[data-test="baseline-ref"]').setValue('base')
+    await wrapper.get('[data-test="candidate-ref"]').setValue('candidate')
+    await wrapper.get('[data-test="start-run-submit"]').trigger('click')
+    await flushPromises()
+    const firstKey = radarAPI.startRun.mock.calls[0][1]
+    expect(firstKey).toMatch(/^[a-f0-9]{64}$/)
+    expect(wrapper.find('[data-test="start-run-submit"]').exists()).toBe(true)
+    await wrapper.get('[data-test="start-run-submit"]').trigger('click')
+    await flushPromises()
+    expect(radarAPI.startRun.mock.calls[1][1]).toBe(firstKey)
+
+    await wrapper.get('[data-test="candidate-ref"]').setValue('changed')
+    await wrapper.get('[data-test="start-run-submit"]').trigger('click')
+    await flushPromises()
+    const changedKey = radarAPI.startRun.mock.calls[2][1]
+    expect(changedKey).toMatch(/^[a-f0-9]{64}$/)
+    expect(changedKey).not.toBe(firstKey)
+
+    radarAPI.startRun.mockResolvedValue({ id: 'run-1' })
+    await wrapper.get('[data-test="start-run-submit"]').trigger('click')
+    await flushPromises()
+    expect(radarAPI.startRun.mock.calls[3][1]).toBe(changedKey)
+    expect(wrapper.find('[data-test="start-run-submit"]').exists()).toBe(false)
+    await wrapper.get('[data-test="start-run"]').trigger('click')
+    await wrapper.get('[data-test="run-plan-id"]').setValue('plan-1')
+    await wrapper.get('[data-test="start-run-submit"]').trigger('click')
+    await flushPromises()
+    expect(radarAPI.startRun.mock.calls[4][1]).not.toBe(changedKey)
+    wrapper.unmount()
+  })
+
+  it('does not submit a second run while the first creation request is pending', async () => {
+    let resolveRun!: (value: { id: string }) => void
+    radarAPI.startRun.mockImplementation(() => new Promise((resolve) => { resolveRun = resolve }))
+    const wrapper = mountView(RadarRunsView)
+    await flushPromises()
+    await wrapper.get('[data-test="start-run"]').trigger('click')
+    await wrapper.get('[data-test="run-plan-id"]').setValue('plan-1')
+    await wrapper.get('[data-test="baseline-ref"]').setValue('base')
+    await wrapper.get('[data-test="candidate-ref"]').setValue('candidate')
+    await wrapper.get('[data-test="start-run-submit"]').trigger('click')
+    await wrapper.get('form').trigger('submit')
+    expect(radarAPI.startRun).toHaveBeenCalledTimes(1)
+    resolveRun({ id: 'run-1' })
+    await flushPromises()
+    wrapper.unmount()
   })
 
   it('shows recorded cost, pending billing and a budget pause without inventing a free run', async () => {

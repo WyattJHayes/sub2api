@@ -272,6 +272,11 @@ func (h *RadarGovernanceHandler) StartRun(c *gin.Context) {
 	if !ok {
 		return
 	}
+	key, err := service.NormalizeIdempotencyKey(c.GetHeader("Idempotency-Key"))
+	if err != nil {
+		response.ErrorFrom(c, err)
+		return
+	}
 	var req struct {
 		PlanID        uuid.UUID      `json:"plan_id" binding:"required"`
 		TriggerSource string         `json:"trigger_source" binding:"required"`
@@ -283,11 +288,14 @@ func (h *RadarGovernanceHandler) StartRun(c *gin.Context) {
 	}
 	run, err := h.repo.CreateRunWithMatrix(c.Request.Context(), service.CreateRunInput{
 		PlanID: req.PlanID, TriggerSource: req.TriggerSource, BaselineRef: req.BaselineRef,
-		CandidateRef: req.CandidateRef, CreatedBy: actorID,
+		CandidateRef: req.CandidateRef, CreatedBy: actorID, IdempotencyKey: key,
 	})
 	if err != nil {
 		response.ErrorFrom(c, err)
 		return
+	}
+	if run.Replayed {
+		c.Header("X-Idempotency-Replayed", "true")
 	}
 	response.Accepted(c, run)
 }

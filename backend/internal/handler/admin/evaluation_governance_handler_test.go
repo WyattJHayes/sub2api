@@ -31,6 +31,8 @@ type radarGovernanceHandlerRepoStub struct {
 	dataset                   *service.CreateRadarDatasetInput
 	plan                      *service.CreateRadarPlanInput
 	run                       *service.CreateRunInput
+	runCalls                  int
+	runReplay                 bool
 	evaluationKeyID           int64
 	evaluationKeyActorID      int64
 	gateReliability           *service.RadarGateReliabilityContext
@@ -173,8 +175,9 @@ func (s *radarGovernanceHandlerRepoStub) CreatePlan(_ context.Context, input ser
 	return &service.RadarPlanRecord{ID: uuid.New(), Name: input.Name}, nil
 }
 func (s *radarGovernanceHandlerRepoStub) CreateRunWithMatrix(_ context.Context, input service.CreateRunInput) (*service.EvaluationRun, error) {
+	s.runCalls++
 	s.run = &input
-	return &service.EvaluationRun{ID: uuid.New(), PlanID: input.PlanID}, nil
+	return &service.EvaluationRun{ID: uuid.New(), PlanID: input.PlanID, Replayed: s.runReplay}, nil
 }
 
 func (s *radarGovernanceHandlerRepoStub) CreateRoleBinding(ctx context.Context, input service.RadarRoleBindingInput) (*service.RadarRoleBinding, error) {
@@ -705,6 +708,7 @@ func TestRadarGovernanceHandlerStartsRunWithAuthenticatedActor(t *testing.T) {
 	planID := uuid.New()
 	c := radarGovernanceTestContext(77)
 	c.Request = httptest.NewRequest(http.MethodPost, "/", bytes.NewBufferString(`{"plan_id":"`+planID.String()+`","trigger_source":"manual","baseline_ref":{"revision":"base"},"candidate_ref":{"revision":"candidate"}}`))
+	c.Request.Header.Set("Idempotency-Key", "run-create-retry-1")
 
 	h.StartRun(c)
 
@@ -712,6 +716,44 @@ func TestRadarGovernanceHandlerStartsRunWithAuthenticatedActor(t *testing.T) {
 	require.NotNil(t, repo.run)
 	require.Equal(t, int64(77), repo.run.CreatedBy)
 	require.Equal(t, planID, repo.run.PlanID)
+	require.Equal(t, "run-create-retry-1", repo.run.IdempotencyKey)
+}
+
+func TestRadarGovernanceHandlerRejectsInvalidRunCreationKeyBeforeCreating(t *testing.T) {
+	auth := service.NewStaticRadarAuthorizer(map[int64][]service.RadarRole{77: {service.RoleTestOperator}})
+	repo := &radarGovernanceHandlerRepoStub{StaticRadarAuthorizer: auth}
+	h := NewRadarGovernanceHandler(repo)
+	c := radarGovernanceTestContext(77)
+	c.Request = httptest.NewRequest(http.MethodPost, "/", bytes.NewBufferString(`{"plan_id":"`+uuid.NewString()+`","trigger_source":"manual"}`))
+	c.Request.Header.Set("Idempotency-Key", strings.Repeat("a", 129))
+	h.StartRun(c)
+	require.Equal(t, http.StatusBadRequest, c.Writer.Status())
+	require.Nil(t, repo.run)
+}
+
+func TestRadarGovernanceHandlerChecksPermissionAgainBeforeRunCreationReplay(t *testing.T) {
+	repo := &radarGovernanceHandlerRepoStub{
+		StaticRadarAuthorizer: service.NewStaticRadarAuthorizer(map[int64][]service.RadarRole{77: {service.RoleTestOperator}}),
+		runReplay:             true,
+	}
+	h := NewRadarGovernanceHandler(repo)
+	body := `{"plan_id":"` + uuid.NewString() + `","trigger_source":"manual"}`
+	request := func() *gin.Context {
+		c := radarGovernanceTestContext(77)
+		c.Request = httptest.NewRequest(http.MethodPost, "/", bytes.NewBufferString(body))
+		c.Request.Header.Set("Idempotency-Key", "run-replay")
+		return c
+	}
+	c := request()
+	h.StartRun(c)
+	require.Equal(t, http.StatusAccepted, c.Writer.Status())
+	require.Equal(t, "true", c.Writer.Header().Get("X-Idempotency-Replayed"))
+	repo.StaticRadarAuthorizer = service.NewStaticRadarAuthorizer(map[int64][]service.RadarRole{77: {service.RoleViewer}})
+	c = request()
+	h.StartRun(c)
+	require.Equal(t, http.StatusForbidden, c.Writer.Status())
+	require.Empty(t, c.Writer.Header().Get("X-Idempotency-Replayed"))
+	require.Equal(t, 1, repo.runCalls)
 }
 
 func TestRadarGovernanceHandlerEnablesEvaluationKeyWithAuthenticatedActor(t *testing.T) {

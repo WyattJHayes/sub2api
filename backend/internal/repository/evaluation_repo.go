@@ -54,6 +54,13 @@ func (r *evaluationRepository) CreateRunWithMatrix(ctx context.Context, input se
 	if tenantID, scoped := radarTenant(ctx); scoped && (input.CreatedBy <= 0 || input.CreatedBy != tenantID) {
 		return nil, service.ErrRadarForbidden
 	}
+	key, err := service.NormalizeIdempotencyKey(input.IdempotencyKey)
+	if err != nil {
+		return nil, err
+	}
+	if key != "" && input.CreatedBy <= 0 {
+		return nil, service.ErrRadarForbidden
+	}
 
 	tx, err := beginRadarWriterTx(ctx, r.db, "api")
 	if err != nil {
@@ -68,6 +75,16 @@ func (r *evaluationRepository) CreateRunWithMatrix(ctx context.Context, input se
 		if ownerID != tenantID {
 			return nil, service.ErrRadarForbidden
 		}
+	}
+	idempotencyID, replay, err := claimEvaluationRunCreation(ctx, tx, input, key)
+	if err != nil {
+		return nil, err
+	}
+	if replay != nil {
+		if err := tx.Commit(); err != nil {
+			return nil, fmt.Errorf("commit evaluation run replay: %w", err)
+		}
+		return replay, nil
 	}
 
 	var (
@@ -192,10 +209,81 @@ func (r *evaluationRepository) CreateRunWithMatrix(ctx context.Context, input se
 			return nil, err
 		}
 	}
+	if idempotencyID != 0 {
+		// Persist the sanitized response in the same transaction as the run,
+		// frozen contracts, assignments and reservations. Never truncate JSON.
+		body, err := json.Marshal(run)
+		if err != nil {
+			return nil, service.ErrIdempotencyStoreUnavail.WithCause(err)
+		}
+		if err := (&idempotencyRepository{sql: tx}).MarkSucceeded(ctx, idempotencyID, 202, string(body), time.Now().Add(service.DefaultWriteIdempotencyTTL())); err != nil {
+			return nil, service.ErrIdempotencyStoreUnavail.WithCause(err)
+		}
+	}
 	if err := tx.Commit(); err != nil {
 		return nil, fmt.Errorf("commit evaluation run transaction: %w", err)
 	}
 	return run, nil
+}
+
+// claimEvaluationRunCreation shares the durable idempotency table, but owns
+// claim and success within the business transaction. No processing row is ever
+// committed on its own, so a crash cannot leave an accepted run without replay.
+// Missing keys preserve compatibility; supplied keys are scoped to tenant/actor
+// and retained for the configured write TTL by the existing cleanup service.
+func claimEvaluationRunCreation(ctx context.Context, tx *sql.Tx, input service.CreateRunInput, key string) (int64, *service.EvaluationRun, error) {
+	if key == "" {
+		return 0, nil, nil
+	}
+	tenantID, scoped := radarTenant(ctx)
+	if !scoped {
+		tenantID = input.CreatedBy
+	}
+	scope := fmt.Sprintf("radar.run.create:tenant:%d:actor:%d", tenantID, input.CreatedBy)
+	// The key identifies an operation, not a parameter. Exclude it from the
+	// fingerprint so surrounding whitespace does not change request identity.
+	input.IdempotencyKey = ""
+	fingerprint, err := service.BuildIdempotencyFingerprint("POST", "/api/v1/admin/radar/runs", scope, input)
+	if err != nil {
+		return 0, nil, err
+	}
+	store := &idempotencyRepository{sql: tx}
+	record := &service.IdempotencyRecord{
+		Scope: scope, IdempotencyKeyHash: service.HashIdempotencyKey(key),
+		RequestFingerprint: fingerprint, Status: service.IdempotencyStatusProcessing,
+		ExpiresAt: time.Now().Add(service.DefaultWriteIdempotencyTTL()),
+	}
+	// PostgreSQL's unique index waits for a competing transaction to commit or
+	// roll back. A loser can then replay, while a rollback lets it own the claim.
+	owner, err := store.CreateProcessing(ctx, record)
+	if err != nil {
+		return 0, nil, service.ErrIdempotencyStoreUnavail.WithCause(err)
+	}
+	if owner {
+		return record.ID, nil, nil
+	}
+	existing, err := store.GetByScopeAndKeyHash(ctx, scope, record.IdempotencyKeyHash)
+	if err != nil {
+		return 0, nil, service.ErrIdempotencyStoreUnavail.WithCause(err)
+	}
+	if existing == nil {
+		return 0, nil, service.ErrIdempotencyStoreUnavail
+	}
+	if existing.RequestFingerprint != fingerprint {
+		return 0, nil, service.ErrIdempotencyKeyConflict
+	}
+	if existing.Status != service.IdempotencyStatusSucceeded || existing.ResponseBody == nil {
+		return 0, nil, service.ErrIdempotencyStoreUnavail
+	}
+	var run service.EvaluationRun
+	if err := json.Unmarshal([]byte(*existing.ResponseBody), &run); err != nil {
+		return 0, nil, service.ErrIdempotencyStoreUnavail.WithCause(err)
+	}
+	if run.ID == uuid.Nil || run.PlanID != input.PlanID {
+		return 0, nil, service.ErrIdempotencyStoreUnavail
+	}
+	run.Replayed = true
+	return 0, &run, nil
 }
 
 func (r *evaluationRepository) ClaimAssignment(ctx context.Context, workerID uuid.UUID, capabilities []string, leaseTTL time.Duration) (*service.AssignmentLease, error) {
