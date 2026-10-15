@@ -687,6 +687,7 @@ export default {
       deepseekHours: '高峰：UTC 周一至周五 01:00–04:00、06:00–10:00，中国公共假日除外；其余时间为非高峰。',
       search: '搜索模型或厂商',
       provider: '厂商',
+      platform: '接入平台',
       count: '共 {count} 个模型',
       context: '输入长度',
       input: '输入',

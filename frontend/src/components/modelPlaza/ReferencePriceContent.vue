@@ -36,10 +36,11 @@
     <p class="text-sm text-gray-500 dark:text-dark-400" aria-live="polite">{{ t('modelPlaza.reference.count', { count: filteredModels.length }) }}</p>
 
     <div class="grid min-w-0 gap-4 lg:grid-cols-2">
-      <article v-for="model in filteredModels" :key="model.id" class="min-w-0 rounded-2xl border border-gray-200 bg-white p-4 shadow-sm dark:border-dark-700 dark:bg-dark-800">
+      <article v-for="model in filteredModels" :key="catalogKey(model)" :data-model-platform="model.platform" class="min-w-0 rounded-2xl border border-gray-200 bg-white p-4 shadow-sm dark:border-dark-700 dark:bg-dark-800">
         <div class="flex items-start justify-between gap-3">
           <div class="min-w-0">
             <span class="text-xs font-medium text-primary-600 dark:text-primary-300">{{ providerName(model.provider) }}</span>
+            <span v-if="model.multiplePlatforms" class="ml-2 text-xs text-gray-500 dark:text-dark-400">{{ t('modelPlaza.reference.platform') }}：{{ platformDisplayName(model.platform) }}</span>
             <h3 class="mt-1 break-all font-mono text-base font-semibold text-gray-900 dark:text-white">{{ model.id }}</h3>
           </div>
           <button type="button" class="shrink-0 rounded-lg border border-gray-200 px-2 py-1 text-xs text-gray-600 hover:bg-gray-50 dark:border-dark-600 dark:text-dark-200 dark:hover:bg-dark-700" :aria-label="t('modelPlaza.reference.copyModel', { model: model.id })" @click="copyModel(model.id)">{{ t('modelPlaza.reference.copy') }}</button>
@@ -63,7 +64,7 @@
             </tbody>
           </table>
         </div>
-        <div v-for="quote in quotesFor(model)" :key="quote.group.id" :data-group-quote="quote.group.id" class="mt-4 min-w-0 rounded-xl border border-primary-100 bg-primary-50/40 p-3 dark:border-dark-600 dark:bg-dark-900/30">
+        <div v-for="quote in quotesFor(model)" :key="quoteKey(quote.group, quote.model)" :data-group-quote="quote.group.id" :data-quote-platform="quote.model.platform" class="mt-4 min-w-0 rounded-xl border border-primary-100 bg-primary-50/40 p-3 dark:border-dark-600 dark:bg-dark-900/30">
           <h4 class="break-words text-sm font-medium text-gray-900 dark:text-white">{{ quote.group.name }}</h4>
           <p class="mt-1 text-xs text-gray-500 dark:text-dark-400">{{ t('modelPlaza.reference.groupRate', { rate: quote.group.user_rate_multiplier ?? quote.group.rate_multiplier }) }}<span v-if="quote.model.group_pricing_override"> · {{ t('modelPlaza.reference.modelAdjustment') }}</span><span v-if="effort !== 'default'"> · {{ effort }} ×{{ effortRate(quote.model) }}</span></p>
           <div v-if="quote.model.time_pricing || hasPeak(quote.group)" class="mt-3 space-y-2 text-xs text-gray-600 dark:text-dark-300">
@@ -111,6 +112,7 @@
 import { computed, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useClipboard } from '@/composables/useClipboard'
+import { platformDisplayName } from '@/constants/platformCatalog'
 import { referenceModels, referenceModelKey, findReferenceModel, type ReferenceModel, type ReferenceTier } from '@/data/modelReferencePrices'
 import type { ModelPlazaGroup, PlazaModel } from '@/api/modelPlaza'
 import { calculateGroupTiers, formatReferencePrice, referencePriceColumns } from './referencePriceQuotes'
@@ -127,21 +129,34 @@ const copyStatus = ref('')
 const timeSelections = ref<Record<string, string>>({})
 const peakSelections = ref<Record<number, string>>({})
 watch(() => props.groups, () => { timeSelections.value = {}; peakSelections.value = {} })
-const catalog = computed(() => {
+interface CatalogModel extends ReferenceModel { platform?: string; multiplePlatforms?: boolean }
+const catalog = computed<CatalogModel[]>(() => {
   const models = new Map(referenceModels.map(m => [referenceModelKey(m.id), m]))
+  const platformsByModel = new Map<string, Set<string>>()
   for (const group of props.groups) for (const entry of group.models) {
     const key = referenceModelKey(entry.name)
+    const platforms = platformsByModel.get(key) ?? new Set<string>()
+    platforms.add(entry.platform)
+    platformsByModel.set(key, platforms)
     if (!models.has(key)) models.set(key, findReferenceModel(entry.name) ?? {
       id: entry.name, provider: entry.platform, currency: 'USD', status: 'unverified', source: '',
       tiers: [{ context: 'all', input: null, output: null, cacheRead: null, cacheWrite: null, cacheWrite1h: null, explicitCacheRead: null }]
     })
   }
-  return [...models.values()]
+  // A public model ID may be served through distinct platforms in composite
+  // groups. Retain each route identity, including its pricing and effort rules.
+  return [...models.values()].flatMap(model => {
+    const platforms = [...(platformsByModel.get(referenceModelKey(model.id)) ?? [])].sort()
+    return platforms.length ? platforms.map(platform => ({
+      ...model, platform, multiplePlatforms: platforms.length > 1,
+      provider: model.source ? model.provider : platform
+    })) : [model]
+  })
 })
 const providers = computed(() => [...new Set(catalog.value.map(model => model.provider))])
 const effortOptions = computed(() => [...new Set(props.groups.flatMap(g => g.models.flatMap(m => Object.keys(m.group_pricing_override?.reasoning_effort_multipliers ?? m.pricing?.reasoning_effort_multipliers ?? {}))))].sort())
 const providerKeys: Record<string, string> = { GLM: 'modelPlaza.reference.glm', Qwen: 'modelPlaza.reference.qwen', Doubao: 'modelPlaza.reference.doubao' }
-const providerName = (name: string) => providerKeys[name] ? t(providerKeys[name]!) : name
+const providerName = (name: string) => providerKeys[name] ? t(providerKeys[name]!) : platformDisplayName(name)
 const filteredModels = computed(() => {
   const query = search.value.trim().toLowerCase()
   return catalog.value.filter((model) =>
@@ -151,10 +166,11 @@ const filteredModels = computed(() => {
   )
 })
 
-function quotesFor(model: ReferenceModel) {
+function catalogKey(model: CatalogModel) { return JSON.stringify([model.platform ?? '', referenceModelKey(model.id)]) }
+function quotesFor(model: CatalogModel) {
   return props.groups.filter(g => groupFilter.value === 'all' || String(g.id) === groupFilter.value).flatMap(group => {
-    const entry = group.models.find(m => referenceModelKey(m.name) === referenceModelKey(model.id))
-    return entry ? [{ group, model: entry, tiers: calculateGroupTiers(model, group, entry, effort.value, selectedTimeRate(group, entry)) }] : []
+    return group.models.filter(entry => referenceModelKey(entry.name) === referenceModelKey(model.id) && (!model.platform || entry.platform === model.platform))
+      .map(entry => ({ group, model: entry, tiers: calculateGroupTiers(model, group, entry, effort.value, selectedTimeRate(group, entry)) }))
   })
 }
 function quoteKey(group: ModelPlazaGroup, model: PlazaModel) { return `${group.id}:${model.platform}:${model.name}` }

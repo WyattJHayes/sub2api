@@ -682,6 +682,7 @@ export default {
       deepseekHours: 'Peak: Mon–Fri 01:00–04:00 and 06:00–10:00 UTC, excluding Chinese public holidays; all other times are off-peak.',
       search: 'Search models or providers',
       provider: 'Provider',
+      platform: 'API platform',
       count: '{count} models',
       context: 'Input length',
       input: 'Input',

@@ -36,6 +36,46 @@ function render(groups: ModelPlazaGroup[], locale = 'zh') {
 }
 
 describe('official prices with configured group adjustments', () => {
+  it('keeps same-name models from different platforms in a composite group separate', async () => {
+    const mixed = group()
+    mixed.platform = 'composite'
+    mixed.name = '混合分组'
+    mixed.models.push({ ...mixed.models[0]!, platform: 'openai', group_pricing_override: {
+      ...mixed.models[0]!.group_pricing_override!, input_price: 18e-6, output_price: 90e-6,
+      reasoning_effort_multipliers: { max: 4 }
+    } })
+    const wrapper = render([mixed])
+    await wrapper.get('input[type="search"]').setValue('claude-fable-5-1')
+    expect(wrapper.findAll('article')).toHaveLength(2)
+    const anthropic = wrapper.get('[data-quote-platform="anthropic"]')
+    const openai = wrapper.get('[data-quote-platform="openai"]')
+    expect(anthropic.text()).toContain('$14.40')
+    expect(openai.text()).toContain('$21.60')
+    await wrapper.get('select[data-effort]').setValue('max')
+    expect(anthropic.text()).toContain('$43.20')
+    expect(openai.text()).toContain('$86.40')
+    expect(openai.text()).not.toContain('max ×3')
+    wrapper.unmount()
+  })
+
+  it('does not assign one provider label to unknown same-name models on different platforms', async () => {
+    const mixed = group()
+    mixed.platform = 'composite'
+    mixed.models = [
+      { name: 'custom-model', platform: 'openai', pricing: null, official_pricing: null },
+      { name: 'custom-model', platform: 'anthropic', pricing: null, official_pricing: null }
+    ]
+    const wrapper = render([mixed])
+    await wrapper.get('input[type="search"]').setValue('custom-model')
+    const cards = wrapper.findAll('article')
+    expect(cards).toHaveLength(2)
+    expect(cards.map(card => card.attributes('data-model-platform')).sort()).toEqual(['anthropic', 'openai'])
+    expect(wrapper.get('article[data-model-platform="openai"]').text()).toContain('OpenAI')
+    expect(wrapper.get('article[data-model-platform="anthropic"]').text()).toContain('Anthropic')
+    expect(cards.every(card => card.text().includes('价格待核实'))).toBe(true)
+    wrapper.unmount()
+  })
+
   it('recalculates a selected custom period and subscription peak rate, including their overlap', async () => {
     const timed = group()
     timed.subscription_type = 'subscription'
