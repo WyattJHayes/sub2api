@@ -658,6 +658,28 @@ export default {
 
   // Model Plaza (public group/model pricing showcase)
   modelPlaza: {
+    reference: {
+      title: '模型价格',
+      disclaimer: '模型价格供浏览和选型参考，实际扣费以平台分组配置为准。',
+      unit: '美元 / 百万 tokens；缓存读取与写入分别列价',
+      search: '搜索模型或厂商',
+      provider: '厂商',
+      count: '共 {count} 个模型',
+      context: '输入长度',
+      input: '输入',
+      output: '输出',
+      cacheRead: '缓存读取',
+      cacheWrite: '缓存写入',
+      notProvided: '未提供',
+      copy: '复制 ID',
+      copyModel: '复制模型 ID {model}',
+      copied: '已复制 {model}',
+      pricesFor: '{model} 价格',
+      wholeRequest: '输入 >272K 时，输入与缓存读取 ×2、输出 ×1.5，适用于整次请求。下表已展开价格。',
+      glm: '智谱 GLM',
+      qwen: '通义千问',
+      doubao: '豆包'
+    },
     title: '模型广场',
     description: '按分组浏览可用模型与价格',
     loading: '加载中...',
