@@ -46,7 +46,7 @@ describe('model plaza reference prices', () => {
     const wrapper = render()
     expect(wrapper.findAll('article')).toHaveLength(33)
     expect(wrapper.text()).toContain('保留报价原币种 / 百万 tokens')
-    expect(wrapper.text()).toContain('未关联可见分组')
+    expect(wrapper.find('[data-group-rates]').exists()).toBe(false)
     expect(wrapper.find('a[href="https://web.aijws.com/models"]').exists()).toBe(false)
     expect(wrapper.find('[data-price-tab="actual"]').exists()).toBe(false)
     expect(wrapper.text()).not.toContain('平台实际价格')
@@ -81,7 +81,7 @@ describe('model plaza reference prices', () => {
   it.each([
     { userRate: undefined },
     { userRate: 0.5 }
-  ])('keeps official bases unchanged while showing group and personal quotes ($userRate)', async (tc) => {
+  ])('shows the same public price regardless of group or personal rate ($userRate)', async (tc) => {
     const response: ModelPlazaResponse = {
       description: '',
       groups: [{
@@ -106,13 +106,15 @@ describe('model plaza reference prices', () => {
     const wrapper = render()
     await wrapper.setProps({ response })
     expect(wrapper.find('[data-price-tab="actual"]').exists()).toBe(false)
-    expect(wrapper.text()).toContain('Claude Max')
+    expect(wrapper.text()).not.toContain('Claude Max')
     await wrapper.get('input[type="search"]').setValue('claude-fable-5')
     const row = wrapper.get('tbody tr')
     expect(row.text()).toContain('$10.00')
     expect(row.text()).toContain('$50.00')
     expect(row.text()).toContain('$0.25')
-    expect(wrapper.get('[data-group-quote="10"]').text()).toContain(tc.userRate === undefined ? '$14.40' : '$6.00')
+    expect(wrapper.find('[data-group-rates]').exists()).toBe(false)
+    expect(wrapper.text()).not.toContain('$14.40')
+    expect(wrapper.text()).not.toContain('$6.00')
     wrapper.unmount()
   })
 
