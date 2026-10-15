@@ -24,6 +24,24 @@ function render(locale = 'zh', referenceEnabled = true, error = false) {
 }
 
 describe('model plaza reference prices', () => {
+  it('preserves sanitized administrator Markdown without displaying platform prices', async () => {
+    const wrapper = render()
+    await wrapper.setProps({ response: {
+      description: '**计费说明**：汇率以结算页面为准。<img src="x" onerror="alert(1)"><script>alert(1)</script>',
+      groups: []
+    } })
+    const notice = wrapper.get('[data-plaza-description]')
+    expect(notice.get('strong').text()).toBe('计费说明')
+    expect(notice.text()).toContain('汇率以结算页面为准')
+    expect(notice.find('script').exists()).toBe(false)
+    expect(notice.find('img').attributes('onerror')).toBeUndefined()
+    expect(wrapper.findAll('article')).toHaveLength(33)
+    expect(wrapper.find('[data-price-tab="actual"]').exists()).toBe(false)
+    await wrapper.setProps({ referenceEnabled: false, error: true })
+    expect(wrapper.find('[data-plaza-description]').exists()).toBe(false)
+    wrapper.unmount()
+  })
+
   it('shows only website prices without configured groups or a platform-price tab', () => {
     const wrapper = render()
     expect(wrapper.findAll('article')).toHaveLength(33)
