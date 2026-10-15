@@ -35,8 +35,56 @@ function render(groups: ModelPlazaGroup[], locale = 'zh') {
   })
 }
 
-describe('official prices with configured group adjustments', () => {
-  it('keeps same-name models from different platforms in a composite group separate', async () => {
+describe('public model plaza prices', () => {
+  it.each([['anthropic', 'openai'], ['openai', 'anthropic']])('keeps every provider filter for an unknown model advertised by %s and %s', async (first, second) => {
+    const mixed = group()
+    mixed.models = [first, second].map(platform => ({
+      ...mixed.models[0]!, name: 'shared-unverified-model', platform
+    }))
+    const wrapper = render([mixed])
+    await wrapper.get('input[type="search"]').setValue('shared-unverified-model')
+    expect(wrapper.findAll('article')).toHaveLength(1)
+    expect(wrapper.get('article').text()).toContain('Anthropic')
+    expect(wrapper.get('article').text()).toContain('OpenAI')
+    for (const platform of [first, second]) {
+      await wrapper.get('select').setValue(platform)
+      expect(wrapper.findAll('article')).toHaveLength(1)
+      expect(wrapper.get('article').findAll('table')).toHaveLength(1)
+      expect(wrapper.get('article').text()).toContain('待核实')
+    }
+    wrapper.unmount()
+  })
+
+  it('shows only the public price table without exposing group pricing or calculation controls', async () => {
+    const wrapper = render([group()])
+    await wrapper.get('input[type="search"]').setValue('claude-fable-5-1')
+    const card = wrapper.get('article')
+    expect(card.text()).toContain('$10.00')
+    expect(card.text()).toContain('$50.00')
+    expect(card.text()).toContain('$0.25')
+    expect(card.findAll('table')).toHaveLength(1)
+    expect(wrapper.find('[data-group-rates]').exists()).toBe(false)
+    expect(wrapper.find('[data-group-filter]').exists()).toBe(false)
+    expect(wrapper.text()).not.toContain('Claude Max')
+    expect(wrapper.find('[data-group-quote]').exists()).toBe(false)
+    expect(wrapper.find('select[data-effort]').exists()).toBe(false)
+    expect(wrapper.find('[data-time-period]').exists()).toBe(false)
+    expect(wrapper.find('[data-peak-period]').exists()).toBe(false)
+    expect(card.text()).not.toContain('$14.40')
+    expect(card.text()).not.toContain('$43.20')
+    wrapper.unmount()
+  })
+
+  it.each([0.5, 0])('keeps the public price independent of the personal multiplier %s', async (userRate) => {
+    const wrapper = render([group(1.2, userRate)])
+    await wrapper.get('input[type="search"]').setValue('claude-fable-5-1')
+    expect(wrapper.get('article').text()).toContain('$10.00')
+    expect(wrapper.find('[data-group-rates]').exists()).toBe(false)
+    expect(wrapper.get('article').text()).not.toContain('$6.00')
+    wrapper.unmount()
+  })
+
+  it('shows one public model price when groups advertise the same model on different platforms', async () => {
     const mixed = group()
     mixed.platform = 'composite'
     mixed.name = '混合分组'
@@ -46,136 +94,32 @@ describe('official prices with configured group adjustments', () => {
     } })
     const wrapper = render([mixed])
     await wrapper.get('input[type="search"]').setValue('claude-fable-5-1')
-    expect(wrapper.findAll('article')).toHaveLength(2)
-    const anthropic = wrapper.get('[data-quote-platform="anthropic"]')
-    const openai = wrapper.get('[data-quote-platform="openai"]')
-    expect(anthropic.text()).toContain('$14.40')
-    expect(openai.text()).toContain('$21.60')
-    await wrapper.get('select[data-effort]').setValue('max')
-    expect(anthropic.text()).toContain('$43.20')
-    expect(openai.text()).toContain('$86.40')
-    expect(openai.text()).not.toContain('max ×3')
+    expect(wrapper.findAll('article')).toHaveLength(1)
+    expect(wrapper.get('article').text()).toContain('$10.00')
+    expect(wrapper.get('article').text()).toContain('$50.00')
+    expect(wrapper.text()).not.toContain('混合分组')
+    expect(wrapper.text()).not.toContain('$21.60')
+    expect(wrapper.text()).not.toContain('$86.40')
     wrapper.unmount()
   })
 
-  it('does not assign one provider label to unknown same-name models on different platforms', async () => {
-    const mixed = group()
-    mixed.platform = 'composite'
-    mixed.models = [
-      { name: 'custom-model', platform: 'openai', pricing: null, official_pricing: null },
-      { name: 'custom-model', platform: 'anthropic', pricing: null, official_pricing: null }
-    ]
-    const wrapper = render([mixed])
-    await wrapper.get('input[type="search"]').setValue('custom-model')
-    const cards = wrapper.findAll('article')
-    expect(cards).toHaveLength(2)
-    expect(cards.map(card => card.attributes('data-model-platform')).sort()).toEqual(['anthropic', 'openai'])
-    expect(wrapper.get('article[data-model-platform="openai"]').text()).toContain('OpenAI')
-    expect(wrapper.get('article[data-model-platform="anthropic"]').text()).toContain('Anthropic')
-    expect(cards.every(card => card.text().includes('价格待核实'))).toBe(true)
-    wrapper.unmount()
-  })
-
-  it('recalculates a selected custom period and subscription peak rate, including their overlap', async () => {
-    const timed = group()
-    timed.subscription_type = 'subscription'
-    timed.peak_rate_enabled = true
-    timed.peak_start = '18:00'
-    timed.peak_end = '22:00'
-    timed.peak_rate_multiplier = 2
-    timed.models[0]!.time_pricing = {
-      timezone: 'Asia/Shanghai', weekdays_only: true,
-      periods: [{ start_time: '20:00', end_time: '24:00', multiplier: 0.5 }]
-    }
-    const wrapper = render([timed])
-    await wrapper.get('input[type="search"]').setValue('claude-fable-5-1')
-    const quote = wrapper.get('[data-group-quote="4"]')
-    expect(quote.text()).not.toContain('显式缓存读取')
-    expect(quote.text()).toContain('$14.40')
-    expect(quote.text()).toContain('Asia/Shanghai')
-    expect(quote.text()).toContain('周一至周五')
-    await quote.get('select[data-time-period]').setValue('0')
-    expect(quote.text()).toContain('$7.20')
-    await quote.get('select[data-peak-period]').setValue('peak')
-    expect(quote.text()).toContain('$14.40')
-    await wrapper.get('select[data-effort]').setValue('max')
-    expect(quote.text()).toContain('$43.20')
-    wrapper.unmount()
-  })
-
-  it('ignores subscription peak settings for standard groups', async () => {
-    const standard = group()
-    standard.peak_rate_enabled = true
-    standard.peak_rate_multiplier = 10
-    const wrapper = render([standard])
-    await wrapper.get('input[type="search"]').setValue('claude-fable-5-1')
-    expect(wrapper.find('select[data-peak-period]').exists()).toBe(false)
-    expect(wrapper.get('[data-group-quote="4"]').text()).toContain('$14.40')
-    wrapper.unmount()
-  })
-
-  it('keeps Fable premium once, then applies the group rate and selected effort to every price field', async () => {
-    const wrapper = render([group()])
-    await wrapper.get('input[type="search"]').setValue('claude-fable-5-1')
-    const quote = wrapper.get('[data-group-quote="4"]')
-    expect(quote.text()).toContain('$14.40')
-    expect(quote.text()).toContain('$72.00')
-    expect(quote.text()).toContain('$0.36')
-    expect(quote.text()).toContain('$18.00')
-    expect(quote.text()).toContain('$28.80')
-    await wrapper.get('select[data-effort]').setValue('max')
-    expect(quote.text()).toContain('$43.20')
-    expect(quote.text()).toContain('$216.00')
-    expect(quote.text()).toContain('$1.08')
-    expect(quote.text()).toContain('$54.00')
-    expect(quote.text()).toContain('$86.40')
-    wrapper.unmount()
-  })
-
-  it.each([{ rate: 0.5, input: '$6.00' }, { rate: 0, input: '$0.00' }])('uses a personal rate as replacement, including zero: $rate', async ({ rate, input }) => {
-    const wrapper = render([group(1.2, rate)])
-    await wrapper.get('input[type="search"]').setValue('claude-fable-5-1')
-    expect(wrapper.get('[data-group-quote="4"]').text()).toContain(input)
-    wrapper.unmount()
-  })
-
-  it('separately calculates the same model in different groups without inventing a premium on other groups', async () => {
+  it('keeps a single public tariff regardless of group, subscription and time pricing settings', async () => {
     const plain = group(0.4)
     plain.id = 7
     plain.name = '普通分组'
-    delete plain.models[0]!.group_pricing_override
+    plain.subscription_type = 'subscription'
+    plain.peak_rate_enabled = true
+    plain.peak_rate_multiplier = 2
+    plain.models[0]!.time_pricing = { timezone: 'Asia/Shanghai', weekdays_only: true, periods: [{ start_time: '18:00', end_time: '22:00', multiplier: 0.5 }] }
     const wrapper = render([group(), plain])
     await wrapper.get('input[type="search"]').setValue('claude-fable-5-1')
-    expect(wrapper.get('[data-group-quote="7"]').text()).toContain('$4.00')
-    expect(wrapper.get('[data-group-quote="4"]').text()).toContain('$14.40')
-    await wrapper.get('select[data-group-filter]').setValue('7')
-    expect(wrapper.find('[data-group-quote="4"]').exists()).toBe(false)
-    expect(wrapper.find('[data-group-quote="7"]').exists()).toBe(true)
-    wrapper.unmount()
-  })
-
-  it('does not present stale quotes after the group request fails', async () => {
-    const wrapper = render([group()])
-    await wrapper.setProps({ error: true })
-    expect(wrapper.find('[data-group-quote]').exists()).toBe(false)
-    expect(wrapper.get('[role="alert"]').text()).toContain('加载模型广场失败')
-    wrapper.unmount()
-  })
-
-  it('prices newer discovered models from their exact official tariff, without fuzzy preview matching', async () => {
-    const active = group(0.4)
-    active.models = [
-      { name: 'gpt-6.1-sol', platform: 'openai', pricing: null, official_pricing: null },
-      { name: 'gpt-6.1-sol-preview', platform: 'openai', pricing: null, official_pricing: null }
-    ]
-    const wrapper = render([active])
-    await wrapper.get('input[type="search"]').setValue('gpt-6.1-sol')
-    const quotes = wrapper.findAll('[data-group-quote="4"]')
-    expect(quotes[0]!.text()).toContain('$0.80')
-    expect(quotes[0]!.text()).toContain('$0.04')
-    expect(quotes[0]!.text()).toContain('$1.60')
-    expect(quotes[1]!.text()).toContain('待核实')
-    expect(quotes[1]!.text()).not.toContain('$0.80')
+    expect(wrapper.findAll('article')).toHaveLength(1)
+    expect(wrapper.get('article').findAll('table')).toHaveLength(1)
+    expect(wrapper.find('[data-group-filter]').exists()).toBe(false)
+    expect(wrapper.find('[data-group-rates]').exists()).toBe(false)
+    expect(wrapper.text()).not.toContain('普通分组')
+    expect(wrapper.get('article').text()).toContain('$10.00')
+    expect(wrapper.get('article').text()).not.toContain('$4.00')
     wrapper.unmount()
   })
 })

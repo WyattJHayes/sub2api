@@ -655,7 +655,7 @@ export default {
   modelPlaza: {
     reference: {
       title: 'Model prices',
-      disclaimer: 'Group quotes apply the current group or personal rate to the base price, preserving configured model adjustments and reasoning multipliers. Quotes are for comparison; actual charges follow existing billing settings.',
+      disclaimer: 'These are public reference prices. Use your group multiplier to estimate your price; actual charges follow the platform billing rules.',
       unit: 'Published currency / million tokens; cache reads and writes priced separately',
       officialBase: 'Official base price',
       referenceBase: 'Reference base price',

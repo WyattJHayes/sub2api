@@ -660,7 +660,7 @@ export default {
   modelPlaza: {
     reference: {
       title: '模型价格',
-      disclaimer: '分组计算价采用基价与当前分组或专属倍率，并保留已配置的模型调整与思考倍率。金额供选型参考，实际扣费遵循现有计费配置。',
+      disclaimer: '以下为模型公共参考价。请根据自己所属分组的倍率自行估算；实际扣费以平台计费规则为准。',
       unit: '保留报价原币种 / 百万 tokens；缓存读取与写入分别列价',
       officialBase: '官方基价',
       referenceBase: '参考基价',
