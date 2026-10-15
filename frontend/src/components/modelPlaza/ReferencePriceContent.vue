@@ -25,7 +25,7 @@
       <article v-for="model in filteredModels" :key="referenceModelKey(model.id)" class="min-w-0 rounded-2xl border border-gray-200 bg-white p-4 shadow-sm dark:border-dark-700 dark:bg-dark-800">
         <div class="flex items-start justify-between gap-3">
           <div class="min-w-0">
-            <span class="text-xs font-medium text-primary-600 dark:text-primary-300">{{ providerName(model.provider) }}</span>
+            <span class="text-xs font-medium text-primary-600 dark:text-primary-300">{{ model.providers.map(providerName).join(' / ') }}</span>
             <h3 class="mt-1 break-all font-mono text-base font-semibold text-gray-900 dark:text-white">{{ model.id }}</h3>
           </div>
           <button type="button" class="shrink-0 rounded-lg border border-gray-200 px-2 py-1 text-xs text-gray-600 hover:bg-gray-50 dark:border-dark-600 dark:text-dark-200 dark:hover:bg-dark-700" :aria-label="t('modelPlaza.reference.copyModel', { model: model.id })" @click="copyModel(model.id)">{{ t('modelPlaza.reference.copy') }}</button>
@@ -72,25 +72,35 @@ const { copyToClipboard } = useClipboard()
 const search = ref('')
 const provider = ref('all')
 const copyStatus = ref('')
-const catalog = computed<ReferenceModel[]>(() => {
-  const models = new Map(referenceModels.map(m => [referenceModelKey(m.id), m]))
+type CatalogModel = ReferenceModel & { providers: string[] }
+const catalog = computed<CatalogModel[]>(() => {
+  const models = new Map<string, CatalogModel>(referenceModels.map(m => [referenceModelKey(m.id), { ...m, providers: [m.provider] }]))
   for (const group of props.groups) for (const entry of group.models) {
     const key = referenceModelKey(entry.name)
-    if (!models.has(key)) models.set(key, findReferenceModel(entry.name) ?? {
+    const existing = models.get(key)
+    if (existing) {
+      if (existing.status === 'unverified' && !existing.providers.includes(entry.platform)) {
+        existing.providers.push(entry.platform)
+        existing.providers.sort()
+      }
+      continue
+    }
+    const model = findReferenceModel(entry.name) ?? {
       id: entry.name, provider: entry.platform, currency: 'USD', status: 'unverified', source: '',
       tiers: [{ context: 'all', input: null, output: null, cacheRead: null, cacheWrite: null, cacheWrite1h: null, explicitCacheRead: null }]
-    })
+    }
+    models.set(key, { ...model, providers: [model.provider] })
   }
   return [...models.values()]
 })
-const providers = computed(() => [...new Set(catalog.value.map(model => model.provider))])
+const providers = computed(() => [...new Set(catalog.value.flatMap(model => model.providers))])
 const providerKeys: Record<string, string> = { GLM: 'modelPlaza.reference.glm', Qwen: 'modelPlaza.reference.qwen', Doubao: 'modelPlaza.reference.doubao' }
 const providerName = (name: string) => providerKeys[name] ? t(providerKeys[name]!) : platformDisplayName(name)
 const filteredModels = computed(() => {
   const query = search.value.trim().toLowerCase()
   return catalog.value.filter((model) =>
-    (provider.value === 'all' || provider.value === model.provider) &&
-    (!query || `${model.id} ${model.provider} ${providerName(model.provider)}`.toLowerCase().includes(query))
+    (provider.value === 'all' || model.providers.includes(provider.value)) &&
+    (!query || `${model.id} ${model.providers.join(' ')} ${model.providers.map(providerName).join(' ')}`.toLowerCase().includes(query))
   )
 })
 

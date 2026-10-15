@@ -36,6 +36,25 @@ function render(groups: ModelPlazaGroup[], locale = 'zh') {
 }
 
 describe('public model plaza prices', () => {
+  it.each([['anthropic', 'openai'], ['openai', 'anthropic']])('keeps every provider filter for an unknown model advertised by %s and %s', async (first, second) => {
+    const mixed = group()
+    mixed.models = [first, second].map(platform => ({
+      ...mixed.models[0]!, name: 'shared-unverified-model', platform
+    }))
+    const wrapper = render([mixed])
+    await wrapper.get('input[type="search"]').setValue('shared-unverified-model')
+    expect(wrapper.findAll('article')).toHaveLength(1)
+    expect(wrapper.get('article').text()).toContain('Anthropic')
+    expect(wrapper.get('article').text()).toContain('OpenAI')
+    for (const platform of [first, second]) {
+      await wrapper.get('select').setValue(platform)
+      expect(wrapper.findAll('article')).toHaveLength(1)
+      expect(wrapper.get('article').findAll('table')).toHaveLength(1)
+      expect(wrapper.get('article').text()).toContain('待核实')
+    }
+    wrapper.unmount()
+  })
+
   it('shows only the public price table without exposing group pricing or calculation controls', async () => {
     const wrapper = render([group()])
     await wrapper.get('input[type="search"]').setValue('claude-fable-5-1')
