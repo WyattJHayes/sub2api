@@ -42,10 +42,11 @@ describe('model plaza reference prices', () => {
     wrapper.unmount()
   })
 
-  it('shows only website prices without configured groups or a platform-price tab', () => {
+  it('shows base prices and no invented group quote when no visible groups are configured', () => {
     const wrapper = render()
     expect(wrapper.findAll('article')).toHaveLength(33)
-    expect(wrapper.text()).toContain('美元 / 百万 tokens')
+    expect(wrapper.text()).toContain('保留报价原币种 / 百万 tokens')
+    expect(wrapper.text()).toContain('未关联可见分组')
     expect(wrapper.find('a[href="https://web.aijws.com/models"]').exists()).toBe(false)
     expect(wrapper.find('[data-price-tab="actual"]').exists()).toBe(false)
     expect(wrapper.text()).not.toContain('平台实际价格')
@@ -59,9 +60,9 @@ describe('model plaza reference prices', () => {
     expect(wrapper.text()).not.toMatch(/MY JARVIS|价格来源|采集日期|原站|外站|Captured:|Source:|Source note|Source rule|external/i)
     await wrapper.get('input[type="search"]').setValue('claude-fable-5-1')
     expect(wrapper.findAll('article')).toHaveLength(1)
-    expect(wrapper.get('article').text()).toContain('$12.00')
-    expect(wrapper.get('article').text()).toContain('$60.00')
-    expect(wrapper.get('article').text()).toContain('$0.30')
+    expect(wrapper.get('article').text()).toContain('$10.00')
+    expect(wrapper.get('article').text()).toContain('$50.00')
+    expect(wrapper.get('article').text()).toContain('$0.25')
     wrapper.unmount()
   })
 
@@ -71,7 +72,7 @@ describe('model plaza reference prices', () => {
     expect(wrapper.findAll('article')).toHaveLength(1)
     const card = wrapper.get('article')
     expect(card.text()).toContain('>32K, ≤256K')
-    expect(card.text()).toContain('$0.04')
+    expect(card.text()).toContain('$0.006')
     await wrapper.get('select').setValue('OpenAI')
     expect(wrapper.findAll('article')).toHaveLength(0)
     expect(wrapper.text()).toContain('没有匹配的模型')
@@ -80,7 +81,7 @@ describe('model plaza reference prices', () => {
   it.each([
     { userRate: undefined },
     { userRate: 0.5 }
-  ])('keeps website prices independent of group and user rates ($userRate)', async (tc) => {
+  ])('keeps official bases unchanged while showing group and personal quotes ($userRate)', async (tc) => {
     const response: ModelPlazaResponse = {
       description: '',
       groups: [{
@@ -101,18 +102,17 @@ describe('model plaza reference prices', () => {
         }]
       }]
     }
+    response.groups[0]!.models[0]!.group_pricing_override = response.groups[0]!.models[0]!.pricing
     const wrapper = render()
     await wrapper.setProps({ response })
     expect(wrapper.find('[data-price-tab="actual"]').exists()).toBe(false)
-    expect(wrapper.text()).not.toContain('Claude Max')
-    await wrapper.get('input[type="search"]').setValue('claude-fable-5-1')
+    expect(wrapper.text()).toContain('Claude Max')
+    await wrapper.get('input[type="search"]').setValue('claude-fable-5')
     const row = wrapper.get('tbody tr')
-    expect(wrapper.get('article').text()).toContain('claude-fable-5-1')
-    expect(row.text()).toContain('$12.00')
-    expect(row.text()).toContain('$60.00')
-    expect(row.text()).toContain('$0.30')
-    expect(wrapper.find('[data-reasoning-effort="max"]').exists()).toBe(false)
-    expect(wrapper.findAll('tbody tr')).toHaveLength(1)
+    expect(row.text()).toContain('$10.00')
+    expect(row.text()).toContain('$50.00')
+    expect(row.text()).toContain('$0.25')
+    expect(wrapper.get('[data-group-quote="10"]').text()).toContain(tc.userRate === undefined ? '$14.40' : '$6.00')
     wrapper.unmount()
   })
 
@@ -131,8 +131,22 @@ describe('model plaza reference prices', () => {
     expect(rows[1]!.text()).toContain('$2.00')
     expect(wrapper.text()).toContain('整次请求')
     await wrapper.get('input[type="search"]').setValue('GLM-5.1')
-    expect(wrapper.findAll('tbody tr')[0]!.text()).toContain('<32K')
-    expect(wrapper.findAll('tbody tr')[1]!.text()).toContain('≥32K')
+    expect(wrapper.findAll('tbody tr')).toHaveLength(1)
+    expect(wrapper.get('tbody tr').text()).toContain('$1.40')
+    await wrapper.get('input[type="search"]').setValue('DeepSeek-V4-Flash-0731')
+    expect(wrapper.get('article').text()).toContain('参考基价')
+    expect(wrapper.get('article').text()).toContain('$0.44')
+    expect(wrapper.get('article').text()).toContain('$1.32')
+    expect(wrapper.get('article').text()).toContain('$0.014')
+    expect(wrapper.get('article').text()).not.toContain('$0.0083')
+    expect(wrapper.get('article').text()).not.toContain('$0.00')
+    await wrapper.get('input[type="search"]').setValue('Doubao-Seed-2-1-Turbo')
+    expect(wrapper.get('article').text()).toContain('$0.50')
+    expect(wrapper.get('article').text()).toContain('$2.50')
+    expect(wrapper.get('article').text()).toContain('新加坡区域')
+    await wrapper.get('input[type="search"]').setValue('Doubao-Seed-2-1-Pro')
+    expect(wrapper.get('article').text()).toContain('价格待核实')
+    expect(wrapper.get('article').text()).not.toContain('$0.50')
   })
 
   it('does not show reference data before the feature gate is confirmed, and preserves API errors', async () => {
@@ -141,6 +155,8 @@ describe('model plaza reference prices', () => {
     expect(wrapper.find('[data-price-tab="reference"]').exists()).toBe(false)
     expect(wrapper.text()).toContain('加载模型广场失败')
     await wrapper.setProps({ referenceEnabled: true })
+    expect(wrapper.findAll('article')).toHaveLength(0)
+    await wrapper.setProps({ error: false })
     expect(wrapper.findAll('article')).toHaveLength(33)
     expect(wrapper.text()).not.toContain('加载模型广场失败')
     expect(wrapper.find('[data-price-tab="actual"]').exists()).toBe(false)
@@ -148,7 +164,7 @@ describe('model plaza reference prices', () => {
 
   it('renders English labels and unavailable prices without raw translation keys', () => {
     const wrapper = render('en')
-    expect(wrapper.text()).toContain('USD / million tokens')
+    expect(wrapper.text()).toContain('Published currency / million tokens')
     expect(wrapper.text()).toContain('Not provided')
     expect(wrapper.text()).not.toContain('modelPlaza.reference.')
   })

@@ -1,0 +1,19 @@
+{
+  "reviewed": "2026-10-15",
+  "sources": [
+    { "id": "openai", "url": "https://developers.openai.com/api/docs/pricing.md", "marker": "gpt-6-astra", "sha256": "e0767b5009dcc929a2f9eeb9ce6096a57ff12e5d8c011de9d69ff145aef2fc28" },
+    { "id": "claude", "url": "https://platform.claude.com/docs/en/about-claude/pricing.md", "marker": "Fable", "sha256": "90dc10fdd4f627f1b5a6357971894ddc0d596a8f1c399395f51253ebd72901c5" },
+    { "id": "kimi", "url": "https://platform.kimi.ai/docs/pricing/chat.md", "marker": "kimi-k3", "sha256": "2ac14b1b7d9061c1303b8adc58797301e61dc81f25b80bba6aead5161b243a32" },
+    { "id": "zai", "url": "https://docs.z.ai/guides/overview/pricing.md", "marker": "GLM-5.2", "sha256": "e78c0fce9c3f9a7213d3a36aa99303d4b428f0776f05e154654d5d00447b9cfb" },
+    { "id": "deepseek", "url": "https://api-docs.deepseek.com/quick_start/pricing/", "marker": "deepseek-flash", "sha256": "210f102275ccf1a6542f08a3bc9e4b4c7c83278cb74b35217bffa112df6363b2" },
+    { "id": "byteplus", "url": "https://ai.byteplus.com/ark/region:ap-southeast-1/docs/model-pricing.md", "marker": "deepseek-v4-flash-ga-260731", "sha256": "efc540bf21324075e59c38d4bd1b91970ba8771eb8cf7a26a0f5727787b5df80" },
+    { "id": "ali-glm", "url": "https://www.alibabacloud.com/help/en/model-studio/glm-5-2-fast", "format": "html-article", "marker": "glm-5.2-fast-preview", "sha256": "0db731f26f52b5a9eac5ce867634de1ee2485c0add110a7536f1074953cd8733" },
+    { "id": "ali-kimi", "url": "https://www.alibabacloud.com/help/en/model-studio/kimi-k2-5", "format": "html-article", "marker": "kimi-k2.5", "sha256": "184179713f2cc056d0029f67ff6e3fde061c0dfc75550c2f005aeee8c3668423" },
+    { "id": "qwen-max-37", "url": "https://www.alibabacloud.com/help/en/model-studio/qwen3-7-max", "format": "html-article", "marker": "qwen3.7-max", "sha256": "05760e9561cf604962fa2f06013e6be553bc42ff66ab0862633ec57ce6e676a7" },
+    { "id": "qwen-max-38", "url": "https://www.alibabacloud.com/help/en/model-studio/qwen3-8-max", "format": "html-article", "marker": "qwen3.8-max", "sha256": "34f2743cbe5c3d4e858caefb0f730606606c36a8af23350eb8ea4e3f31c1e4da" },
+    { "id": "qwen-plus", "url": "https://www.alibabacloud.com/help/en/model-studio/qwen3-7-plus", "format": "html-article", "marker": "qwen3.7-plus", "sha256": "ad18ed00693e0f0ee36036aa2bb4bfc3df42a26a87f90f398e138c73b9d31dfd" },
+    { "id": "qwen-flash-36", "url": "https://www.alibabacloud.com/help/en/model-studio/qwen3-6-flash", "format": "html-article", "marker": "qwen3.6-flash", "sha256": "ce668d43fe287a7bc5f4e4189c6927599856725402c4c44f11a2afb726a1b7e2" },
+    { "id": "qwen-flash-37", "url": "https://www.alibabacloud.com/help/en/model-studio/qwen3-7-flash", "format": "html-article", "marker": "qwen3.7-flash", "sha256": "13600aa1601daf466b1a6f621e631f1f8c114fd71af453d269bf700e2fc8887f" },
+    { "id": "qwen-flash-38", "url": "https://www.alibabacloud.com/help/en/model-studio/qwen3-8-flash", "format": "html-article", "marker": "qwen3.8-flash", "sha256": "07f74d8acad4c1b00c2093d15535e0c4363da7ab2c29f99872016a7365214591" }
+  ]
+}

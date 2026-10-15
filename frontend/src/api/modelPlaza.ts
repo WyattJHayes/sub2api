@@ -49,6 +49,10 @@ export interface PlazaModel {
   /** 实收口径的展示定价：档位可提供绝对单价或相对基础价倍率；均为标准时段价。 */
   pricing: UserSupportedModelPricing | null
   official_pricing: PlazaOfficialPricing | null
+  /** Only returned for explicit group cards. Resolved USD/token tiers reuse billing. */
+  group_pricing_override?: UserSupportedModelPricing | null
+  /** Raw group-card intent, distinct from the resolver's generic TTL fallback. */
+  group_cache_write_1h_configured?: boolean
   /** 仅多档模型返回。 */
   long_context_basis?: PlazaLongContextBasis
   /** 仅配置了分时倍率的模型返回。 */

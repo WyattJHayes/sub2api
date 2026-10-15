@@ -6,6 +6,7 @@ import (
 	"context"
 	"errors"
 	"testing"
+	"time"
 
 	"github.com/Wei-Shaw/sub2api/internal/config"
 	"github.com/stretchr/testify/require"
@@ -65,6 +66,87 @@ func TestListPlazaGroups_Fable51HasNoImplicitReasoningMultiplier(t *testing.T) {
 	require.Len(t, groups, 1)
 	require.Len(t, groups[0].Models, 1)
 	require.Empty(t, groups[0].Models[0].Pricing.ReasoningEffortMultipliers)
+}
+
+type plazaAccountCatalogStub struct {
+	AccountRepository
+	accounts []Account
+	err      error
+}
+
+func (r plazaAccountCatalogStub) ListActive(context.Context) ([]Account, error) {
+	return r.accounts, r.err
+}
+
+func TestListPlazaGroups_AccountModelsWithoutChannels(t *testing.T) {
+	svc := newPlazaService(nil, []Group{
+		{ID: 4, Platform: PlatformAnthropic, ModelAllowlist: GroupModelAllowlist{Enabled: true, Models: []string{"claude-fable-5-1"}}, ModelPricing: []ChannelModelPricing{{Models: []string{"claude-fable-5-1"}, InputPrice: testPtrFloat64(12e-6), ReasoningEffortMultipliers: map[string]float64{"max": 3}}}},
+		{ID: 7, Platform: PlatformOpenAI},
+	}, nil)
+	svc.accountRepo = plazaAccountCatalogStub{accounts: []Account{
+		{Platform: PlatformAnthropic, Status: StatusActive, Schedulable: true, GroupIDs: []int64{4, 7}, Credentials: map[string]any{"model_mapping": map[string]any{"claude-fable-5-1": "claude-fable-5-1", "hidden-model": "hidden-model"}}},
+	}}
+	groups, err := svc.ListGroups(context.Background())
+	require.NoError(t, err)
+	require.Len(t, groups, 1, "account platform must not leak into another platform's group")
+	require.Len(t, groups[0].Models, 1, "group allowlist applies to account discovery")
+	m := groups[0].Models[0]
+	require.Equal(t, "claude-fable-5-1", m.Name)
+	require.InDelta(t, 12e-6, *m.GroupPricingOverride.InputPrice, 1e-12)
+	require.Equal(t, float64(3), m.GroupPricingOverride.ReasoningEffortMultipliers["max"])
+}
+
+func TestListPlazaGroups_FiltersBeforeCanonicalDeduplication(t *testing.T) {
+	ch := plazaPricedChannel(1, "ch", []int64{4}, PlatformAnthropic, "claude-fable-5.1", "claude-fable-5-1", "other")
+	svc := newPlazaService([]Channel{ch}, []Group{{ID: 4, Platform: PlatformAnthropic, ModelAllowlist: GroupModelAllowlist{Enabled: true, Models: []string{"claude-fable-5-1"}}}}, nil)
+	out, err := svc.ListGroups(context.Background())
+	require.NoError(t, err)
+	require.Len(t, out, 1)
+	require.Len(t, out[0].Models, 1)
+	require.Equal(t, "claude-fable-5-1", out[0].Models[0].Name)
+}
+
+func TestListPlazaGroups_AccountCatalogFailureIsNotEmptySuccess(t *testing.T) {
+	svc := newPlazaService(nil, []Group{{ID: 4, Platform: PlatformAnthropic}}, nil)
+	svc.accountRepo = plazaAccountCatalogStub{err: errors.New("catalog unavailable")}
+	_, err := svc.ListGroups(context.Background())
+	require.ErrorContains(t, err, "catalog unavailable")
+}
+
+func TestListPlazaGroups_UnmappedProviderAccountsKeepTheirCatalog(t *testing.T) {
+	for _, tc := range []struct{ platform, model string }{
+		{PlatformDeepseek, "deepseek-v4-pro"},
+		{PlatformMiniMax, "MiniMax-M3"},
+		{PlatformOpenCodeGo, "kimi-k3"},
+		{PlatformTypeSafe, "jev-latest"},
+	} {
+		t.Run(tc.platform, func(t *testing.T) {
+			svc := newPlazaService(nil, []Group{{ID: 4, Platform: tc.platform}}, nil)
+			svc.accountRepo = plazaAccountCatalogStub{accounts: []Account{{Platform: tc.platform, Status: StatusActive, Schedulable: true, GroupIDs: []int64{4}}}}
+			out, err := svc.ListGroups(context.Background())
+			require.NoError(t, err)
+			require.Len(t, out, 1)
+			require.Contains(t, plazaModelsByName(out[0].Models), tc.model)
+		})
+	}
+}
+
+func TestListPlazaGroups_ExpiredAutoPausedAccountCannotAdvertiseAGroup(t *testing.T) {
+	past := time.Now().Add(-time.Hour)
+	svc := newPlazaService(nil, []Group{{ID: 4, Platform: PlatformOpenAI}}, nil)
+	svc.accountRepo = plazaAccountCatalogStub{accounts: []Account{{Platform: PlatformOpenAI, Status: StatusActive, Schedulable: true, GroupIDs: []int64{4}, AutoPauseOnExpired: true, ExpiresAt: &past}}}
+	out, err := svc.ListGroups(context.Background())
+	require.NoError(t, err)
+	require.Empty(t, out)
+}
+
+func TestPlazaAccountModelIDs_UsesAccountWildcardRules(t *testing.T) {
+	for _, pattern := range []string{"gpt-*-sol", "GPT-*"} {
+		a := &Account{Platform: PlatformOpenAI, Credentials: map[string]any{"model_mapping": map[string]any{pattern: "gpt-6-sol"}}}
+		require.Empty(t, plazaAccountModelIDs(a), pattern)
+	}
+	a := &Account{Platform: PlatformOpenAI, Credentials: map[string]any{"model_mapping": map[string]any{"gpt-6*": "gpt-6-sol"}}}
+	require.Contains(t, plazaAccountModelIDs(a), "gpt-6-sol")
 }
 
 func TestListPlazaGroups_DedupFirstWinsWithPricingUpgrade(t *testing.T) {
@@ -446,6 +528,51 @@ func TestListGroups_GroupTokenCardOverridesChannelPricing(t *testing.T) {
 	require.InDelta(t, 1e-6, *m.Pricing.InputPrice, 1e-15, "分组价卡优先于渠道平价")
 	require.InDelta(t, 15e-6, *m.Pricing.OutputPrice, 1e-15, "卡未配置的项回落目录价")
 	require.Empty(t, m.Pricing.Intervals)
+}
+
+func TestListGroups_GroupOverrideExportsResolvedContextTiers(t *testing.T) {
+	channels := []Channel{plazaPricedChannel(1, "ch", []int64{10}, PlatformAnthropic, "claude-sonnet-4")}
+	groups := []Group{{
+		ID: 10, Platform: PlatformAnthropic, LongContextPricingEnabled: true,
+		ModelPricing: []ChannelModelPricing{{Models: []string{"claude-sonnet-4"}, BillingMode: BillingModeToken,
+			InputPrice: testPtrFloat64(2e-6), CacheWritePrice: testPtrFloat64(4e-6),
+			Intervals: []PricingInterval{{MinTokens: 100000, InputMultiplier: testPtrFloat64(3)}},
+		}},
+	}}
+	svc := newPlazaServiceWithBilling(channels, groups, map[int64]string{10: PlatformAnthropic}, nil)
+	// Existing group-card semantics ignore custom intervals and use the official
+	// preset's context threshold. The plaza must reuse that same result.
+	svc.billingService.fallbackPrices["claude-sonnet-4"].LongContextInputThreshold = 200000
+	svc.billingService.fallbackPrices["claude-sonnet-4"].LongContextInputMultiplier = 2
+	out, err := svc.ListGroups(context.Background())
+	require.NoError(t, err)
+	m := out[0].Models[0]
+	require.NotNil(t, m.GroupPricingOverride)
+	require.Len(t, m.GroupPricingOverride.Intervals, 2, "group quotes reuse billing's preset tiers, not the ignored custom interval")
+	require.InDelta(t, 2e-6, *m.GroupPricingOverride.Intervals[0].InputPrice, 1e-15)
+	require.InDelta(t, 4e-6, *m.GroupPricingOverride.Intervals[1].InputPrice, 1e-15)
+	require.Equal(t, 200000, m.GroupPricingOverride.Intervals[1].MinTokens)
+	require.InDelta(t, 4e-6, *m.GroupPricingOverride.CacheWrite1hPrice, 1e-15)
+	require.False(t, m.GroupCacheWrite1hConfigured, "a resolved generic TTL fallback is not an explicitly configured one-hour mode")
+}
+
+func TestListPlazaGroups_ExplicitOneHourModeSurvivesResolution(t *testing.T) {
+	channels := []Channel{plazaPricedChannel(1, "ch", []int64{4}, PlatformOpenAI, "gpt-5.3-codex")}
+	for _, explicit := range []bool{false, true} {
+		card := ChannelModelPricing{Models: []string{"gpt-5.3-codex"}, CacheWritePrice: testPtrFloat64(4e-6)}
+		if explicit {
+			card.CacheWrite1hPrice = testPtrFloat64(0)
+		}
+		svc := newPlazaServiceWithBilling(channels, []Group{{ID: 4, Platform: PlatformOpenAI, ModelPricing: []ChannelModelPricing{card}}}, map[int64]string{4: PlatformOpenAI}, nil)
+		out, err := svc.ListGroups(context.Background())
+		require.NoError(t, err)
+		m := out[0].Models[0]
+		require.NotNil(t, m.GroupPricingOverride.CacheWrite1hPrice)
+		require.Equal(t, explicit, m.GroupCacheWrite1hConfigured)
+		if explicit {
+			require.Zero(t, *m.GroupPricingOverride.CacheWrite1hPrice)
+		}
+	}
 }
 
 func TestListGroups_ImageModelKeepsTierSynthesisWithBilling(t *testing.T) {

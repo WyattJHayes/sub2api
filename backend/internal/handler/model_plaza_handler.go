@@ -1,7 +1,7 @@
 package handler
 
 import (
-	"log/slog"
+	"net/http"
 
 	"github.com/Wei-Shaw/sub2api/internal/pkg/response"
 	"github.com/Wei-Shaw/sub2api/internal/server/middleware"
@@ -64,10 +64,12 @@ type modelPlazaTimePricing struct {
 
 // modelPlazaModel 广场模型条目：实收口径展示定价（白名单形态）+ 官方参考价。
 type modelPlazaModel struct {
-	Name            string                     `json:"name"`
-	Platform        string                     `json:"platform"`
-	Pricing         *userSupportedModelPricing `json:"pricing"`
-	OfficialPricing *modelPlazaOfficialPricing `json:"official_pricing"`
+	Name                        string                     `json:"name"`
+	Platform                    string                     `json:"platform"`
+	Pricing                     *userSupportedModelPricing `json:"pricing"`
+	OfficialPricing             *modelPlazaOfficialPricing `json:"official_pricing"`
+	GroupPricingOverride        *userSupportedModelPricing `json:"group_pricing_override,omitempty"`
+	GroupCacheWrite1hConfigured bool                       `json:"group_cache_write_1h_configured"`
 	// LongContextBasis 多档时的计价基准："whole_request"（整单按档）| "marginal"（仅超出部分）。
 	LongContextBasis string `json:"long_context_basis,omitempty"`
 	// TimePricing 分时倍率时段，落在时段内的请求整单乘倍率；无分时省略。
@@ -143,9 +145,10 @@ func (h *ModelPlazaHandler) Get(c *gin.Context) {
 		}
 		userRates, err = h.apiKeyService.GetUserGroupRates(c.Request.Context(), subject.UserID)
 		if err != nil {
-			// 专属倍率仅是展示增强，失败降级为分组默认倍率。
-			slog.Warn("model_plaza_user_rates_failed", "error", err, "user_id", subject.UserID)
-			userRates = nil
+			// A missing personal rate must not silently become a different quote.
+			c.Header("Retry-After", "1")
+			response.Error(c, http.StatusServiceUnavailable, "Unable to load personal group rates")
+			return
 		}
 	}
 
@@ -202,12 +205,14 @@ func toModelPlazaGroupDTO(g *service.PlazaGroup, userRates map[int64]float64) mo
 	for i := range g.Models {
 		m := &g.Models[i]
 		models = append(models, modelPlazaModel{
-			Name:             m.Name,
-			Platform:         m.Platform,
-			Pricing:          toUserPricing(m.Pricing),
-			OfficialPricing:  toModelPlazaOfficialPricing(m.OfficialPricing),
-			LongContextBasis: string(m.LongContextBasis),
-			TimePricing:      toModelPlazaTimePricing(m.TimePricing),
+			Name:                        m.Name,
+			Platform:                    m.Platform,
+			Pricing:                     toUserPricing(m.Pricing),
+			OfficialPricing:             toModelPlazaOfficialPricing(m.OfficialPricing),
+			GroupPricingOverride:        toUserPricing(m.GroupPricingOverride),
+			GroupCacheWrite1hConfigured: m.GroupCacheWrite1hConfigured,
+			LongContextBasis:            string(m.LongContextBasis),
+			TimePricing:                 toModelPlazaTimePricing(m.TimePricing),
 		})
 	}
 	dto := modelPlazaGroup{

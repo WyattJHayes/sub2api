@@ -1533,14 +1533,10 @@ func modelListingSource(platform string, availableModels, fallbackModels []strin
 }
 
 func defaultCodexModelIDsForPlatform(platform string) []string {
-	switch platform {
-	case service.PlatformDeepseek:
-		return []string{"deepseek-v4-pro", "deepseek-v4-flash", "deepseek-flash"}
-	case service.PlatformMiniMax:
-		return []string{"MiniMax-M3", "MiniMax-M2.7", "MiniMax-M2.5"}
-	default:
-		return defaultModelIDsForPlatform(platform)
+	if models := service.DefaultNativeProviderModelIDs(platform); models != nil {
+		return models
 	}
+	return defaultModelIDsForPlatform(platform)
 }
 
 func defaultModelIDsForPlatform(platform string) []string {

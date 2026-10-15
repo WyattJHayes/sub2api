@@ -11,6 +11,12 @@ FRONTEND_CRITICAL_VITEST := \
 	src/components/account/__tests__/OpenAIReferralCell.transport.spec.ts \
 	src/components/account/__tests__/OpenAIQuotaResetCell.spark_shadow.spec.ts \
 	src/constants/__tests__/platforms.spec.ts \
+	src/components/modelPlaza/__tests__/ModelPlazaPanels.spec.ts \
+	src/components/modelPlaza/__tests__/ModelPlazaView.spec.ts \
+	src/components/modelPlaza/__tests__/PlazaGroupSection.spec.ts \
+	src/components/modelPlaza/__tests__/PlazaModelPricingTable.spec.ts \
+	src/components/modelPlaza/__tests__/GroupReferencePrices.spec.ts \
+	src/components/modelPlaza/__tests__/referencePriceQuotes.spec.ts \
 	src/components/account/__tests__/credentialsBuilder.platformCatalog.spec.ts \
 	src/components/account/__tests__/CreateAccountModal.spec.ts \
 	src/components/account/__tests__/EditAccountModal.spec.ts \

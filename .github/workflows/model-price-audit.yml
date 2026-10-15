@@ -1,0 +1,28 @@
+name: Model pricing document audit
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: '17 2 * * 1'
+  pull_request:
+    paths:
+      - '.github/price-audit/**'
+      - '.github/workflows/model-price-audit.yml'
+      - 'frontend/src/data/modelReferencePrices.ts'
+
+permissions:
+  contents: read
+
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '20'
+      - name: Test audit failure handling
+        run: node --test .github/price-audit/price-audit.test.mjs
+      - name: Compare reviewed public pricing documents
+        run: node .github/price-audit/price-audit.mjs
