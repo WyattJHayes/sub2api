@@ -653,6 +653,28 @@ export default {
 
   // Model Plaza (public group/model pricing showcase)
   modelPlaza: {
+    reference: {
+      title: 'Model prices',
+      disclaimer: 'Browse model prices to compare options. Actual charges follow platform group settings.',
+      unit: 'USD / million tokens; cache reads and writes priced separately',
+      search: 'Search models or providers',
+      provider: 'Provider',
+      count: '{count} models',
+      context: 'Input length',
+      input: 'Input',
+      output: 'Output',
+      cacheRead: 'Cache read',
+      cacheWrite: 'Cache write',
+      notProvided: 'Not provided',
+      copy: 'Copy ID',
+      copyModel: 'Copy model ID {model}',
+      copied: 'Copied {model}',
+      pricesFor: 'Prices for {model}',
+      wholeRequest: 'Above 272K input tokens, input and cache reads ×2, output ×1.5 for the whole request. Prices below include these multipliers.',
+      glm: 'Zhipu GLM',
+      qwen: 'Qwen',
+      doubao: 'Doubao'
+    },
     title: 'Model Plaza',
     description: 'Browse available models and pricing by group',
     loading: 'Loading...',

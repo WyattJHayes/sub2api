@@ -3,7 +3,7 @@
     class="glass sticky top-0 z-30 border-b border-gray-200/50 dark:border-dark-700/50"
   >
     <div class="mx-auto flex max-w-7xl items-center justify-between gap-4 px-4 py-3.5 sm:px-6">
-      <!-- 左:站点 logo + 名称 -->
+      <!-- 左:站点 logo + 模型广场标题 -->
       <div class="flex min-w-0 items-center gap-3">
         <template v-if="settings">
           <span
@@ -12,7 +12,7 @@
             <img :src="siteLogo || '/logo.svg'" alt="Logo" class="h-full w-full object-contain" />
           </span>
           <span class="truncate text-base font-semibold text-gray-950 dark:text-white">
-            {{ siteName }}
+            {{ t('modelPlaza.title') }}
           </span>
         </template>
         <template v-else>
@@ -52,7 +52,6 @@ const appStore = useAppStore()
 const authStore = useAuthStore()
 
 const settings = computed(() => appStore.cachedPublicSettings)
-const siteName = computed(() => settings.value?.site_name || 'Sub2API')
 const siteLogo = computed(() =>
   sanitizeUrl(settings.value?.site_logo || '', { allowRelative: true, allowDataUrl: true })
 )
