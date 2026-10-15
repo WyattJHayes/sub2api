@@ -5,6 +5,13 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+	"time"
+
+	"github.com/Wei-Shaw/sub2api/internal/pkg/antigravity"
+	"github.com/Wei-Shaw/sub2api/internal/pkg/claude"
+	"github.com/Wei-Shaw/sub2api/internal/pkg/geminicli"
+	"github.com/Wei-Shaw/sub2api/internal/pkg/openai"
+	"github.com/Wei-Shaw/sub2api/internal/pkg/xai"
 )
 
 // PlazaOfficialPricing 模型广场展示用的官方参考价（USD per token），与计费同源：
@@ -25,6 +32,10 @@ type PlazaModel struct {
 	Platform        string
 	Pricing         *ChannelModelPricing
 	OfficialPricing *PlazaOfficialPricing
+	// Explicit group override only; catalog/channel fallback prices are not model surcharges.
+	GroupPricingOverride *ChannelModelPricing
+	// Preserve raw configuration intent before billing expands TTL fallbacks.
+	GroupCacheWrite1hConfigured bool
 	// LongContextBasis 多档时的计价基准（整单 / 仅超出部分），单档为空。
 	LongContextBasis ContextPricingBasis
 	// TimePricing 计费会生效的分时倍率时段；无分时为 nil。
@@ -33,9 +44,8 @@ type PlazaModel struct {
 
 // PlazaGroup 模型广场中以分组为顶层的条目。
 //
-// 与 AvailableGroupRef 相比多了 Description 与 Models；Models 来自该分组关联渠道的
-// 支持模型（普通分组按分组平台隔离，Composite 分组展开关联渠道已配置的
-// 具体平台），与「可用渠道」页口径一致。
+// Models 来自关联渠道及活跃可调度账号的配置目录，经过分组模型白名单过滤。
+// 普通分组按平台隔离，Composite 分组保留模型的具体平台。
 type PlazaGroup struct {
 	ID                 int64
 	Name               string
@@ -63,7 +73,7 @@ type PlazaGroup struct {
 
 // ModelPlazaService 聚合模型广场数据。
 //
-// 模型枚举来自渠道配置；token 模型的展示单价与阶梯由 BillingService 的阶梯表
+// 模型枚举来自渠道与账号配置；token 模型的展示单价与阶梯由 BillingService 的阶梯表
 // 查询给出（与扣费走同一条解析链与计费函数），图片/按次模型沿用渠道/分组档位价。
 type ModelPlazaService struct {
 	channelRepo    ChannelRepository
@@ -71,6 +81,16 @@ type ModelPlazaService struct {
 	pricingService *PricingService
 	billingService *BillingService
 	resolver       *ModelPricingResolver
+	accountRepo    interface {
+		ListActive(context.Context) ([]Account, error)
+	}
+}
+
+// ProvideModelPlazaService includes account-bound groups, which need no channel.
+func ProvideModelPlazaService(channelRepo ChannelRepository, groupRepo GroupRepository, pricing *PricingService, billing *BillingService, resolver *ModelPricingResolver, accounts AccountRepository) *ModelPlazaService {
+	s := NewModelPlazaService(channelRepo, groupRepo, pricing, billing, resolver)
+	s.accountRepo = accounts
+	return s
 }
 
 // NewModelPlazaService 创建模型广场服务。
@@ -92,8 +112,7 @@ func NewModelPlazaService(
 
 // ListGroups 返回模型广场数据：每个活跃分组附带其可用模型与定价。
 //
-// 模型枚举口径与 ListAvailable 一致（Active 渠道、SupportedModels ∪ 全局定价回落、
-// 平台隔离），仅把顶层从渠道换成分组：
+// 模型来自活跃渠道及分组绑定账号，定价仍由现有解析链提供：
 //   - 渠道按 lower(name) 排序后遍历，保证同名模型去重结果确定；
 //   - 同分组同名模型「先见者胜」，仅当已存条目无定价而新条目有定价时升级替换；
 //   - token 模型的单价与阶梯按实收口径合成（见 ResolveContextPricingSchedule），
@@ -172,6 +191,9 @@ func (s *ModelPlazaService) ListGroups(ctx context.Context) ([]PlazaGroup, error
 			}
 			for j := range supported {
 				m := supported[j]
+				if !groupEnt[gid].ModelAllowlist.Allows(m.Name) {
+					continue
+				}
 				if pg.Platform == PlatformComposite {
 					if !isConcreteRequestPlatform(m.Platform) {
 						continue
@@ -179,7 +201,7 @@ func (s *ModelPlazaService) ListGroups(ctx context.Context) ([]PlazaGroup, error
 				} else if m.Platform != pg.Platform {
 					continue
 				}
-				key := modelKey{platform: m.Platform, name: m.Name}
+				key := modelKey{platform: m.Platform, name: normalizeChannelPricingModelName(m.Name)}
 				if at, seen := idx[key]; seen {
 					// 先见者胜；仅当已存条目无定价而新条目有定价时升级。
 					if pg.Models[at].Pricing == nil && m.Pricing != nil {
@@ -193,6 +215,44 @@ func (s *ModelPlazaService) ListGroups(ctx context.Context) ([]PlazaGroup, error
 					Platform: m.Platform,
 					Pricing:  m.Pricing,
 				})
+			}
+		}
+	}
+
+	if s.accountRepo != nil {
+		accounts, err := s.accountRepo.ListActive(ctx)
+		if err != nil {
+			return nil, fmt.Errorf("list model plaza accounts: %w", err)
+		}
+		for i := range accounts {
+			a := &accounts[i]
+			if !a.IsActive() || !a.Schedulable || !isConcreteRequestPlatform(a.Platform) {
+				continue
+			}
+			if a.AutoPauseOnExpired && a.ExpiresAt != nil && !time.Now().Before(*a.ExpiresAt) {
+				continue
+			}
+			// This is a price catalog, not live gateway health. Temporary rate
+			// limits do not remove a configured model from the catalog.
+			for _, gid := range a.GroupIDs {
+				pg, ok := byGroup[gid]
+				if !ok || (pg.Platform != PlatformComposite && pg.Platform != a.Platform) {
+					continue
+				}
+				if modelIdx[gid] == nil {
+					modelIdx[gid] = make(map[modelKey]int)
+				}
+				for _, name := range plazaAccountModelIDs(a) {
+					if !groupEnt[gid].ModelAllowlist.Allows(name) {
+						continue
+					}
+					key := modelKey{platform: a.Platform, name: normalizeChannelPricingModelName(name)}
+					if _, seen := modelIdx[gid][key]; seen {
+						continue
+					}
+					modelIdx[gid][key] = len(pg.Models)
+					pg.Models = append(pg.Models, PlazaModel{Name: name, Platform: a.Platform})
+				}
 			}
 		}
 	}
@@ -212,6 +272,10 @@ func (s *ModelPlazaService) ListGroups(ctx context.Context) ([]PlazaGroup, error
 		})
 		g := groupEnt[gid]
 		for j := range pg.Models {
+			pg.Models[j].GroupPricingOverride = matchGroupModelPricing(g, pg.Models[j].Name)
+			if card := pg.Models[j].GroupPricingOverride; card != nil {
+				pg.Models[j].GroupCacheWrite1hConfigured = card.CacheWrite1hPrice != nil
+			}
 			s.fillDisplayPricing(ctx, &pg.Models[j], g)
 			pg.Models[j].OfficialPricing = s.lookupOfficialPricing(ctx, pg.Models[j].Name, officialMemo)
 		}
@@ -225,6 +289,58 @@ func (s *ModelPlazaService) ListGroups(ctx context.Context) ([]PlazaGroup, error
 		return out[i].Name < out[j].Name
 	})
 	return out, nil
+}
+
+// Match the gateway's configured mapping/default catalog. Wildcards expand only
+// against known IDs; they are never advertised as literal request model names.
+func plazaAccountModelIDs(a *Account) []string {
+	var defaults []string
+	switch a.Platform {
+	case PlatformAnthropic:
+		defaults = claude.DefaultModelIDs()
+	case PlatformOpenAI:
+		defaults = openai.DefaultModelIDs()
+	case PlatformGrok:
+		defaults = xai.DefaultModelIDs()
+	case PlatformDeepseek, PlatformMiniMax:
+		defaults = DefaultNativeProviderModelIDs(a.Platform)
+	case PlatformOpenCodeGo:
+		defaults = DefaultOpenCodeGoModelIDs()
+	case PlatformTypeSafe:
+		defaults = []string{"jev-latest"}
+	case PlatformAntigravity:
+		for _, m := range antigravity.DefaultModels() {
+			defaults = append(defaults, m.ID)
+		}
+	case PlatformGemini:
+		for _, m := range geminicli.DefaultModels {
+			defaults = append(defaults, m.ID)
+		}
+	default:
+		defaults = claude.DefaultModelIDs()
+	}
+	mapping := a.GetModelMapping()
+	if len(mapping) == 0 || (a.Platform == PlatformOpenAI && a.IsOpenAIPassthroughEnabled()) {
+		return defaults
+	}
+	var names []string
+	for name := range mapping {
+		name = strings.TrimSpace(name)
+		if name == "" {
+			continue
+		}
+		if !strings.Contains(name, "*") {
+			names = append(names, name)
+			continue
+		}
+		for _, candidate := range defaults {
+			if a.IsModelSupported(candidate) {
+				names = append(names, candidate)
+			}
+		}
+	}
+	sort.Strings(names)
+	return names
 }
 
 // fillDisplayPricing 把模型的展示定价换成实收口径：
@@ -242,6 +358,11 @@ func (s *ModelPlazaService) fillDisplayPricing(ctx context.Context, m *PlazaMode
 		})
 		if err == nil && sched != nil && len(sched.Tiers) > 0 {
 			m.Pricing = plazaPricingFromSchedule(m.Pricing, sched)
+			if m.GroupPricingOverride != nil {
+				// Export the same resolved whole-request tiers as billing, including
+				// interval multipliers, uncovered ranges, and cache TTL fallbacks.
+				m.GroupPricingOverride = plazaPricingFromSchedule(m.GroupPricingOverride, sched)
+			}
 			if len(sched.Tiers) > 1 {
 				m.LongContextBasis = sched.Basis
 			}

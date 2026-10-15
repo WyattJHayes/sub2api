@@ -5,6 +5,7 @@ package handler
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -86,6 +87,60 @@ func TestModelPlazaHandler_NilSettingServiceFailsClosed404(t *testing.T) {
 	h.Get(c)
 
 	require.Equal(t, http.StatusNotFound, w.Code)
+}
+
+type plazaQuoteUserRepo struct{ service.UserRepository }
+
+func (plazaQuoteUserRepo) GetByID(_ context.Context, id int64) (*service.User, error) {
+	return &service.User{ID: id}, nil
+}
+
+type plazaQuoteSubscriptionRepo struct {
+	service.UserSubscriptionRepository
+}
+
+func (plazaQuoteSubscriptionRepo) ListActiveByUserID(context.Context, int64) ([]service.UserSubscription, error) {
+	return nil, nil
+}
+
+type plazaQuoteRateRepo struct {
+	service.UserGroupRateRepository
+}
+
+func (plazaQuoteRateRepo) GetByUserID(context.Context, int64) (map[int64]float64, error) {
+	return nil, errors.New("synthetic private pricing error")
+}
+
+func TestModelPlazaHandler_DoesNotSubstituteDefaultRateOnPersonalRateFailure(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	h := NewModelPlazaHandler(
+		service.NewModelPlazaService(plazaVaryChannelRepo{}, plazaVaryGroupRepo{}, nil, nil, nil),
+		service.NewAPIKeyService(nil, plazaQuoteUserRepo{}, nil, plazaQuoteSubscriptionRepo{}, plazaQuoteRateRepo{}, nil, nil),
+		service.NewSettingService(plazaVarySettingRepo{}, &config.Config{}),
+	)
+	w := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(w)
+	c.Request = httptest.NewRequest(http.MethodGet, "/api/v1/model-plaza", nil)
+	c.Set(string(middleware.ContextKeyUser), middleware.AuthSubject{UserID: 1})
+	h.Get(c)
+	require.Equal(t, http.StatusServiceUnavailable, w.Code)
+	require.NotContains(t, w.Body.String(), "synthetic private")
+	require.NotContains(t, w.Body.String(), "groups")
+}
+
+func TestToModelPlazaGroupDTO_GroupOverrideWhitelist(t *testing.T) {
+	p := &service.ChannelModelPricing{ID: 123, ChannelID: 456, Models: []string{"private-pattern*"}, BillingMode: service.BillingModeToken, InputPrice: testPtr(12e-6), ReasoningEffortMultipliers: map[string]float64{"max": 3}}
+	dto := toModelPlazaGroupDTO(&service.PlazaGroup{Models: []service.PlazaModel{{Name: "claude-fable-5", GroupPricingOverride: p}}}, nil)
+	raw, err := json.Marshal(dto)
+	require.NoError(t, err)
+	var decoded map[string]any
+	require.NoError(t, json.Unmarshal(raw, &decoded))
+	override := decoded["models"].([]any)[0].(map[string]any)["group_pricing_override"].(map[string]any)
+	require.Equal(t, 12e-6, override["input_price"])
+	require.Equal(t, float64(3), override["reasoning_effort_multipliers"].(map[string]any)["max"])
+	require.NotContains(t, override, "channel_id")
+	require.NotContains(t, override, "id")
+	require.NotContains(t, override, "models")
 }
 
 func TestToModelPlazaGroupDTO_UserRateAndFieldWhitelist(t *testing.T) {
