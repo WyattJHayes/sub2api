@@ -30,10 +30,31 @@
           </div>
           <button type="button" class="shrink-0 rounded-lg border border-gray-200 px-2 py-1 text-xs text-gray-600 hover:bg-gray-50 dark:border-dark-600 dark:text-dark-200 dark:hover:bg-dark-700" :aria-label="t('modelPlaza.reference.copyModel', { model: model.id })" @click="copyModel(model.id)">{{ t('modelPlaza.reference.copy') }}</button>
         </div>
-        <p class="mt-3 text-xs text-gray-500 dark:text-dark-400">{{ t(`modelPlaza.reference.${model.status === 'official' ? 'officialBase' : model.status === 'reference' ? 'referenceBase' : 'unverified'}`) }}<span v-if="model.status !== 'unverified'"> · {{ model.currency }} / 1M tokens</span><span v-if="model.region"> · {{ t(`modelPlaza.reference.${model.region}`) }}</span></p>
+        <p class="mt-3 text-xs text-gray-500 dark:text-dark-400">{{ t(`modelPlaza.reference.${model.status === 'official' ? 'officialBase' : model.status === 'reference' ? 'referenceBase' : model.pendingReason ?? 'unverified'}`) }}<span v-if="model.status !== 'unverified'"> · {{ model.mediaPrices ? t('modelPlaza.reference.standardProcessing') : `${model.currency} / 1M tokens` }}</span><span v-if="model.region"> · {{ t(`modelPlaza.reference.${model.region}`) }}</span></p>
+        <p v-if="model.pendingReason" class="mt-2 text-xs leading-relaxed text-gray-500 dark:text-dark-400">{{ t(`modelPlaza.reference.${model.pendingReason}Detail`) }}</p>
+        <p v-if="model.deprecated" class="mt-2 text-xs leading-relaxed text-amber-700 dark:text-amber-300">{{ t('modelPlaza.reference.deprecated') }}</p>
         <p v-if="model.note" class="mt-2 text-xs leading-relaxed text-gray-500 dark:text-dark-400">{{ t(`modelPlaza.reference.${model.note}`) }}</p>
+        <p v-if="model.mediaNote" class="mt-2 text-xs leading-relaxed text-gray-500 dark:text-dark-400">{{ t(`modelPlaza.reference.${model.mediaNote}`) }}</p>
+        <p v-if="model.cacheReadResponsesOnly" class="mt-2 text-xs leading-relaxed text-gray-500 dark:text-dark-400">{{ t('modelPlaza.reference.cacheReadResponsesOnly') }}</p>
         <div class="mt-4 overflow-x-auto" role="region" :aria-label="t('modelPlaza.reference.pricesFor', { model: model.id })" tabindex="0">
-          <table class="w-full text-left text-xs tabular-nums">
+          <table v-if="model.mediaPrices" class="w-full text-left text-xs tabular-nums">
+            <caption class="sr-only">{{ t('modelPlaza.reference.mediaCaption') }}</caption>
+            <thead class="border-b border-gray-100 text-gray-500 dark:border-dark-700 dark:text-dark-400">
+              <tr>
+                <th v-for="label in ['modality', 'conditions', 'pricingUnit']" :key="label" scope="col" class="whitespace-nowrap px-2 py-2">{{ t(`modelPlaza.reference.${label}`) }}</th>
+                <th v-for="column in mediaColumns" :key="column" scope="col" class="whitespace-nowrap px-2 py-2 text-right">{{ t(`modelPlaza.reference.${column}`) }}</th>
+              </tr>
+            </thead>
+            <tbody class="text-gray-700 dark:text-dark-200">
+              <tr v-for="(row, index) in model.mediaPrices" :key="index" class="border-b border-gray-100 last:border-0 dark:border-dark-700">
+                <th scope="row" class="whitespace-nowrap px-2 py-3 font-normal">{{ t(`modelPlaza.reference.${row.kind === 'imageEstimate' ? 'imageEstimate' : row.modality}`) }}</th>
+                <td class="whitespace-nowrap px-2 py-3">{{ row.kind === 'imageEstimate' ? `${t(`modelPlaza.reference.${row.quality}`)} · ${row.size}` : t('modelPlaza.filters.all') }}</td>
+                <td class="whitespace-nowrap px-2 py-3">{{ model.currency }} / {{ t(`modelPlaza.reference.${row.kind === 'imageEstimate' ? 'perImage' : 'millionTokens'}`) }}</td>
+                <td v-for="column in mediaColumns" :key="column" class="whitespace-nowrap px-2 py-3 text-right">{{ mediaPrice(row, column, model.currency) }}</td>
+              </tr>
+            </tbody>
+          </table>
+          <table v-else class="w-full text-left text-xs tabular-nums">
             <caption class="sr-only">{{ t('modelPlaza.reference.unit') }}</caption>
             <thead class="border-b border-gray-100 text-gray-500 dark:border-dark-700 dark:text-dark-400">
               <tr>
@@ -61,7 +82,7 @@ import { computed, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useClipboard } from '@/composables/useClipboard'
 import { platformDisplayName } from '@/constants/platformCatalog'
-import { referenceModels, referenceModelKey, findReferenceModel, type ReferenceModel, type ReferenceTier } from '@/data/modelReferencePrices'
+import { referenceModels, referenceModelKey, findReferenceModel, type ReferenceModel, type ReferenceTier, type ReferenceMediaPrice } from '@/data/modelReferencePrices'
 import type { ModelPlazaGroup } from '@/api/modelPlaza'
 import { formatReferencePrice, referencePriceColumns } from './referencePriceQuotes'
 
@@ -72,6 +93,7 @@ const { copyToClipboard } = useClipboard()
 const search = ref('')
 const provider = ref('all')
 const copyStatus = ref('')
+const mediaColumns = ['input', 'cacheRead', 'output'] as const
 type CatalogModel = ReferenceModel & { providers: string[] }
 const catalog = computed<CatalogModel[]>(() => {
   const models = new Map<string, CatalogModel>(referenceModels.map(m => [referenceModelKey(m.id), { ...m, providers: [m.provider] }]))
@@ -111,6 +133,11 @@ function columnLabel(model: ReferenceModel, column: typeof referencePriceColumns
 }
 function contextLabel(context: string) { return context === 'all' ? t('modelPlaza.filters.all') : context === 'peak' || context === 'offPeak' ? t(`modelPlaza.reference.${context}`) : context }
 function formatPrice(value: number | null, currency: ReferenceModel['currency']) { return formatReferencePrice(value, currency) ?? t('modelPlaza.reference.notProvided') }
+function mediaPrice(row: ReferenceMediaPrice, column: typeof mediaColumns[number], currency: ReferenceModel['currency']) {
+  if (row.kind === 'imageEstimate') return column === 'output' ? formatPrice(row.output, currency) : t('modelPlaza.reference.notApplicable')
+  if (column === 'output' && row.outputUnsupported) return t('modelPlaza.reference.notApplicable')
+  return formatPrice(row[column], currency)
+}
 
 async function copyModel(id: string) {
   const success = await copyToClipboard(id)
