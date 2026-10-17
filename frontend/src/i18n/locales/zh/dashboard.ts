@@ -700,6 +700,7 @@ export default {
       copied: '已复制 {model}',
       pricesFor: '{model} 价格',
       wholeRequest: '输入 >272K 时，输入与缓存读取 ×2、输出 ×1.5，适用于整次请求。下表已展开价格。',
+      promptLengthTier: '按本次请求的总输入长度选择档位（含缓存读取和写入），整次请求采用该档价格。下表已展开各档价格。',
       glm: '智谱 GLM',
       qwen: '通义千问',
       doubao: '豆包'

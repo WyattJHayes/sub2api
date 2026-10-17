@@ -695,6 +695,7 @@ export default {
       copied: 'Copied {model}',
       pricesFor: 'Prices for {model}',
       wholeRequest: 'Above 272K input tokens, input and cache reads ×2, output ×1.5 for the whole request. Prices below include these multipliers.',
+      promptLengthTier: 'Select the tier using total prompt length, including cache reads and writes. Its rates apply to the entire request. Prices below show each tier.',
       glm: 'Zhipu GLM',
       qwen: 'Qwen',
       doubao: 'Doubao'
