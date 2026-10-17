@@ -129,6 +129,7 @@ jobs:
       - name: Verify Radar release identity and migration ledger
         run: |
           python -m unittest \
+            deploy.radar.test_v0217_release_metadata \
             deploy.radar.test_v0216_release_metadata \
             deploy.radar.test_v0215_release_metadata \
             deploy.radar.test_v0214_release_metadata \
