@@ -1,5 +1,5 @@
 /** Display-only catalog, reviewed 2026-10-17. Never import into billing.
- * Published currency / 1,000,000 tokens; no exchange-rate conversion.
+ * Published currency and units; no exchange-rate conversion.
  * Sources and regions are retained for audit, never rendered as source notices.
  * Unknown prices remain null, not zero or an outdated third-party snapshot.
  */
@@ -13,6 +13,21 @@ export interface ReferenceTier {
   explicitCacheRead: number | null
 }
 
+/** Display-only rows. Image output estimates are alternatives to token totals. */
+export type ReferenceMediaPrice = {
+  kind: 'tokens'
+  modality: 'text' | 'image' | 'audio'
+  input: number | null
+  cacheRead: number | null
+  output: number | null
+  outputUnsupported?: boolean
+} | {
+  kind: 'imageEstimate'
+  quality: 'low' | 'medium' | 'high'
+  size: '1024×1024' | '1024×1536' | '1536×1024'
+  output: number
+}
+
 export interface ReferenceModel {
   id: string
   provider: string
@@ -24,6 +39,13 @@ export interface ReferenceModel {
   source: string
   tiers: ReferenceTier[]
   note?: 'wholeRequest' | 'promptLengthTier' | 'deepseekHours'
+  mediaPrices?: readonly ReferenceMediaPrice[]
+  mediaNote?: 'imageOutputEstimates' | 'imageTokenUsage'
+  cacheReadResponsesOnly?: boolean
+  deprecated?: boolean
+  pendingReason?: 'modelMapping' | 'priceVerification'
+  /** Internal audit date; never rendered as a source notice. */
+  reviewedAt?: string
 }
 
 function tier(context: string, input: number | null, output: number | null, cacheRead: number | null, cacheWrite: number | null = null, cacheWrite1h: number | null = null, explicitCacheRead: number | null = null): ReferenceTier {
@@ -40,11 +62,24 @@ const ali = 'https://www.alibabacloud.com/help/en/model-studio/'
 function model(id: string, provider: string, source: string, tiers: ReferenceTier[], options: Partial<Pick<ReferenceModel, 'status' | 'region' | 'note' | 'quotedModel'>> = {}): ReferenceModel {
   return { id, provider, currency: 'USD', status: 'official', source, tiers, ...options }
 }
-const unknown = (id: string, provider: string, source: string) => model(id, provider, source, [tier('all', null, null, null)], { status: 'unverified' })
+const unknown = (id: string, provider: string, source: string): ReferenceModel => ({
+  ...model(id, provider, source, [tier('all', null, null, null)], { status: 'unverified' }),
+  pendingReason: 'priceVerification', reviewedAt: '2026-10-17'
+})
+function mediaModel(id: string, mediaPrices: ReferenceMediaPrice[], options: Pick<ReferenceModel, 'mediaNote' | 'cacheReadResponsesOnly' | 'deprecated'> = {}): ReferenceModel {
+  return { id, provider: 'OpenAI', currency: 'USD', status: 'official',
+    source: `https://developers.openai.com/api/docs/models/${id}`,
+    tiers: [], mediaPrices, reviewedAt: '2026-10-17', ...options }
+}
+function imageEstimates(prices: readonly number[]): ReferenceMediaPrice[] {
+  const sizes = ['1024×1024', '1024×1536', '1536×1024'] as const
+  return (['low', 'medium', 'high'] as const).flatMap((quality, qualityIndex) =>
+    sizes.map((size, sizeIndex) => ({ kind: 'imageEstimate', quality, size, output: prices[qualityIndex * 3 + sizeIndex]! })))
+}
 const dsFlash = [tier('peak', 0.3, 1.2, 0.006), tier('offPeak', 0.15, 0.6, 0.003)]
 const dsPro = [tier('peak', 1.32, 3.96, 0.044), tier('offPeak', 0.66, 1.98, 0.022)]
 
-export const referenceModels: readonly ReferenceModel[] = [
+const baseModels: readonly ReferenceModel[] = [
   model('gpt-6-astra', 'OpenAI', openai, [tier('≤272K', 10, 50, 1, 12.5), tier('>272K', 20, 75, 2, 25)], { note: 'wholeRequest' }),
   model('gpt-6-sol', 'OpenAI', openai, [tier('≤272K', 2, 10, 0.2, 2.5), tier('>272K', 4, 15, 0.4, 5)], { note: 'wholeRequest' }),
   model('gpt-5.6-sol', 'OpenAI', openai, [tier('≤272K', 4, 20, 0.4, 5), tier('>272K', 8, 30, 0.8, 10)], { note: 'wholeRequest' }),
@@ -85,9 +120,40 @@ export const referenceModels: readonly ReferenceModel[] = [
   model('Doubao-Seed-2-1-Turbo', 'Doubao', byteplus, [tier('≤256K', 0.5, 2.5, 0.1)], { status: 'reference', region: 'singapore', quotedModel: 'dola-seed-2-1-turbo' })
 ]
 
-// Also price these exact IDs when advertised by a visible group. They are not
-// added to the public catalog merely because a similarly named model exists.
+// Verified exact IDs are public independently of group visibility. Unresolved
+// entries are only added when a visible group advertises their exact ID.
 const supplementalModels: readonly ReferenceModel[] = [
+  // Exact aliases only. gpt-5.6 is documented by OpenAI; gpt-6 maps to
+  // Astra in backend/internal/service/openai_model_alias.go and constants.go.
+  { ...model('gpt-5.6', 'OpenAI', 'https://developers.openai.com/api/docs/models/gpt-5.6', [tier('≤272K', 4, 20, 0.4, 5), tier('>272K', 8, 30, 0.8, 10)], { note: 'wholeRequest', quotedModel: 'gpt-5.6-sol' }), reviewedAt: '2026-10-17' },
+  { ...model('gpt-6', 'OpenAI', 'https://developers.openai.com/api/docs/models/gpt-6-astra', [tier('≤272K', 10, 50, 1, 12.5), tier('>272K', 20, 75, 2, 25)], { note: 'wholeRequest', quotedModel: 'gpt-6-astra' }), reviewedAt: '2026-10-17' },
+  // No verified exact public model mapping. Do not infer automatic routing
+  // behavior, a free price, or an API rate from subscription credit tables.
+  { ...unknown('codex-auto-review', 'OpenAI', openai), pendingReason: 'modelMapping', reviewedAt: '2026-10-17' },
+  { ...unknown('gpt-reserve', 'OpenAI', openai), pendingReason: 'modelMapping', reviewedAt: '2026-10-17' },
+  { ...unknown('gpt-5.3-codex-spark', 'OpenAI', openai), pendingReason: 'priceVerification', reviewedAt: '2026-10-17' },
+  mediaModel('gpt-4o-audio-preview', [
+    { kind: 'tokens', modality: 'text', input: 2.5, cacheRead: null, output: 10 },
+    { kind: 'tokens', modality: 'audio', input: 40, cacheRead: null, output: 80 }
+  ], { deprecated: true }),
+  mediaModel('gpt-4o-realtime-preview', [
+    { kind: 'tokens', modality: 'text', input: 5, cacheRead: 2.5, output: 20 },
+    { kind: 'tokens', modality: 'audio', input: 40, cacheRead: 2.5, output: 80 }
+  ], { deprecated: true }),
+  mediaModel('gpt-image-1', [
+    { kind: 'tokens', modality: 'text', input: 5, cacheRead: 1.25, output: null, outputUnsupported: true },
+    { kind: 'tokens', modality: 'image', input: 10, cacheRead: 2.5, output: 40 },
+    ...imageEstimates([0.011, 0.016, 0.016, 0.042, 0.063, 0.063, 0.167, 0.25, 0.25])
+  ], { mediaNote: 'imageOutputEstimates', deprecated: true }),
+  mediaModel('gpt-image-1.5', [
+    { kind: 'tokens', modality: 'text', input: 5, cacheRead: 1.25, output: 10 },
+    { kind: 'tokens', modality: 'image', input: 8, cacheRead: 2, output: 32 },
+    ...imageEstimates([0.009, 0.013, 0.013, 0.034, 0.05, 0.05, 0.133, 0.2, 0.2])
+  ], { mediaNote: 'imageOutputEstimates', deprecated: true }),
+  ...['gpt-image-2', 'gpt-image-2.5-flare', 'gpt-image-2.5-sunburst'].map(id => mediaModel(id, [
+    { kind: 'tokens', modality: 'text', input: 5, cacheRead: 1.25, output: null, outputUnsupported: true },
+    { kind: 'tokens', modality: 'image', input: 8, cacheRead: 2, output: 30 }
+  ], { mediaNote: 'imageTokenUsage', cacheReadResponsesOnly: true })),
   // Exact snapshots listed by the official model pages; no date-stripping fallback.
   model('gpt-5.2-2025-12-11', 'OpenAI', 'https://developers.openai.com/api/docs/models/gpt-5.2', [tier('all', 1.75, 14, 0.175)]),
   model('gpt-5.2-chat-latest', 'OpenAI', 'https://developers.openai.com/api/docs/models/gpt-5.2-chat-latest', [tier('all', 1.75, 14, 0.175)]),
@@ -115,9 +181,14 @@ const supplementalModels: readonly ReferenceModel[] = [
   model('gpt-5.2', 'OpenAI', openai, [tier('all', 1.75, 14, 0.175)])
 ]
 
+export const referenceModels: readonly ReferenceModel[] = [
+  ...baseModels,
+  ...supplementalModels.filter(model => model.status !== 'unverified')
+]
+
 export function findReferenceModel(id: string): ReferenceModel | undefined {
   const key = referenceModelKey(id)
-  return [...referenceModels, ...supplementalModels].find(model => referenceModelKey(model.id) === key)
+  return [...baseModels, ...supplementalModels].find(model => referenceModelKey(model.id) === key)
 }
 
 /** Only established spelling equivalences; no fuzzy family/date matching. */

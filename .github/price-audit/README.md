@@ -2,13 +2,13 @@
 
 `frontend/src/data/modelReferencePrices.ts` 是展示目录，不写入扣费配置。
 页面每个型号只展示一份已核验的公共基价，用户自行按所属分组倍率估算。
-公共目录与补充目录覆盖的精确型号使用对应报价；其他可见型号保留待核实。
+已核实的精确型号直接进入公共目录，展示不依赖可见分组；其他可见型号保留待核实。
 不显示分组报价、分组倍率列表或计价计算器，不使用接口计费回退价补充官方价。
 阶梯保持官网阈值和整次请求规则，报价保留原币种，不作隐式换汇。
 
 ## 官网文档变化检查
 
-运行 `node .github/price-audit/price-audit.mjs` 对比 19 个英文公开价目页。
+运行 `node .github/price-audit/price-audit.mjs` 对比 31 个英文公开价目页。
 成功表示文档内容与审核基线相同，不表示所有平台扣费与报价相同。
 HTTP 错误、缺少模型标记、文档过大或内容变化都会导致非零退出。
 阿里云 HTML 只比较价目正文，排除动态导航与脚本。正文中的非价格变化仍可能
@@ -56,3 +56,34 @@ GitHub 工作流每周一 02:17 UTC 运行，也可手动运行。只有合并�
 - 更新 Claude 文档基线并新增 xAI 价目页检查。DeepSeek 文档摘要有变化，已
   逐项复核现有 Flash/Pro 的输入、输出、缓存读取和峰谷规则，报价仍匹配；
   只更新审核基线，不修改 DeepSeek 报价。
+
+## 2026-10-17 多模态与公共目录补全
+
+- `gpt-6.1-sol` 等已核实的新型号直接进入公共目录，未关联可见分组时也展示
+  报价。精确 ID 去重和复制保持不变，不做模糊型号或日期匹配。
+- 原有 13 项缺价中补齐 9 项：两个精确别名、两个音频型号、五个图像型号。
+  `gpt-5.6` 的 Sol 映射由 [官方模型页](https://developers.openai.com/api/docs/models/gpt-5.6)
+  明确说明；`gpt-6` 的 Astra 映射来自项目 `backend/internal/service/openai_model_alias.go`
+  和 `backend/internal/pkg/openai/constants.go`，价格来自官方 Astra 页。
+- `gpt-4o-audio-preview` 与 `gpt-4o-realtime-preview` 分开列出文本和音频 token
+  价格；前者没有可核验缓存价，保留空值，不沿用后者的缓存价。
+- 五个 GPT Image 型号分开列出文本和图像 token 价格，采用 Standard 价，不套用
+  Batch 半价。GPT Image 1.5 有公开的文本输出价，其余四个没有文本输出能力。
+- GPT Image 1/1.5 的尺寸、质量价格为图像输出估算，不包含输入文本、参考图像
+  费用，也不能与图像输出 token 费重复相加。GPT Image 2/2.5 的 token 用量因
+  型号、尺寸和质量而异，不挪用旧型号每张图报价。
+- GPT Image 2/2.5 的缓存读取价仅适用于 Responses API 生成的图像，保留此条件。
+  [官方生成指南](https://developers.openai.com/api/docs/guides/image-generation)
+  与 [官方价格表](https://developers.openai.com/api/docs/pricing) 交叉核对。
+- GPT Image 1/1.5 和两个 GPT-4o 预览型号已被官方标记弃用；页面明确价格不代表
+  当前仍可调用，不发起付费请求来验证可用性。
+- 仍有 4 项无充分依据：`codex-auto-review`、`gpt-reserve` 显示“型号待确认”；
+  `gpt-5.3-codex-spark`、`Doubao-Seed-2-1-Pro` 显示“价格待核实”。前两项不
+  擅自认定为动态路由；后两项也不因未查到完整报价而宣称“官方未公布”。
+- 新增 12 份精确 OpenAI 型号文档的摘要基线，包含 GPT-6.1 Sol、GPT-6 Luna、
+  GPT-5.6 Luna 的价格、缓存比例和上下文条件。页面不显示来源或核验日期；
+  原始英文公开链接与日期仅保留在本审计目录和展示数据内。
+- 本轮检查再次发现 DeepSeek 整页摘要变化。连续读取两次摘要一致，已重新
+  核对 Flash/Pro 的输入、输出、缓存读取和峰谷规则，全部仍与目录一致。
+  当前页面还包含独立 Search/Fetch 按请求计价，它们不属于模型 token 单价；
+  本轮仅更新审核基线，不改模型报价，也不将工具调用费混入 token 表。
