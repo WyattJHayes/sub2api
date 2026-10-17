@@ -1,4 +1,4 @@
-/** Display-only catalog, reviewed 2026-10-15. Never import into billing.
+/** Display-only catalog, reviewed 2026-10-17. Never import into billing.
  * Published currency / 1,000,000 tokens; no exchange-rate conversion.
  * Sources and regions are retained for audit, never rendered as source notices.
  * Unknown prices remain null, not zero or an outdated third-party snapshot.
@@ -23,7 +23,7 @@ export interface ReferenceModel {
   quotedModel?: string
   source: string
   tiers: ReferenceTier[]
-  note?: 'wholeRequest' | 'deepseekHours'
+  note?: 'wholeRequest' | 'promptLengthTier' | 'deepseekHours'
 }
 
 function tier(context: string, input: number | null, output: number | null, cacheRead: number | null, cacheWrite: number | null = null, cacheWrite1h: number | null = null, explicitCacheRead: number | null = null): ReferenceTier {
@@ -34,6 +34,7 @@ const claude = 'https://platform.claude.com/docs/en/about-claude/pricing'
 const kimi = 'https://platform.kimi.ai/docs/pricing/chat.md'
 const zai = 'https://docs.z.ai/guides/overview/pricing'
 const deepseek = 'https://api-docs.deepseek.com/quick_start/pricing/'
+const xai = 'https://docs.x.ai/developers/pricing'
 const byteplus = 'https://ai.byteplus.com/ark/region:ap-southeast-1/docs/model-pricing'
 const ali = 'https://www.alibabacloud.com/help/en/model-studio/'
 function model(id: string, provider: string, source: string, tiers: ReferenceTier[], options: Partial<Pick<ReferenceModel, 'status' | 'region' | 'note' | 'quotedModel'>> = {}): ReferenceModel {
@@ -87,6 +88,24 @@ export const referenceModels: readonly ReferenceModel[] = [
 // Also price these exact IDs when advertised by a visible group. They are not
 // added to the public catalog merely because a similarly named model exists.
 const supplementalModels: readonly ReferenceModel[] = [
+  // Exact snapshots listed by the official model pages; no date-stripping fallback.
+  model('gpt-5.2-2025-12-11', 'OpenAI', 'https://developers.openai.com/api/docs/models/gpt-5.2', [tier('all', 1.75, 14, 0.175)]),
+  model('gpt-5.2-chat-latest', 'OpenAI', 'https://developers.openai.com/api/docs/models/gpt-5.2-chat-latest', [tier('all', 1.75, 14, 0.175)]),
+  model('gpt-5.2-pro', 'OpenAI', 'https://developers.openai.com/api/docs/models/gpt-5.2-pro', [tier('all', 21, 168, null)]),
+  model('gpt-5.2-pro-2025-12-11', 'OpenAI', 'https://developers.openai.com/api/docs/models/gpt-5.2-pro', [tier('all', 21, 168, null)]),
+  model('gpt-5.4-2026-03-05', 'OpenAI', 'https://developers.openai.com/api/docs/models/gpt-5.4', [tier('≤272K', 2.5, 15, 0.25), tier('>272K', 5, 22.5, 0.5)], { note: 'wholeRequest' }),
+  model('claude-sonnet-5-5', 'Claude Code', claude, [tier('all', 2, 10, 0.1, 2.5, 4)]),
+  model('claude-sonnet-5', 'Claude Code', claude, [tier('all', 2, 10, 0.2, 2.5, 4)]),
+  model('claude-sonnet-4-5', 'Claude Code', claude, [tier('all', 3, 15, 0.3, 3.75, 6)]),
+  model('claude-opus-4-5', 'Claude Code', claude, [tier('all', 5, 25, 0.5, 6.25, 10)]),
+  model('claude-opus-4-6', 'Claude Code', claude, [tier('all', 5, 25, 0.5, 6.25, 10)]),
+  model('claude-opus-4-7', 'Claude Code', claude, [tier('all', 5, 25, 0.5, 6.25, 10)]),
+  model('claude-haiku-5-5', 'Claude Code', claude, [tier('≤100K', 0.1, 0.5, 0.01, 0.125, 0.2), tier('>100K', 0.5, 2.5, 0.05, 0.625, 1)], { note: 'promptLengthTier' }),
+  model('GLM-5.3', 'GLM', zai, [tier('all', 1.4, 4.4, 0.26)]),
+  model('GLM-5.3-Flash', 'GLM', zai, [tier('all', 0.15, 0.5, 0.03)]),
+  model('grok-4.5', 'Grok', xai, [tier('<200K', 2, 6, 0.3), tier('≥200K', 4, 12, 0.6)], { note: 'promptLengthTier' }),
+  model('grok-4.6', 'Grok', xai, [tier('<200K', 2, 6, 0.5), tier('≥200K', 4, 12, 1)], { note: 'promptLengthTier' }),
+  model('grok-4.7', 'Grok', xai, [tier('<200K', 2, 6, 0.5), tier('≥200K', 4, 12, 1)], { note: 'promptLengthTier' }),
   model('gpt-6.1-sol', 'OpenAI', openai, [tier('≤272K', 2, 10, 0.1, 2.5), tier('>272K', 4, 15, 0.2, 5)], { note: 'wholeRequest' }),
   model('gpt-6-luna', 'OpenAI', openai, [tier('≤272K', 0.1, 0.5, 0.01, 0.125), tier('>272K', 0.2, 0.75, 0.02, 0.25)], { note: 'wholeRequest' }),
   model('gpt-5.6-luna', 'OpenAI', openai, [tier('≤272K', 0.2, 1.2, 0.02, 0.25), tier('>272K', 0.4, 1.8, 0.04, 0.5)], { note: 'wholeRequest' }),

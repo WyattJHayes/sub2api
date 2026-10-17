@@ -2,7 +2,7 @@ import { createHash } from 'node:crypto'
 import { readFile } from 'node:fs/promises'
 import { pathToFileURL } from 'node:url'
 
-const hosts = new Set(['developers.openai.com', 'platform.claude.com', 'platform.kimi.ai', 'docs.z.ai', 'api-docs.deepseek.com', 'ai.byteplus.com', 'www.alibabacloud.com'])
+const hosts = new Set(['developers.openai.com', 'platform.claude.com', 'platform.kimi.ai', 'docs.z.ai', 'docs.x.ai', 'api-docs.deepseek.com', 'ai.byteplus.com', 'www.alibabacloud.com'])
 const maxBytes = 2 * 1024 * 1024
 
 function officialUrl(value) {
@@ -17,6 +17,14 @@ export function documentDigest(document, format = 'text') {
     const article = document.match(/<article\b[^>]*class=["'][^"']*\bmarkdown-body\b[^"']*["'][^>]*>([\s\S]*?)<\/article>/i)?.[1]
     if (!article) throw new Error('Pricing article missing; manual verification required')
     document = article.replace(/<(script|style)\b[^>]*>[\s\S]*?<\/\1>/gi, '').replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ')
+  } else if (format === 'xai-text-api') {
+    // xAI randomizes unrelated media table rows. Monitor the complete text
+    // pricing section, including rates, context thresholds and regional notes.
+    const heading = /^### Text API Pricing[ \t]*\r?\n/m.exec(document)
+    if (!heading) throw new Error('Pricing section missing; manual verification required')
+    const content = document.slice(heading.index + heading[0].length)
+    const nextHeading = content.search(/^#{1,3} /m)
+    document = heading[0] + (nextHeading < 0 ? content : content.slice(0, nextHeading))
   } else if (format !== 'text') throw new Error('Invalid source format')
   return createHash('sha256').update(document.replace(/\r\n/g, '\n').trim()).digest('hex')
 }
@@ -65,7 +73,7 @@ export async function auditSource(source, fetcher = fetch) {
     return { id: source.id, status: digest === source.sha256 ? 'unchanged' : 'changed', sha256: digest }
   } catch (error) {
     // Never print document bodies, headers or arbitrary exception messages.
-    return { id: source.id, status: 'error', error: error instanceof Error && /^(URL is|Documentation returned|Empty document|Document exceeds|Pricing marker|Too many redirects|Redirect has|Invalid source)/.test(error.message) ? error.message : 'Could not read the public documentation' }
+    return { id: source.id, status: 'error', error: error instanceof Error && /^(URL is|Documentation returned|Empty document|Document exceeds|Pricing marker|Pricing section|Too many redirects|Redirect has|Invalid source)/.test(error.message) ? error.message : 'Could not read the public documentation' }
   }
 }
 

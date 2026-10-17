@@ -6,6 +6,24 @@ const document = '# Published pricing\n' + 'model-a input USD 1 output USD 4\n'.
 const source = { id: 'provider', url: 'https://platform.kimi.ai/docs/pricing/chat.md', marker: 'model-a', sha256: '' }
 const response = (body, status = 200) => async () => new Response(body, { status })
 
+test('audits the official xAI public pricing page and still rejects credential URLs', async () => {
+  const xai = { ...source, url: 'https://docs.x.ai/developers/pricing.md', sha256: documentDigest(document) }
+  assert.equal((await auditSource(xai, response(document))).status, 'unchanged')
+  const neverFetch = async () => { assert.fail('credential URL reached the network') }
+  assert.equal((await auditSource({ ...xai, url: xai.url + '?token=secret' }, neverFetch)).status, 'error')
+})
+
+test('ignores xAI media table ordering while detecting text prices and missing text sections', async () => {
+  const text = '### Text API Pricing\n\n| Model | Input | Output |\n| grok-4.7 | $2 | $6 |\n\n'
+  const media = '### Imagine Pricing\n\n| image-a | $0.02 |\n| image-b | $0.04 |\n'
+  const body = '# Pricing\n\n' + 'Public rates per million tokens.\n'.repeat(4) + text + media
+  const pricing = { ...source, url: 'https://docs.x.ai/developers/pricing.md', marker: 'grok-4.7', format: 'xai-text-api', sha256: documentDigest(text) }
+  const reordered = body.replace('| image-a | $0.02 |\n| image-b | $0.04 |', '| image-b | $0.04 |\n| image-a | $0.02 |')
+  assert.equal((await auditSource(pricing, response(reordered))).status, 'unchanged')
+  assert.equal((await auditSource(pricing, response(body.replace('| grok-4.7 | $2 | $6 |', '| grok-4.7 | $3 | $6 |')))).status, 'changed')
+  assert.equal((await auditSource(pricing, response(body.replace('### Text API Pricing', '### Other pricing')))).status, 'error')
+})
+
 test('reports a changed price document without accepting a new baseline', async () => {
   const baseline = { ...source, sha256: documentDigest(document) }
   assert.equal((await auditSource(baseline, response(document))).status, 'unchanged')

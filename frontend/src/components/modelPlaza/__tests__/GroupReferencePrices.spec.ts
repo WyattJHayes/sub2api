@@ -36,6 +36,66 @@ function render(groups: ModelPlazaGroup[], locale = 'zh') {
 }
 
 describe('public model plaza prices', () => {
+  it.each([
+    { name: 'gpt-5.2-2025-12-11', platform: 'openai', rows: [['全部', '$1.75', '$14.00', '$0.175', '未提供']] },
+    { name: 'gpt-5.2-chat-latest', platform: 'openai', rows: [['全部', '$1.75', '$14.00', '$0.175', '未提供']] },
+    { name: 'gpt-5.2-pro', platform: 'openai', rows: [['全部', '$21.00', '$168.00', '未提供', '未提供']] },
+    { name: 'gpt-5.2-pro-2025-12-11', platform: 'openai', rows: [['全部', '$21.00', '$168.00', '未提供', '未提供']] },
+    { name: 'gpt-5.4-2026-03-05', platform: 'openai', rows: [
+      ['≤272K', '$2.50', '$15.00', '$0.25', '未提供'], ['>272K', '$5.00', '$22.50', '$0.50', '未提供']
+    ] },
+    { name: 'claude-sonnet-5-5', platform: 'anthropic', rows: [['全部', '$2.00', '$10.00', '$0.10', '$2.50', '$4.00']] },
+    { name: 'claude-sonnet-5', platform: 'anthropic', rows: [['全部', '$2.00', '$10.00', '$0.20', '$2.50', '$4.00']] },
+    { name: 'claude-sonnet-4-5', platform: 'anthropic', rows: [['全部', '$3.00', '$15.00', '$0.30', '$3.75', '$6.00']] },
+    { name: 'claude-opus-4-5', platform: 'anthropic', rows: [['全部', '$5.00', '$25.00', '$0.50', '$6.25', '$10.00']] },
+    { name: 'claude-opus-4-6', platform: 'anthropic', rows: [['全部', '$5.00', '$25.00', '$0.50', '$6.25', '$10.00']] },
+    { name: 'claude-opus-4-7', platform: 'anthropic', rows: [['全部', '$5.00', '$25.00', '$0.50', '$6.25', '$10.00']] },
+    { name: 'claude-haiku-5-5', platform: 'anthropic', rows: [
+      ['≤100K', '$0.10', '$0.50', '$0.01', '$0.125', '$0.20'],
+      ['>100K', '$0.50', '$2.50', '$0.05', '$0.625', '$1.00']
+    ] },
+    { name: 'glm-5.3', platform: 'openai', rows: [['全部', '$1.40', '$4.40', '$0.26', '未提供']] },
+    { name: 'glm-5.3-flash', platform: 'openai', rows: [['全部', '$0.15', '$0.50', '$0.03', '未提供']] },
+    { name: 'grok-4.5', platform: 'grok', rows: [
+      ['<200K', '$2.00', '$6.00', '$0.30', '未提供'], ['≥200K', '$4.00', '$12.00', '$0.60', '未提供']
+    ] },
+    { name: 'grok-4.6', platform: 'grok', rows: [
+      ['<200K', '$2.00', '$6.00', '$0.50', '未提供'], ['≥200K', '$4.00', '$12.00', '$1.00', '未提供']
+    ] },
+    { name: 'grok-4.7', platform: 'grok', rows: [
+      ['<200K', '$2.00', '$6.00', '$0.50', '未提供'], ['≥200K', '$4.00', '$12.00', '$1.00', '未提供']
+    ] }
+  ])('renders verified public prices for $name without using group or billing fallback prices', async ({ name, platform, rows }) => {
+    const visible = group(0.08, 0.01)
+    visible.models[0] = {
+      ...visible.models[0]!, name, platform,
+      official_pricing: { input_price: 999e-6, output_price: 999e-6, cache_read_price: 999e-6, cache_write_price: 999e-6 }
+    }
+    const wrapper = render([visible])
+    await wrapper.get('input[type="search"]').setValue(name)
+    const cards = wrapper.findAll('article').filter(card => card.get('h3').text().toLowerCase() === name)
+    expect(cards).toHaveLength(1)
+    const card = cards[0]!
+    expect(card.findAll('table')).toHaveLength(1)
+    expect(card.findAll('tbody tr').map(row => [row.get('th').text(), ...row.findAll('td').map(cell => cell.text())])).toEqual(rows)
+    expect(card.text()).not.toContain('待核实')
+    expect(card.text()).not.toContain('$999.00')
+    expect(wrapper.find('[data-group-quote]').exists()).toBe(false)
+    wrapper.unmount()
+  })
+
+  it.each(['zh', 'en'])('explains Haiku and Grok prompt-length tiers without OpenAI-specific thresholds in %s', async (locale) => {
+    const visible = group()
+    visible.models[0] = { ...visible.models[0]!, name: 'claude-haiku-5-5' }
+    const wrapper = render([visible], locale)
+    await wrapper.get('input[type="search"]').setValue('claude-haiku-5-5')
+    const card = wrapper.get('article')
+    expect(card.text()).toContain(locale === 'zh' ? '整次请求' : 'entire request')
+    expect(card.text()).not.toContain('272K')
+    expect(card.text()).not.toContain('modelPlaza.reference.')
+    wrapper.unmount()
+  })
+
   it.each([['anthropic', 'openai'], ['openai', 'anthropic']])('keeps every provider filter for an unknown model advertised by %s and %s', async (first, second) => {
     const mixed = group()
     mixed.models = [first, second].map(platform => ({
