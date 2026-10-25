@@ -29,6 +29,17 @@ V0216_MIGRATIONS = [
 ]
 
 
+def historical_candidate_manifest():
+    """Keep v0.2.16 fixtures at their release inventory; v0.2.18 audits all files."""
+    names = set(read_manifest(MANIFEST_DIR / "migration-baseline.tsv"))
+    names.update(V0216_MIGRATIONS)
+    return {
+        name: checksum
+        for name, checksum in candidate_manifest(REPO_ROOT / "backend" / "migrations").items()
+        if name in names
+    }
+
+
 def load_builder():
     path = RADAR_DIR / "build_v0216_ghcr.py"
     spec = importlib.util.spec_from_file_location("radar_build_v0216", path)
@@ -113,7 +124,7 @@ class V0216ReleaseMetadataTests(unittest.TestCase):
         duplicate_aliases = json.loads(
             (MANIFEST_DIR / "duplicate-aliases.json").read_text(encoding="utf-8")
         )
-        candidate = candidate_manifest(REPO_ROOT / "backend" / "migrations")
+        candidate = historical_candidate_manifest()
         result = audit_candidate(
             baseline,
             candidate,
@@ -139,7 +150,7 @@ class V0216ReleaseMetadataTests(unittest.TestCase):
 
     def test_v0216_candidate_rejects_missing_migration_and_changed_baseline(self) -> None:
         baseline = read_manifest(MANIFEST_DIR / "migration-baseline.tsv")
-        candidate = candidate_manifest(REPO_ROOT / "backend" / "migrations")
+        candidate = historical_candidate_manifest()
         candidate.pop("245_gemini_cached_contents_mutation_lease.sql")
         candidate["242_drop_platform_check_constraints.sql"] = "f" * 64
         result = audit_candidate(
@@ -159,7 +170,7 @@ class V0216ReleaseMetadataTests(unittest.TestCase):
         duplicate_aliases = json.loads(
             (MANIFEST_DIR / "duplicate-aliases.json").read_text(encoding="utf-8")
         )
-        candidate = candidate_manifest(REPO_ROOT / "backend" / "migrations")
+        candidate = historical_candidate_manifest()
         actual = dict(baseline)
         actual.update({name: candidate[name] for name in expected_new})
 
