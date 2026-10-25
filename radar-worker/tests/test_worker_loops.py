@@ -13,7 +13,7 @@ import rfc8785
 from pydantic import SecretStr
 
 from sub2api_radar.config import Settings
-from sub2api_radar.control_plane import LeaseFencedError
+from sub2api_radar.control_plane import ControlPlaneError, LeaseFencedError
 from sub2api_radar.grader import GraderWorker
 from sub2api_radar.models import (
     AnalysisLease,
@@ -263,6 +263,62 @@ class RunnerExecutorStub:
 
     async def execute(self, lease):
         return self.item
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("failure_stage", ["execution", "evidence_publication"])
+async def test_runner_reports_failure_stage_without_logging_exception_payload(
+    tmp_path, caplog, failure_stage
+) -> None:
+    assignment_id, sample_id = uuid4(), uuid4()
+    item = evidence(sample_id, assignment_id)
+    lease = AssignmentLease(
+        id=assignment_id,
+        sample_id=sample_id,
+        run_id=uuid4(),
+        case=case(),
+        model_route="route-a",
+        attempt=1,
+        lease_token="lease-token-123456",
+        lease_expires_at=datetime.now(UTC) + timedelta(minutes=1),
+        lease_epoch=7,
+        gateway_evaluation_token="gateway-token",
+        route_trace_id="trace",
+    )
+    private_detail = "do-not-log-this-upstream-response"
+
+    class FailingExecutor(RunnerExecutorStub):
+        async def execute(self, lease):
+            if failure_stage == "execution":
+                raise RuntimeError(private_detail)
+            return await super().execute(lease)
+
+    class FailingConfirmationClient(RunnerClientStub):
+        async def confirm_artifact(self, *args, **kwargs):
+            raise ControlPlaneError(503, private_detail, {"detail": private_detail})
+
+    client = FailingConfirmationClient()
+    worker = Runner(
+        settings().model_copy(update={"state_dir": str(tmp_path)}),
+        client,
+        FailingExecutor(item),
+        capabilities=["reasoning"],
+        state_store=AtomicStateStore(tmp_path),
+    )
+    with caplog.at_level("ERROR", logger="sub2api_radar.runner"):
+        await worker.execute_lease(lease)
+
+    assert client.fail_calls == [(assignment_id, lease.lease_token, "runner_error")]
+    failures = [r for r in caplog.records if hasattr(r, "failure_stage")]
+    assert len(failures) == 1
+    assert failures[0].failure_stage == failure_stage
+    assert failures[0].http_status == (503 if failure_stage == "evidence_publication" else None)
+    assert failures[0].error_type == (
+        "ControlPlaneError" if failure_stage == "evidence_publication" else "RuntimeError"
+    )
+    assert private_detail not in caplog.text
+    assert lease.lease_token not in caplog.text
+    assert failures[0].exc_info is None
 
 
 @pytest.mark.asyncio

@@ -187,6 +187,7 @@ class Runner:
             self._heartbeat(lease, heartbeat_failed, lease_started)
         )
         execution_task = asyncio.create_task(self.executor.execute(lease))
+        failure_stage = "execution"
         try:
             self.state_store.save(
                 StateRecord(
@@ -208,6 +209,7 @@ class Runner:
                     lease.lease_epoch,
                 )
             )
+            failure_stage = "evidence_publication"
             receipt = await self._publish_evidence(
                 lease.id, lease.lease_token, evidence, lease.lease_epoch
             )
@@ -254,7 +256,22 @@ class Runner:
             execution_task.cancel()
             await asyncio.gather(execution_task, return_exceptions=True)
             raise
-        except Exception:
+        except Exception as exc:
+            # Upstream payloads and exception messages may contain private
+            # content or credentials. Emit only bounded diagnostic metadata.
+            http_status = exc.status_code if isinstance(exc, ControlPlaneError) else None
+            error_type = type(exc).__name__
+            log.error(
+                "runner lease failed: stage=%s error_type=%s http_status=%s",
+                failure_stage,
+                error_type,
+                http_status,
+                extra={
+                    "failure_stage": failure_stage,
+                    "error_type": error_type,
+                    "http_status": http_status,
+                },
+            )
             execution_task.cancel()
             await asyncio.gather(execution_task, return_exceptions=True)
             try:
