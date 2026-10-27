@@ -95,11 +95,13 @@ const baseModels: readonly ReferenceModel[] = [
   model('GLM-5.1', 'GLM', zai, [tier('all', 1.4, 4.4, 0.26)]),
   model('GLM-5.2', 'GLM', zai, [tier('all', 1.4, 4.4, 0.26)]),
   model('GLM-5.2-fast-preview', 'GLM', ali + 'glm-5-2-fast', [tier('all', 2.2, 7.702, 0.55)], { status: 'reference', region: 'beijing' }),
-  model('Kimi-K3', 'Kimi', kimi, [tier('all', 3, 15, 0.3, 3, 6)]),
+  // The official page currently has empty price tables. Keep these public IDs
+  // visible without presenting historical amounts as freshly verified prices.
+  { ...unknown('Kimi-K3', 'Kimi', kimi), reviewedAt: '2026-10-27' },
   // Original K2.5 retired; hosted-service reference, not an original-provider price.
   model('Kimi-K2.5', 'Kimi', ali + 'kimi-k2-5', [tier('all', 0.574, 3.011, 0.115, 0.718, null, 0.057)], { status: 'reference', region: 'beijing' }),
-  model('Kimi-K2.6', 'Kimi', kimi, [tier('all', 0.95, 4, 0.16)]),
-  model('Kimi-K2.7-code', 'Kimi', kimi, [tier('all', 0.95, 4, 0.19)]),
+  { ...unknown('Kimi-K2.6', 'Kimi', kimi), reviewedAt: '2026-10-27' },
+  { ...unknown('Kimi-K2.7-code', 'Kimi', kimi), reviewedAt: '2026-10-27' },
   model('Qwen3.7-max', 'Qwen', ali + 'qwen3-7-max', [tier('all', 1.65, 4.951, 0.33, 2.063, null, 0.165)], { region: 'beijing' }),
   model('Qwen3.8-max', 'Qwen', ali + 'qwen3-8-max', [tier('all', 1.65, 4.951, 0.206, 2.063, null, 0.137)], { region: 'beijing' }),
   model('Qwen3.8-max-0902', 'Qwen', ali + 'qwen3-8-max', [tier('all', 1.65, 4.951, 0.206, 2.063, null, 0.137)], { region: 'beijing' }),

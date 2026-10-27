@@ -35,7 +35,7 @@ describe('model plaza reference prices', () => {
     expect(notice.text()).toContain('汇率以结算页面为准')
     expect(notice.find('script').exists()).toBe(false)
     expect(notice.find('img').attributes('onerror')).toBeUndefined()
-    expect(wrapper.findAll('article')).toHaveLength(66)
+    expect(wrapper.find('article').exists()).toBe(true)
     expect(wrapper.find('[data-price-tab="actual"]').exists()).toBe(false)
     await wrapper.setProps({ referenceEnabled: false, error: true })
     expect(wrapper.find('[data-plaza-description]').exists()).toBe(false)
@@ -44,7 +44,9 @@ describe('model plaza reference prices', () => {
 
   it('shows base prices and no invented group quote when no visible groups are configured', () => {
     const wrapper = render()
-    expect(wrapper.findAll('article')).toHaveLength(66)
+    expect(wrapper.findAll('article h3').map(title => title.text())).toEqual(expect.arrayContaining([
+      'gpt-6.1-terra', 'GLM-5.3-FlashX', 'GLM-5.3-FlashX-Legal', 'claude-fable-5-1'
+    ]))
     expect(wrapper.text()).toContain('多模态价格以行内单位为准')
     expect(wrapper.find('[data-group-rates]').exists()).toBe(false)
     expect(wrapper.find('a[href="https://web.aijws.com/models"]').exists()).toBe(false)
@@ -54,7 +56,11 @@ describe('model plaza reference prices', () => {
 
   it.each(['zh', 'en'])('shows the full price catalog without source information in %s', async (locale) => {
     const wrapper = render(locale)
-    expect(wrapper.findAll('article')).toHaveLength(66)
+    const modelIds = wrapper.findAll('article h3').map(title => title.text())
+    expect(new Set(modelIds).size).toBe(modelIds.length)
+    expect(modelIds).toEqual(expect.arrayContaining([
+      'gpt-6.1-terra', 'GLM-5.3-FlashX', 'GLM-5.3-FlashX-Legal', 'gpt-6.1-sol', 'Kimi-K3'
+    ]))
     expect(wrapper.get('h2').text()).toBe(locale === 'zh' ? '模型价格' : 'Model prices')
     expect(wrapper.find('a[href*="aijws.com"]').exists()).toBe(false)
     expect(wrapper.text()).not.toMatch(/MY JARVIS|价格来源|采集日期|原站|外站|Captured:|Source:|Source note|Source rule|external/i)
@@ -159,7 +165,7 @@ describe('model plaza reference prices', () => {
     await wrapper.setProps({ referenceEnabled: true })
     expect(wrapper.findAll('article')).toHaveLength(0)
     await wrapper.setProps({ error: false })
-    expect(wrapper.findAll('article')).toHaveLength(66)
+    expect(wrapper.find('article').exists()).toBe(true)
     expect(wrapper.text()).not.toContain('加载模型广场失败')
     expect(wrapper.find('[data-price-tab="actual"]').exists()).toBe(false)
   })

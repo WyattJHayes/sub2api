@@ -142,6 +142,9 @@ describe('public model plaza prices', () => {
 
   it.each([
     { name: 'codex-auto-review', reason: '型号待确认' },
+    { name: 'Kimi-K3', reason: '价格待核实' },
+    { name: 'Kimi-K2.6', reason: '价格待核实' },
+    { name: 'Kimi-K2.7-code', reason: '价格待核实' },
     { name: 'gpt-reserve', reason: '型号待确认' },
     { name: 'gpt-5.3-codex-spark', reason: '价格待核实' },
     { name: 'Doubao-Seed-2-1-Pro', reason: '价格待核实' },
