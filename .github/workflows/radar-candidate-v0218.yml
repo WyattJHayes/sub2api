@@ -29,7 +29,7 @@ jobs:
       - name: Checkout reviewed application source
         uses: actions/checkout@v6
         with:
-          ref: ea3441dec36cc010fc6b746ac7a75915b734e2d6
+          ref: 32527ab1dcdedddb67a7f862ea61d0b0cfefff66
           path: application
           persist-credentials: false
       - name: Verify candidate driver boundaries
