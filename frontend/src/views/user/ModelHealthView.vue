@@ -61,11 +61,11 @@
               {{ t('modelHealth.quality.degradation') }} {{ qualityLabel(model.degradation_risk) }}
             </span>
           </div>
-          <p v-if="isValidDate(model.freshness)" class="mt-4 text-sm text-gray-500">
+          <p v-if="isValidDate(model.checked_at)" class="mt-4 text-sm text-gray-500">
             {{ t('modelHealth.updated') }}
-            <time :datetime="model.freshness">{{ formatFreshness(model.freshness) }}</time>
+            <time :datetime="model.checked_at">{{ formatCheckedAt(model.checked_at) }}</time>
           </p>
-          <p :class="isValidDate(model.freshness) ? 'mt-1' : 'mt-4'" class="text-sm text-gray-500">
+          <p :class="isValidDate(model.checked_at) ? 'mt-1' : 'mt-4'" class="text-sm text-gray-500">
             {{ t('modelHealth.p99') }} {{ model.p99_ms == null ? t('common.notAvailable') : `${model.p99_ms} ms` }}
           </p>
           <p class="mt-1 text-sm text-gray-500">
@@ -156,7 +156,7 @@ function isValidDate(value?: string): value is string {
   return typeof value === 'string' && !Number.isNaN(new Date(value).valueOf())
 }
 
-function formatFreshness(value: string): string {
+function formatCheckedAt(value: string): string {
   return new Intl.DateTimeFormat(undefined, {
     dateStyle: 'medium',
     timeStyle: 'short'
