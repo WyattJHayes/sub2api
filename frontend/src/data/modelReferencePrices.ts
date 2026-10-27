@@ -95,11 +95,13 @@ const baseModels: readonly ReferenceModel[] = [
   model('GLM-5.1', 'GLM', zai, [tier('all', 1.4, 4.4, 0.26)]),
   model('GLM-5.2', 'GLM', zai, [tier('all', 1.4, 4.4, 0.26)]),
   model('GLM-5.2-fast-preview', 'GLM', ali + 'glm-5-2-fast', [tier('all', 2.2, 7.702, 0.55)], { status: 'reference', region: 'beijing' }),
-  model('Kimi-K3', 'Kimi', kimi, [tier('all', 3, 15, 0.3, 3, 6)]),
+  // The official page currently has empty price tables. Keep these public IDs
+  // visible without presenting historical amounts as freshly verified prices.
+  { ...unknown('Kimi-K3', 'Kimi', kimi), reviewedAt: '2026-10-27' },
   // Original K2.5 retired; hosted-service reference, not an original-provider price.
   model('Kimi-K2.5', 'Kimi', ali + 'kimi-k2-5', [tier('all', 0.574, 3.011, 0.115, 0.718, null, 0.057)], { status: 'reference', region: 'beijing' }),
-  model('Kimi-K2.6', 'Kimi', kimi, [tier('all', 0.95, 4, 0.16)]),
-  model('Kimi-K2.7-code', 'Kimi', kimi, [tier('all', 0.95, 4, 0.19)]),
+  { ...unknown('Kimi-K2.6', 'Kimi', kimi), reviewedAt: '2026-10-27' },
+  { ...unknown('Kimi-K2.7-code', 'Kimi', kimi), reviewedAt: '2026-10-27' },
   model('Qwen3.7-max', 'Qwen', ali + 'qwen3-7-max', [tier('all', 1.65, 4.951, 0.33, 2.063, null, 0.165)], { region: 'beijing' }),
   model('Qwen3.8-max', 'Qwen', ali + 'qwen3-8-max', [tier('all', 1.65, 4.951, 0.206, 2.063, null, 0.137)], { region: 'beijing' }),
   model('Qwen3.8-max-0902', 'Qwen', ali + 'qwen3-8-max', [tier('all', 1.65, 4.951, 0.206, 2.063, null, 0.137)], { region: 'beijing' }),
@@ -169,10 +171,14 @@ const supplementalModels: readonly ReferenceModel[] = [
   model('claude-haiku-5-5', 'Claude Code', claude, [tier('≤100K', 0.1, 0.5, 0.01, 0.125, 0.2), tier('>100K', 0.5, 2.5, 0.05, 0.625, 1)], { note: 'promptLengthTier' }),
   model('GLM-5.3', 'GLM', zai, [tier('all', 1.4, 4.4, 0.26)]),
   model('GLM-5.3-Flash', 'GLM', zai, [tier('all', 0.15, 0.5, 0.03)]),
+  { ...model('GLM-5.3-FlashX', 'GLM', zai, [tier('all', 0.37, 1.25, 0.075)]), reviewedAt: '2026-10-27' },
+  { ...model('GLM-5.3-FlashX-Legal', 'GLM', zai, [tier('all', 0.37, 1.25, 0.075)]), reviewedAt: '2026-10-27' },
   model('grok-4.5', 'Grok', xai, [tier('<200K', 2, 6, 0.3), tier('≥200K', 4, 12, 0.6)], { note: 'promptLengthTier' }),
   model('grok-4.6', 'Grok', xai, [tier('<200K', 2, 6, 0.5), tier('≥200K', 4, 12, 1)], { note: 'promptLengthTier' }),
   model('grok-4.7', 'Grok', xai, [tier('<200K', 2, 6, 0.5), tier('≥200K', 4, 12, 1)], { note: 'promptLengthTier' }),
   model('gpt-6.1-sol', 'OpenAI', openai, [tier('≤272K', 2, 10, 0.1, 2.5), tier('>272K', 4, 15, 0.2, 5)], { note: 'wholeRequest' }),
+  // Standard processing; cache writes use the published 30-minute retention rate.
+  { ...model('gpt-6.1-terra', 'OpenAI', 'https://developers.openai.com/api/docs/models/gpt-6.1-terra', [tier('≤272K', 1, 5, 0.05, 1.25), tier('>272K', 2, 7.5, 0.1, 2.5)], { note: 'wholeRequest' }), reviewedAt: '2026-10-27' },
   model('gpt-6-luna', 'OpenAI', openai, [tier('≤272K', 0.1, 0.5, 0.01, 0.125), tier('>272K', 0.2, 0.75, 0.02, 0.25)], { note: 'wholeRequest' }),
   model('gpt-5.6-luna', 'OpenAI', openai, [tier('≤272K', 0.2, 1.2, 0.02, 0.25), tier('>272K', 0.4, 1.8, 0.04, 0.5)], { note: 'wholeRequest' }),
   model('gpt-5.5', 'OpenAI', openai, [tier('≤272K', 5, 30, 0.5), tier('>272K', 10, 45, 1)], { note: 'wholeRequest' }),

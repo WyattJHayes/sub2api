@@ -5,6 +5,37 @@ import { auditSource, documentDigest } from './price-audit.mjs'
 const document = '# Published pricing\n' + 'model-a input USD 1 output USD 4\n'.repeat(10)
 const source = { id: 'provider', url: 'https://platform.kimi.ai/docs/pricing/chat.md', marker: 'model-a', sha256: '' }
 const response = (body, status = 200) => async () => new Response(body, { status })
+const now = new Date('2026-10-27T14:00:00Z')
+const acknowledged = {
+  ...source, sha256: documentDigest(document),
+  unverifiedPricing: {
+    reason: 'pricing-table-unavailable', reviewedAt: '2026-10-27', expiresAt: '2026-11-03',
+    models: ['Kimi-K3', 'Kimi-K2.6', 'Kimi-K2.7-code']
+  }
+}
+
+test('keeps an explicit warning for an unchanged, temporarily acknowledged unverified source', async () => {
+  const result = await auditSource(acknowledged, response(document), now)
+  assert.equal(result.status, 'warning')
+  assert.deepEqual(result.models, ['Kimi-K3', 'Kimi-K2.6', 'Kimi-K2.7-code'])
+  assert.equal(result.expiresAt, '2026-11-03')
+})
+
+test('a known pricing warning never accepts new documents or fetch failures', async () => {
+  assert.equal((await auditSource(acknowledged, response(document.replaceAll('USD 4', 'USD 5')), now)).status, 'changed')
+  assert.equal((await auditSource(acknowledged, response('Forbidden', 403), now)).status, 'error')
+})
+
+test('expires a pricing acknowledgment and rejects invalid or indefinite acknowledgments', async () => {
+  assert.equal((await auditSource(acknowledged, response(document), new Date('2026-11-03T00:00:00Z'))).status, 'error')
+  for (const invalid of [
+    { expiresAt: '2026-12-03' }, { reviewedAt: '2026-02-30' }, { expiresAt: 'invalid' },
+    { reason: 'ignore-errors' }, { models: [] }, { models: ['bad\n::warning::injection'] }
+  ]) {
+    const item = { ...acknowledged, unverifiedPricing: { ...acknowledged.unverifiedPricing, ...invalid } }
+    assert.equal((await auditSource(item, response(document), now)).status, 'error')
+  }
+})
 
 test('audits the official xAI public pricing page and still rejects credential URLs', async () => {
   const xai = { ...source, url: 'https://docs.x.ai/developers/pricing.md', sha256: documentDigest(document) }

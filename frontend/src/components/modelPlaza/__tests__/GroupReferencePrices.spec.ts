@@ -40,6 +40,8 @@ describe('public model plaza prices', () => {
     const wrapper = render([])
     for (const [query, id, input, output] of [
       ['gpt-6.1-sol', 'gpt-6.1-sol', '$2.00', '$10.00'],
+      ['gpt-6.1-terra', 'gpt-6.1-terra', '$1.00', '$5.00'],
+      ['GLM-5.3-FlashX-Legal', 'GLM-5.3-FlashX-Legal', '$0.37', '$1.25'],
       ['gpt-6-luna', 'gpt-6-luna', '$0.10', '$0.50'],
       ['gpt-5.6-luna', 'gpt-5.6-luna', '$0.20', '$1.20'],
       ['gpt-image-2.5-flare', 'gpt-image-2.5-flare', '$8.00', '$30.00']
@@ -140,6 +142,9 @@ describe('public model plaza prices', () => {
 
   it.each([
     { name: 'codex-auto-review', reason: '型号待确认' },
+    { name: 'Kimi-K3', reason: '价格待核实' },
+    { name: 'Kimi-K2.6', reason: '价格待核实' },
+    { name: 'Kimi-K2.7-code', reason: '价格待核实' },
     { name: 'gpt-reserve', reason: '型号待确认' },
     { name: 'gpt-5.3-codex-spark', reason: '价格待核实' },
     { name: 'Doubao-Seed-2-1-Pro', reason: '价格待核实' },
@@ -189,6 +194,11 @@ describe('public model plaza prices', () => {
     ] },
     { name: 'glm-5.3', platform: 'openai', rows: [['全部', '$1.40', '$4.40', '$0.26', '未提供']] },
     { name: 'glm-5.3-flash', platform: 'openai', rows: [['全部', '$0.15', '$0.50', '$0.03', '未提供']] },
+    { name: 'glm-5.3-flashx', platform: 'openai', rows: [['全部', '$0.37', '$1.25', '$0.075', '未提供']] },
+    { name: 'glm-5.3-flashx-legal', platform: 'openai', rows: [['全部', '$0.37', '$1.25', '$0.075', '未提供']] },
+    { name: 'gpt-6.1-terra', platform: 'openai', rows: [
+      ['≤272K', '$1.00', '$5.00', '$0.05', '$1.25'], ['>272K', '$2.00', '$7.50', '$0.10', '$2.50']
+    ] },
     { name: 'grok-4.5', platform: 'grok', rows: [
       ['<200K', '$2.00', '$6.00', '$0.30', '未提供'], ['≥200K', '$4.00', '$12.00', '$0.60', '未提供']
     ] },
