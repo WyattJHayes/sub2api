@@ -1,0 +1,63 @@
+name: Radar v0.2.19 candidates
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: radar-candidate-v0219
+  cancel-in-progress: false
+
+jobs:
+  candidates:
+    if: github.repository == 'WyattJHayes/sub2api' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    permissions:
+      contents: read
+      packages: write
+    env:
+      PYTHONDONTWRITEBYTECODE: '1'
+    steps:
+      - name: Checkout build automation
+        uses: actions/checkout@v6
+        with:
+          path: automation
+          persist-credentials: false
+      - name: Checkout reviewed application source
+        uses: actions/checkout@v6
+        with:
+          ref: 59afe2824c5ca16935f53881c0bb4a7e9e6f44da
+          path: application
+          persist-credentials: false
+      - name: Verify candidate driver boundaries
+        run: python3 -m unittest discover -s automation/.github/radar-candidate-v0219 -p test_build.py
+      - name: Verify source and available resources
+        run: python3 automation/.github/radar-candidate-v0219/build.py preflight
+      - name: Isolate temporary Docker authentication
+        run: |
+          install -d -m 0700 "$RUNNER_TEMP/radar-docker-auth"
+          printf 'DOCKER_CONFIG=%s/radar-docker-auth\n' "$RUNNER_TEMP" >> "$GITHUB_ENV"
+      - name: Login with temporary package token
+        env:
+          PACKAGE_TOKEN: ${{ github.token }}
+        run: |
+          install -d -m 0700 "$DOCKER_CONFIG"
+          printf '%s' "$PACKAGE_TOKEN" | docker login ghcr.io --username "$GITHUB_ACTOR" --password-stdin
+      - name: Build and verify immutable candidates
+        run: python3 automation/.github/radar-candidate-v0219/build.py build
+      - name: Upload sanitized candidate identity only
+        uses: actions/upload-artifact@v7
+        with:
+          name: radar-v0219-candidate-identity-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            ${{ runner.temp }}/radar-v0219-result/image-record.json
+            ${{ runner.temp }}/radar-v0219-result/verification.json
+          if-no-files-found: error
+          retention-days: 30
+      - name: Logout temporary package token
+        if: always()
+        run: docker logout ghcr.io
+
