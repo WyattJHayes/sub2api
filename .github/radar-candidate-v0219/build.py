@@ -13,9 +13,9 @@ import time
 from datetime import datetime, timezone
 from pathlib import Path
 
-COMMIT = "576e913a1e902757fe3971f17020932780db8c48"
-TREE = "852460dd8ca68451f4f58542878d38f8c030a99b"
-SOURCE_HASH = "cd0a3288c6be5f40f19fce532cad6eb53cbd51272185204bdfd10973c8ad4d95"
+COMMIT = "59afe2824c5ca16935f53881c0bb4a7e9e6f44da"
+TREE = "f74da6e5ad93dca40dabc9956d90c22b54e6775a"
+SOURCE_HASH = "2bd6ad3569ff6808141a33872aedd160ef5d38ba95d5d5226abe1830eb107968"
 LOCK_HASH = "94649c07b3e6054ca2a1e684fb0a32313351ebb3cdf458b0947290228277fcc8"
 SOURCE_LABEL = "io.sub2api.radar.source-sha256"
 GIB = 1024**3
