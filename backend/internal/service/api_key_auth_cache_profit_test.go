@@ -94,3 +94,16 @@ func TestAPIKeyAuthSnapshotOldVersionEvicted(t *testing.T) {
 	require.False(t, used, "版本不匹配的缓存条目必须淘汰并回源重建")
 	require.Nil(t, materialized)
 }
+
+// Customized v25 and upstream v25 have different group fields. Neither may
+// satisfy the new snapshot without reloading image_count_billing from storage.
+func TestAPIKeyAuthSnapshotV25EvictedForImageCountBilling(t *testing.T) {
+	svc := &APIKeyService{}
+	snapshot := svc.snapshotFromAPIKey(context.Background(), profitAuthTestAPIKey())
+	require.NotNil(t, snapshot)
+	snapshot.Version = 25
+	materialized, used, err := svc.applyAuthCacheEntry("test-old-snapshot", &APIKeyAuthCacheEntry{Snapshot: snapshot})
+	require.NoError(t, err)
+	require.False(t, used)
+	require.Nil(t, materialized)
+}

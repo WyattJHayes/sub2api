@@ -24,6 +24,13 @@ MANIFEST_DIR = RADAR_DIR / "manifests" / "v0.2.18"
 V0218_MIGRATIONS = ["246_enable_gemini_image_generation_groups.sql"]
 
 
+def historical_candidate_manifest():
+    """Keep historical inventory checks; v0.2.19 audits the complete tree."""
+    names = set(read_manifest(MANIFEST_DIR / "migration-baseline.tsv"))
+    names.update(V0218_MIGRATIONS)
+    return {name: checksum for name, checksum in candidate_manifest(REPO_ROOT / "backend" / "migrations").items() if name in names}
+
+
 def load_builder():
     path = RADAR_DIR / "build_v0218_ghcr.py"
     assert path.is_file(), "The release-specific builder must exist"
@@ -101,33 +108,7 @@ class V0218ReleaseMetadataTests(unittest.TestCase):
                 source_root=REPO_ROOT,
             )
 
-    def test_v0218_active_metadata_defaults_to_v0218(self) -> None:
-        self.assertEqual("0.2.18\n", (REPO_ROOT / "backend/cmd/server/VERSION").read_text(encoding="utf-8"))
-        worker = (REPO_ROOT / "radar-worker/pyproject.toml").read_text(encoding="utf-8")
-        self.assertIn('version = "0.2.18"', worker)
-        lock = (REPO_ROOT / "radar-worker/uv.lock").read_text(encoding="utf-8")
-        self.assertIn('name = "sub2api-radar-worker"\nversion = "0.2.18"', lock)
-
-        for name in (
-            "production_promotion_audit.py",
-            "production_backup_audit.py",
-            "production_rollback_audit.py",
-            "local_prerelease_closure.py",
-        ):
-            content = (RADAR_DIR / name).read_text(encoding="utf-8")
-            self.assertIn("v0.2.18", content, name)
-
-        evidence = (RADAR_DIR / "production_evidence_envelope.py").read_text(encoding="utf-8")
-        self.assertIn('DEFAULT_RELEASE_VERSION = "0.2.18"', evidence)
-        preflight = (RADAR_DIR / "local_prerelease_preflight.py").read_text(encoding="utf-8")
-        self.assertIn('os.environ.get("RADAR_RELEASE_VERSION", "0.2.18")', preflight)
-        local_runner = (RADAR_DIR / "run-local-prerelease.sh").read_text(encoding="utf-8")
-        self.assertIn("v0.2.18 ledger", local_runner)
-        self.assertIn("RADAR_RELEASE_VERSION=${RADAR_RELEASE_VERSION:-0.2.18}", local_runner)
-        self.assertIn(
-            "RADAR_MIGRATION_MANIFEST_DIR=${RADAR_MIGRATION_MANIFEST_DIR:-$ROOT_DIR/deploy/radar/manifests/v0.2.18}",
-            local_runner,
-        )
+    # Active release defaults are covered by test_v0219_release_metadata.
 
     def test_v0218_manifest_covers_the_merged_migration_inventory(self) -> None:
         baseline = read_manifest(MANIFEST_DIR / "migration-baseline.tsv")
@@ -136,7 +117,7 @@ class V0218ReleaseMetadataTests(unittest.TestCase):
         duplicate_aliases = json.loads(
             (MANIFEST_DIR / "duplicate-aliases.json").read_text(encoding="utf-8")
         )
-        candidate = candidate_manifest(REPO_ROOT / "backend" / "migrations")
+        candidate = historical_candidate_manifest()
         result = audit_candidate(
             baseline,
             candidate,
@@ -167,7 +148,7 @@ class V0218ReleaseMetadataTests(unittest.TestCase):
         duplicate_aliases = json.loads(
             (MANIFEST_DIR / "duplicate-aliases.json").read_text(encoding="utf-8")
         )
-        candidate = candidate_manifest(REPO_ROOT / "backend" / "migrations")
+        candidate = historical_candidate_manifest()
         actual = dict(baseline)
         actual.update({name: candidate[name] for name in expected_new})
 
@@ -190,15 +171,7 @@ class V0218ReleaseMetadataTests(unittest.TestCase):
             result["runtime_ledger_sha256"],
         )
 
-    def test_v0218_worker_runtime_reports_release_version(self) -> None:
-        init_path = REPO_ROOT / "radar-worker" / "src" / "sub2api_radar" / "__init__.py"
-        spec = importlib.util.spec_from_file_location("_v0218_worker_runtime", init_path)
-        self.assertIsNotNone(spec)
-        self.assertIsNotNone(spec.loader)
-        runtime = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(runtime)
-
-        self.assertEqual("0.2.18", runtime.__version__)
+    # Current Worker version is covered by the active release tests.
 
 
 if __name__ == "__main__":
