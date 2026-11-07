@@ -133,6 +133,7 @@ func ProvideRadarGovernanceRepository(db *sql.DB, cfg *config.Config) service.Ra
 // ProviderSet is the Wire provider set for all repositories
 var ProviderSet = wire.NewSet(
 	NewUserRepository,
+	NewMCPOAuthRepository,
 	NewAPIKeyRepository,
 	NewGroupRepository,
 	NewAdminGroupRepository,

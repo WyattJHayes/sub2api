@@ -107,3 +107,21 @@ func TestAPIKeyAuthSnapshotV25EvictedForImageCountBilling(t *testing.T) {
 	require.False(t, used)
 	require.Nil(t, materialized)
 }
+
+func TestAPIKeyAuthSnapshotV26AndV27EvictedForMergedAuthorization(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		version int
+	}{{"customized_v26", 26}, {"upstream_v27", 27}} {
+		t.Run(tc.name, func(t *testing.T) {
+			svc := &APIKeyService{}
+			snapshot := svc.snapshotFromAPIKey(context.Background(), profitAuthTestAPIKey())
+			require.NotNil(t, snapshot)
+			snapshot.Version = tc.version
+			materialized, used, err := svc.applyAuthCacheEntry("test-old-authorization", &APIKeyAuthCacheEntry{Snapshot: snapshot})
+			require.NoError(t, err)
+			require.False(t, used, "Old snapshots must reload privacy/RPM and customized authorization fields")
+			require.Nil(t, materialized)
+		})
+	}
+}
