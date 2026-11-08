@@ -152,7 +152,9 @@ func TestOpenAIResponsesOrphanPrecheckLargeEscapedContent(t *testing.T) {
 		<-allocatorDone
 		require.Greater(t, allocationsWithBackgroundNoise, float64(0), "confirm the process-wide allocation counter includes unrelated goroutines")
 
-		cmd := exec.Command(os.Args[0], "-test.run=^TestOpenAIResponsesOrphanPrecheckLargeEscapedContent$")
+		testBinary, err := os.Executable()
+		require.NoError(t, err)
+		cmd := exec.Command(testBinary, "-test.run=^TestOpenAIResponsesOrphanPrecheckLargeEscapedContent$")
 		cmd.Env = append(os.Environ(), isolatedRunEnv+"="+parentPID)
 		output, err := cmd.CombinedOutput()
 		require.NoError(t, err, string(output))
