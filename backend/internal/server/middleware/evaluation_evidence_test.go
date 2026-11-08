@@ -9,10 +9,12 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/Wei-Shaw/sub2api/internal/pkg/ctxkey"
+	pkghttputil "github.com/Wei-Shaw/sub2api/internal/pkg/httputil"
 	"github.com/Wei-Shaw/sub2api/internal/service"
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/require"
@@ -236,6 +238,48 @@ func TestEvaluationEvidenceCreatesOpenBeforeDispatchAndPatchesAfter(t *testing.T
 	require.Equal(t, "succeeded", *repo.patches[0].Transport.TransportStatus)
 	require.Equal(t, 1, repo.finalCalls)
 	require.Equal(t, int64(1), repo.finalize.ExpectedRevision)
+}
+
+func TestEvaluationEvidenceReservesBodyBeforeCreatingEvidence(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	budget := pkghttputil.NewBodyMemoryBudget(1024)
+	heldContext, release := pkghttputil.WithRequestBodyMemoryBudget(context.Background(), budget)
+	defer release()
+	require.NoError(t, pkghttputil.ReserveRequestBodyMemory(heldContext, 700))
+	repo := &trustedEvaluationEvidenceRepoStub{}
+	router := gin.New()
+	router.Use(RequestBodyLimit(2048, budget), func(c *gin.Context) {
+		c.Request = c.Request.WithContext(service.WithEvaluationContext(c.Request.Context(), service.EvaluationContext{
+			ExpectedModelAlias: "route-a", ExpectedRouteProfile: "radar-route-profile-v1",
+			APIKeyID: 41, RouteTraceID: "budget-test",
+		}))
+		c.Next()
+	}, EvaluationEvidence(repo))
+	body := `{"model":"route-a","input":"` + strings.Repeat("x", 700) + `"}`
+	router.POST("/v1/responses", func(c *gin.Context) {
+		raw, err := pkghttputil.ReadRequestBodyWithPrealloc(c.Request)
+		if RejectRequestBodyReadError(c, "test", err) {
+			return
+		}
+		require.NoError(t, err)
+		require.Equal(t, body, string(raw))
+		c.Status(http.StatusNoContent)
+	})
+	request := func() *httptest.ResponseRecorder {
+		w := httptest.NewRecorder()
+		router.ServeHTTP(w, httptest.NewRequest(http.MethodPost, "/v1/responses", strings.NewReader(body)))
+		return w
+	}
+	w := request()
+	require.Equal(t, http.StatusServiceUnavailable, w.Code)
+	require.Equal(t, "1", w.Header().Get("Retry-After"))
+	require.Zero(t, repo.createCalls, "overloaded requests must not create route evidence")
+	release()
+	require.Equal(t, http.StatusNoContent, request().Code)
+	require.Equal(t, 1, repo.createCalls)
+	// A second successful request proves that the previous ingress reservation was released.
+	require.Equal(t, http.StatusNoContent, request().Code)
+	require.Equal(t, 2, repo.createCalls)
 }
 
 func TestFinalizeEvaluationRouteEvidencePreservesConfiguredRegionBeforeFirstAttempt(t *testing.T) {

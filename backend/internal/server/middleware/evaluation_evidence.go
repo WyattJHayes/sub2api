@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/Wei-Shaw/sub2api/internal/pkg/ctxkey"
+	pkghttputil "github.com/Wei-Shaw/sub2api/internal/pkg/httputil"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/logger"
 	"github.com/Wei-Shaw/sub2api/internal/service"
 	"github.com/gin-gonic/gin"
@@ -94,12 +95,15 @@ func EvaluationEvidence(repo service.EvaluationEvidenceRepository) gin.HandlerFu
 }
 
 func createTrustedRouteEvidenceBeforeDispatch(c *gin.Context, repo service.TrustedEvaluationEvidenceRepository, evaluation service.EvaluationContext, startedAt time.Time) bool {
-	rawBody, err := io.ReadAll(c.Request.Body)
+	rawBody, err := pkghttputil.ReadRequestBodyWithPrealloc(c.Request)
 	if err != nil {
-		AbortWithError(c, http.StatusUnprocessableEntity, "EVALUATION_REQUEST_SEMANTICS_INVALID", "Evaluation request semantics are invalid")
+		if RejectRequestBodyReadError(c, "middleware.evaluation_evidence", err) {
+			return false
+		}
+		AbortWithRequestBodyReadFailure(c, "middleware.evaluation_evidence", err)
 		return false
 	}
-	c.Request.Body = io.NopCloser(strings.NewReader(string(rawBody)))
+	c.Request.Body = pkghttputil.NewPrereadBody(rawBody)
 	semantics, err := service.DeriveSingleRequestSemantics(rawBody)
 	if err != nil {
 		AbortWithError(c, http.StatusUnprocessableEntity, "EVALUATION_REQUEST_SEMANTICS_INVALID", "Evaluation request semantics are invalid")
