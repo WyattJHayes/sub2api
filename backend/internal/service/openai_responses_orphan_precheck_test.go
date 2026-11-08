@@ -1,6 +1,11 @@
 package service
 
 import (
+	"fmt"
+	"os"
+	"os/exec"
+	"runtime"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -126,6 +131,36 @@ func TestOpenAIResponsesOrphanPrecheckCompatibilityErrors(t *testing.T) {
 }
 
 func TestOpenAIResponsesOrphanPrecheckLargeEscapedContent(t *testing.T) {
+	const isolatedRunEnv = "SUB2API_ORPHAN_PRECHECK_ALLOCATION_ISOLATED"
+	parentPID := strconv.Itoa(os.Getpid())
+	if os.Getenv(isolatedRunEnv) != strconv.Itoa(os.Getppid()) {
+		// AllocsPerRun reads process-wide counters; unrelated test goroutines can contaminate it.
+		requests := make(chan struct{})
+		results := make(chan string)
+		allocatorDone := make(chan struct{})
+		go func() {
+			defer close(allocatorDone)
+			for range requests {
+				results <- fmt.Sprintf("background allocation %d", 1)
+			}
+		}()
+		allocationsWithBackgroundNoise := testing.AllocsPerRun(5, func() {
+			requests <- struct{}{}
+			runtime.KeepAlive(<-results)
+		})
+		close(requests)
+		<-allocatorDone
+		require.Greater(t, allocationsWithBackgroundNoise, float64(0), "confirm the process-wide allocation counter includes unrelated goroutines")
+
+		testBinary, err := os.Executable()
+		require.NoError(t, err)
+		cmd := exec.Command(testBinary, "-test.run=^TestOpenAIResponsesOrphanPrecheckLargeEscapedContent$")
+		cmd.Env = append(os.Environ(), isolatedRunEnv+"="+parentPID)
+		output, err := cmd.CombinedOutput()
+		require.NoError(t, err, string(output))
+		return
+	}
+
 	body := []byte(`{"vendor":"` + strings.Repeat(`\n\"`, 1<<16) + `","input":[{"content":"` + strings.Repeat(`\n\"`, 1<<16) + `","type":"message"}]}`)
 	require.False(t, openAIResponsesInputMayNeedOrphanCleanup(body))
 	allocations := testing.AllocsPerRun(5, func() {
