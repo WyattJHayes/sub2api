@@ -257,26 +257,48 @@ class Runner:
             await asyncio.gather(execution_task, return_exceptions=True)
             raise
         except Exception as exc:
+            # Import lazily: executor base imports environment_fingerprint here.
+            from .executors.base import ProtocolError
+
             # Upstream payloads and exception messages may contain private
             # content or credentials. Emit only bounded diagnostic metadata.
             http_status = exc.status_code if isinstance(exc, ControlPlaneError) else None
+            failure_code = "runner_error"
+            if failure_stage == "execution" and isinstance(exc, ProtocolError):
+                code = exc.code
+                if code in {
+                    "invalid_gateway_path", "unfrozen_request_parameters",
+                    "response_too_large", "invalid_sse_json", "invalid_sse_event",
+                    "too_many_sse_events", "malformed_openai_response",
+                    "malformed_anthropic_response", "malformed_gemini_response",
+                }:
+                    failure_code = code
+                elif (
+                    len(code) == 12 and code.startswith("upstream_")
+                    and code[9:].isascii() and code[9:].isdigit()
+                    and 400 <= int(code[9:]) <= 599
+                ):
+                    failure_code = code
+                    http_status = int(code[9:])
             error_type = type(exc).__name__
             log.error(
-                "runner lease failed: stage=%s error_type=%s http_status=%s",
+                "runner lease failed: stage=%s error_type=%s http_status=%s failure_code=%s",
                 failure_stage,
                 error_type,
                 http_status,
+                failure_code,
                 extra={
                     "failure_stage": failure_stage,
                     "error_type": error_type,
                     "http_status": http_status,
+                    "failure_code": failure_code,
                 },
             )
             execution_task.cancel()
             await asyncio.gather(execution_task, return_exceptions=True)
             try:
                 await self.client.fail_assignment(
-                    lease.id, lease.lease_token, "runner_error", lease.lease_epoch
+                    lease.id, lease.lease_token, failure_code, lease.lease_epoch
                 )
             except Exception:
                 log.exception("failed to report runner error for %s", lease.id)
