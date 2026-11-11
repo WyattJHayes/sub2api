@@ -167,8 +167,8 @@ func TestPrepareUsageLogInsert_UpstreamRequestIDArgWiring(t *testing.T) {
 	require.Len(t, prepared.args, len(usageLogInsertArgTypes))
 
 	// Tail order is upstream_request_id, session_id, native_compaction_v2,
-	// created_at, traffic_class.
-	idx := len(prepared.args) - 5
+	// cache_creation_30m_tokens, cache_creation_12h_tokens, created_at, traffic_class.
+	idx := len(prepared.args) - 7
 	arg, ok := prepared.args[idx].(sql.NullString)
 	require.True(t, ok, "upstream_request_id arg should be sql.NullString, got %T", prepared.args[idx])
 	require.True(t, arg.Valid)

@@ -74,8 +74,8 @@ def complete_manifest() -> dict[str, Any]:
 
 
 class ProductionPromotionAuditTests(unittest.TestCase):
-    def test_current_release_derives_v0220_manifest_migration_count_for_bound_promotion(self) -> None:
-        self.assertEqual(audit.EXPECTED_SCHEMA_MIGRATIONS, 333)
+    def test_current_release_derives_v0221_manifest_migration_count_for_bound_promotion(self) -> None:
+        self.assertEqual(audit.EXPECTED_SCHEMA_MIGRATIONS, 335)
 
     def test_complete_manifest_is_ready_for_promotion(self) -> None:
         result = audit.audit_manifest(complete_manifest())

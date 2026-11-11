@@ -57,7 +57,12 @@ class V0220ReleaseMetadataTests(unittest.TestCase):
         pending = read_name_list(MANIFEST / "expected-new.txt")
         legacy = read_name_list(MANIFEST / "legacy-entries.txt")
         aliases = json.loads((MANIFEST / "duplicate-aliases.json").read_text(encoding="utf-8"))
-        candidate = candidate_manifest(ROOT / "backend/migrations")
+        historical_names = set(baseline) | set(pending)
+        candidate = {
+            name: checksum
+            for name, checksum in candidate_manifest(ROOT / "backend/migrations").items()
+            if name in historical_names
+        }
         self.assertEqual(332, len(baseline))
         self.assertEqual(["249_mcp_oauth.sql"], pending)
         audit = audit_candidate(baseline, candidate, expected_new=pending, legacy_entries=legacy)
@@ -81,17 +86,13 @@ class V0220ReleaseMetadataTests(unittest.TestCase):
             expected[name] = checksum_file(ROOT / "backend/migrations" / name)
         self.assertEqual(expected, read_manifest(MANIFEST / "migration-baseline.tsv"))
 
-    def test_control_worker_and_local_release_version_agree(self):
-        self.assertEqual("0.2.20", (ROOT / "backend/cmd/server/VERSION").read_text(encoding="utf-8").strip())
-        import tomllib
-        worker = tomllib.loads((ROOT / "radar-worker/pyproject.toml").read_text(encoding="utf-8"))
-        self.assertEqual("0.2.20", worker["project"]["version"])
-        lock = tomllib.loads((ROOT / "radar-worker/uv.lock").read_text(encoding="utf-8"))
-        self.assertEqual(["0.2.20"], [p["version"] for p in lock["package"] if p["name"] == "sub2api-radar-worker"])
-        spec = importlib.util.spec_from_file_location("_v0220_worker_runtime", ROOT / "radar-worker/src/sub2api_radar/__init__.py")
-        runtime = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(runtime)
-        self.assertEqual("0.2.20", runtime.__version__)
+    def test_historical_builder_preserves_v0220_identity(self):
+        spec = importlib.util.spec_from_file_location("_v0220_historical_builder", RADAR / "build_v0220_ghcr.py")
+        builder = importlib.util.module_from_spec(spec)
+        sys.modules[spec.name] = builder
+        spec.loader.exec_module(builder)
+        self.assertEqual("0.2.20", builder._BASE.APP_VERSION)
+        self.assertEqual("radar-v0220-image-record-v1", builder._BASE.SCHEMA_VERSION)
 
 
 if __name__ == "__main__":

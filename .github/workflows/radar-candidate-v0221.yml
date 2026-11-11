@@ -1,0 +1,116 @@
+name: Radar v0.2.21 candidate images
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: radar-candidate-v0221
+  cancel-in-progress: false
+
+jobs:
+  candidates:
+    if: github.repository == 'WyattJHayes/sub2api' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    permissions:
+      contents: read
+      packages: write
+    env:
+      PYTHONDONTWRITEBYTECODE: '1'
+    steps:
+      - name: Checkout the selected main commit
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Enforce candidate build resource reserve
+        run: |
+          python3 - <<'PY'
+          import shutil
+          import subprocess
+          from pathlib import Path
+
+          docker_root = subprocess.check_output(
+              ["docker", "info", "--format", "{{.DockerRootDir}}"], text=True
+          ).strip()
+          available_disk = min(
+              shutil.disk_usage(Path(".")).free,
+              shutil.disk_usage(docker_root).free,
+          )
+          available_memory = next(
+              int(line.split()[1]) * 1024
+              for line in Path("/proc/meminfo").read_text(encoding="utf-8").splitlines()
+              if line.startswith("MemAvailable:")
+          )
+          gib = 1024**3
+          print(f"Available build disk: {available_disk // (1024**2)} MiB")
+          print(f"Available build memory: {available_memory // (1024**2)} MiB")
+          if available_disk < 12 * gib:
+              raise SystemExit("candidate build requires at least 12 GiB available disk")
+          if available_memory < 4 * gib:
+              raise SystemExit("candidate build requires at least 4 GiB available memory")
+          PY
+
+      - name: Isolate temporary Docker authentication
+        run: |
+          install -d -m 0700 "$RUNNER_TEMP/radar-docker-auth"
+          printf 'DOCKER_CONFIG=%s/radar-docker-auth\n' "$RUNNER_TEMP" >> "$GITHUB_ENV"
+
+      - name: Log in to GHCR with a job-scoped token
+        env:
+          PACKAGE_TOKEN: ${{ github.token }}
+        run: |
+          install -d -m 0700 "$DOCKER_CONFIG"
+          printf '%s' "$PACKAGE_TOKEN" | docker login ghcr.io \
+            --username "$GITHUB_ACTOR" --password-stdin
+
+      - name: Resolve immutable source identity
+        run: |
+          BUILD_DATE="$(date -u +'%Y-%m-%dT%H:%M:%SZ')"
+          IMAGE_TAG="0.2.21-radar-v221-$(date -u -d "$BUILD_DATE" +'%Y%m%dT%H%M%SZ')"
+          SOURCE_SHA256="$(python3 -c 'from pathlib import Path; from deploy.radar.source_tree_identity import source_tree_sha256; print(source_tree_sha256(Path(".")))')"
+          {
+            printf 'BUILD_DATE=%s\n' "$BUILD_DATE"
+            printf 'IMAGE_TAG=%s\n' "$IMAGE_TAG"
+            printf 'SOURCE_SHA256=%s\n' "$SOURCE_SHA256"
+          } >> "$GITHUB_ENV"
+
+      - name: Build, push, and verify immutable candidate images
+        run: |
+          install -d -m 0700 "$RUNNER_TEMP/radar-v0221-result"
+          python3 deploy/radar/build_v0221_ghcr.py \
+            --version 0.2.21 \
+            --image-tag "$IMAGE_TAG" \
+            --commit "$GITHUB_SHA" \
+            --source-sha256 "$SOURCE_SHA256" \
+            --date "$BUILD_DATE" \
+            --node-image 'node:24-alpine@sha256:ebfe2f90462722a7a4de65e91990e97fe0d401c70e0e762c5b53302f905ec1c1' \
+            --golang-image 'golang:1.27.3-alpine@sha256:b8c9b82affbbb82a020bbcf998dad2ba9516944ac7e883524642a481a9505e9c' \
+            --alpine-image 'alpine:3.24@sha256:294b683cb724975bec92580e1e685676bd4b50bda910ddb8c51d4cabeaec77e6' \
+            --worker-python-base-image 'python:3.14-slim@sha256:a2b82f3c48559aa0a8446d9af49826b6e2b2016f4cd2afabfe6013ec53729170' \
+            --push \
+            --output "$RUNNER_TEMP/radar-v0221-result/image-record.json"
+
+      - name: Upload verified candidate identity
+        uses: actions/upload-artifact@v7
+        with:
+          name: radar-v0221-candidate-identity-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/radar-v0221-result/image-record.json
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Log out of GHCR
+        if: always()
+        run: docker logout ghcr.io
