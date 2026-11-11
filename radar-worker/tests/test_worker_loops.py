@@ -267,9 +267,15 @@ class RunnerExecutorStub:
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("failure_stage", ["execution", "evidence_publication"])
+@pytest.mark.parametrize(
+    "protocol_code",
+    [None, "upstream_404", "malformed_openai_response", "secret-token-value"],
+)
 async def test_runner_reports_failure_stage_without_logging_exception_payload(
-    tmp_path, caplog, failure_stage
+    tmp_path, caplog, failure_stage, protocol_code
 ) -> None:
+    from sub2api_radar.executors.base import ProtocolError
+
     assignment_id, sample_id = uuid4(), uuid4()
     item = evidence(sample_id, assignment_id)
     lease = AssignmentLease(
@@ -290,6 +296,8 @@ async def test_runner_reports_failure_stage_without_logging_exception_payload(
     class FailingExecutor(RunnerExecutorStub):
         async def execute(self, lease):
             if failure_stage == "execution":
+                if protocol_code is not None:
+                    raise ProtocolError(protocol_code, private_detail)
                 raise RuntimeError(private_detail)
             return await super().execute(lease)
 
@@ -308,16 +316,26 @@ async def test_runner_reports_failure_stage_without_logging_exception_payload(
     with caplog.at_level("ERROR", logger="sub2api_radar.runner"):
         await worker.execute_lease(lease)
 
-    assert client.fail_calls == [(assignment_id, lease.lease_token, "runner_error")]
+    safe_code = (
+        protocol_code if failure_stage == "execution"
+        and protocol_code in {"upstream_404", "malformed_openai_response"} else "runner_error"
+    )
+    assert client.fail_calls == [(assignment_id, lease.lease_token, safe_code)]
     failures = [r for r in caplog.records if hasattr(r, "failure_stage")]
     assert len(failures) == 1
     assert failures[0].failure_stage == failure_stage
-    assert failures[0].http_status == (503 if failure_stage == "evidence_publication" else None)
+    assert failures[0].http_status == (
+        503 if failure_stage == "evidence_publication" else
+        404 if protocol_code == "upstream_404" else None
+    )
+    assert failures[0].failure_code == safe_code
     assert failures[0].error_type == (
-        "ControlPlaneError" if failure_stage == "evidence_publication" else "RuntimeError"
+        "ControlPlaneError" if failure_stage == "evidence_publication" else
+        "ProtocolError" if protocol_code is not None else "RuntimeError"
     )
     assert private_detail not in caplog.text
     assert lease.lease_token not in caplog.text
+    assert "secret-token-value" not in caplog.text
     assert failures[0].exc_info is None
 
 
