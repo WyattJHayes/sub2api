@@ -16,6 +16,17 @@ MANIFEST = RADAR / "manifests" / "v0.2.20"
 
 
 class V0220ReleaseMetadataTests(unittest.TestCase):
+    def test_candidate_workflow_is_manual_main_only_and_never_deploys(self):
+        workflow = ROOT / ".github/workflows/radar-candidate-v0220.yml"
+        self.assertTrue(workflow.is_file(), "v0.2.20 candidate workflow is required")
+        content = workflow.read_text(encoding="utf-8")
+        self.assertIn("workflow_dispatch:", content)
+        self.assertIn("github.ref == 'refs/heads/main'", content)
+        self.assertIn("packages: write", content)
+        self.assertIn("build_v0220_ghcr.py", content)
+        self.assertIn("upload-artifact@v7", content)
+        self.assertNotIn("production", content.lower())
+
     def test_candidate_identity_rejects_prior_version_and_mutable_base_images(self):
         path = RADAR / "build_v0220_ghcr.py"
         self.assertTrue(path.is_file(), "v0.2.20 immutable candidate builder is required")
