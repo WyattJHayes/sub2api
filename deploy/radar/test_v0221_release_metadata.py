@@ -16,6 +16,18 @@ MANIFEST = RADAR / "manifests" / "v0.2.21"
 
 
 class V0221ReleaseMetadataTests(unittest.TestCase):
+    def test_current_build_paths_use_patched_go_toolchain(self):
+        self.assertIn("go 1.27.4\n", (ROOT / "backend/go.mod").read_text(encoding="utf-8"))
+        self.assertIn("ARG GOLANG_IMAGE=golang:1.27.4-alpine", (ROOT / "Dockerfile").read_text(encoding="utf-8"))
+        self.assertIn("golang:1.27.4-alpine", (ROOT / "backend/Dockerfile").read_text(encoding="utf-8"))
+        self.assertIn("ARG GOLANG_IMAGE=golang:1.27.4-alpine", (ROOT / "deploy/Dockerfile").read_text(encoding="utf-8"))
+        for name in ("backend-ci.yml", "security-scan.yml", "release.yml"):
+            content = (ROOT / ".github/workflows" / name).read_text(encoding="utf-8")
+            self.assertIn("go1.27.4", content, name)
+            self.assertNotIn("go1.27.3", content, name)
+        content = (ROOT / ".github/workflows/radar-candidate-v0221.yml").read_text(encoding="utf-8")
+        self.assertRegex(content, r"golang:1\.27\.4-alpine@sha256:[0-9a-f]{64}")
+
     def test_current_release_gates_use_v0221_identity_and_full_ledger(self):
         from unittest.mock import patch
         with patch.object(sys, "path", [str(RADAR), *sys.path]):
@@ -48,12 +60,23 @@ class V0221ReleaseMetadataTests(unittest.TestCase):
             version="0.2.21", image_tag="0.2.21-radar-v221-20261111T120000Z",
             commit="a" * 40, source_sha256="b" * 64, date="2026-11-11T12:00:00Z",
             node_image="node@sha256:" + "1" * 64,
-            golang_image="golang:1.27.3-alpine@sha256:" + "2" * 64,
+            golang_image="golang:1.27.4-alpine@sha256:" + "2" * 64,
             alpine_image="alpine@sha256:" + "3" * 64,
             worker_python_base_image="python@sha256:" + "4" * 64, push=True,
         )
         builder.validate_inputs(inputs)
         from dataclasses import replace
+        from unittest.mock import patch
+        with (
+            patch.object(builder._BASE, "source_tree_sha256", return_value=inputs.source_sha256),
+            patch.object(builder._BASE, "worker_package_version", return_value="0.2.21"),
+        ):
+            builder.validate_current_source(inputs, source_root=ROOT)
+            with self.assertRaisesRegex(ValueError, "golang image must match backend go.mod version"):
+                builder.validate_current_source(
+                    replace(inputs, golang_image="golang:1.27.3-alpine@sha256:" + "2" * 64),
+                    source_root=ROOT,
+                )
         with self.assertRaisesRegex(ValueError, "version must equal"):
             builder.validate_inputs(replace(inputs, version="0.2.19"))
         with self.assertRaisesRegex(ValueError, "image_tag"):

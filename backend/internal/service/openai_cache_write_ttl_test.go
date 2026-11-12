@@ -13,6 +13,7 @@ import (
 	"testing"
 	"time"
 
+	openaiwsv2 "github.com/Wei-Shaw/sub2api/internal/service/openai_ws_v2"
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -32,7 +33,7 @@ func TestOpenAICacheWriteTTLRecordUsage(t *testing.T) {
 		{"12h", 0, 2399},
 		{"mixed", 9, 2390},
 	} {
-		for _, route := range []string{"json", "sse", "passthrough_json", "passthrough_sse"} {
+		for _, route := range []string{"json", "sse", "passthrough_json", "passthrough_sse", "websocket"} {
 			t.Run(tc.name+"/"+route, func(t *testing.T) {
 				const groupID int64 = 777
 				usageRepo := &openAIRecordUsageLogRepoStub{inserted: true}
@@ -58,6 +59,12 @@ func TestOpenAICacheWriteTTLRecordUsage(t *testing.T) {
 				c.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", nil)
 				var usage *OpenAIUsage
 				switch route {
+				case "websocket":
+					mapped := openAIUsageFromWSV2(openaiwsv2.Usage{
+						InputTokens: 2402, OutputTokens: 5, CacheCreationInputTokens: 2399,
+						CacheCreation30mInputTokens: tc.short, CacheCreation12hInputTokens: tc.long,
+					})
+					usage = &mapped
 				case "json":
 					result, err := svc.handleNonStreamingResponse(context.Background(), resp, c, account, "gpt-6-luna", "gpt-6-luna")
 					require.NoError(t, err)
