@@ -40,16 +40,15 @@ func normalizeKnownOpenAICodexModel(model string) string {
 	if openai.IsGPT61TerraModelSpelling(normalized) {
 		return "gpt-6.1-terra"
 	}
+	if openai.IsGPT61SolModelSpelling(normalized) {
+		return "gpt-6.1-sol"
+	}
 	if openai.IsGPT6SolOrLunaModelSpelling(normalized) {
 		if strings.HasPrefix(normalized, "gpt-6-sol") {
 			return "gpt-6-sol"
 		}
 		return "gpt-6-luna"
 	}
-	if openai.IsGPT61SolModelSpelling(normalized) {
-		return "gpt-6.1-sol"
-	}
-
 	switch {
 	case normalized == "gpt-6" || normalized == "gpt-6-astra":
 		return "gpt-6-astra"
